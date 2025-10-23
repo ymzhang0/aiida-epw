@@ -4,6 +4,7 @@ default_inputs:
   qpoints_distance: 0.5
   kpoints_distance_scf: 0.15
   kpoints_factor_nscf: 2
+  pseudo_family: "PseudoDojo/0.5/PBE/SR/standard/upf"
   # To set for the NSCF step of the Wannier90 work chain
   # One can either use `nscf` mode or `bands` mode. For the `nscf` mode,
   # the `nosym` and `noinv` must be set to True to avoid pw.x automatically
@@ -21,10 +22,23 @@ default_inputs:
             noinv: False
           CONTROL:
             calculation: bands
+    wannier90:
+      wannier90:
+        parameters:
+          write_bvec: True
   ph_base:
     ph:
       settings:
         PREPARE_FOR_EPW: True
+      metadata:
+        options:
+          withmpi: True
+          stash:
+            source_list:
+              - DYN_MAT/*
+              - out/_ph0/aiida.dvscf1
+              - out/_ph0/aiida.q_*/aiida.dvscf1
+              - out/_ph0/aiida.phsave/
   epw_base:
     options:
       resources:
@@ -37,10 +51,13 @@ default_inputs:
           - dmedata.fmt
           - epwdata.fmt
           - selecq.fmt
+          - dmedata.fmt
           - vmedata.fmt
           - aiida.kgmap
           - aiida.kmap
           - aiida.ukk
+          - aiida.mmn
+          - aiida.bvec
           - out/aiida.epmatwp
           - save
     parameters:
@@ -62,6 +79,7 @@ default_inputs:
     options:
       resources:
         num_machines: 1
+      max_wallclock_seconds: 43200  # Twelve hours
       withmpi: True
     parameters:
       INPUTEPW:
@@ -72,13 +90,14 @@ default_inputs:
         epwread: True
         epwwrite: False
         wannierize: False
+
 default_protocol: moderate
 protocols:
   moderate:
     description: 'Protocol to perform a electron-phonon calculation at normal precision at moderate computational cost.'
   precise:
     description: 'Protocol to perform a electron-phonon calculation at high precision at higher computational cost.'
-    qpoints_distance: 0.3
+    qpoints_distance: 0.1
   fast:
     description: 'Protocol to perform a electron-phonon calculation at low precision at minimal computational cost for testing purposes.'
-    qpoints_distance: 1.1
+    qpoints_distance: 0.3

@@ -1,36 +1,34 @@
-# -*- coding: utf-8 -*-
+"""Base work chain for the EPW calculations."""
+
 from aiida import orm
 from aiida.common import AttributeDict
-
+from aiida.common.lang import type_check
 from aiida.engine import (
     BaseRestartWorkChain,
     ProcessHandlerReport,
     process_handler,
     while_,
 )
+from aiida.orm.nodes.data.base import to_aiida_type
 from aiida.plugins import CalculationFactory
-from aiida.common.lang import type_check
-
 from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import (
     create_kpoints_from_distance,
 )
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida.orm.nodes.data.base import to_aiida_type
 
 from aiida_epw.tools.kpoints import check_kpoints_qpoints_compatibility
+from aiida_epw.tools.workchain import find_related_calculation
 
 EpwCalculation = CalculationFactory("epw.epw")
 
 
 def get_kpoints_from_chk_folder(chk_folder):
-    """
-    This method tries different strategies to find the k-point mesh from a parent nscf folder.
+    """This method tries different strategies to find the k-point mesh from a parent nscf folder.
 
     :param chk_folder: A RemoteData node from a Wannier90Calculation (chk).
     :return: A KpointsData node that has mesh information.
     :raises ValueError: If the mesh cannot be found through any strategy.
     """
-
     wannier_params = chk_folder.creator.inputs.parameters
 
     if "mp_grid" in wannier_params:
@@ -84,8 +82,8 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # because they are marked as required in the EpwCalculation.
         # but will only be provided when the EpwBaseWorkChain is run.
         spec.expose_inputs(
-            EpwCalculation, 
-            exclude=('metadata', 'qfpoints', 'kfpoints')
+            EpwCalculation,
+            exclude=('metadata', 'qfpoints', 'kfpoints', 'kpoints', 'qpoints')
         )
 
         spec.input(
@@ -94,7 +92,8 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             required=True,
             serializer=to_aiida_type,
             help=(
-                "Dictionary containing the `metadata.options` for the `EpwCalculation`."
+                "The options dictionary for the calculation."
+                "It must be defined in the top-level as a solution of the conflict between `metadata_calculation` of the WorkChain and `metadata` of the Calculation."
                 )
             )
 
@@ -103,22 +102,24 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             valid_type=orm.StructureData,
             required=False,
             help=(
-                "Structure used to generate k-point and q-point meshes. Should match the "
-                "one used in the previous `Wannier90BandsWorkChain`. Only required when "
-                "fine k/q meshes are built from a distance."
+                "The structure data to use for the generation of k/q points by `create_kpoints_from_distance` calcfunction."
+                "In principle, we should take the structure as the one we used in the previous calculation."
+                "However, it is a bit difficult to take all the restart cases into account if we have a long chain of EPW calculations."
+                "Therefore, for now we just provide it manually as an input."
+                "But in the future, it will be removed."
+                "In cases that the coarse and fine k/q points are explicitly speficied, this input is not necessary anymore."
                 )
             )
 
         spec.input(
-            'qfpoints_distance', 
+            'qfpoints_distance',
             valid_type=orm.Float,
             serializer=to_aiida_type,
             required=False,
             help=(
-                "Distance between q-points in the fine mesh. Mutually exclusive with "
-                "`qfpoints`; provide only one. When set, fine q-points are generated "
-                "from the input structure and this distance. Otherwise, supply fine "
-                "q-points explicitly."
+                "The q-points distance to generate the find qpoints"
+                "If specified, the fine qpoints will be generated from `create_kpoints_from_distance` calcfunction."
+                "If not specified, the fine qpoints will be read from the inputs.qfpoints input."
                 )
             )
 
@@ -129,12 +130,21 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             serializer=to_aiida_type,
             required=False,
             help=(
-                "Factor applied to each dimension of the fine q-point mesh to obtain the "
-                "fine k-point mesh. Mutually exclusive with `kfpoints`; provide only one. "
-                "For example, a fine q-mesh [40, 40, 40] with `kfpoints_factor=2` becomes "
-                "[80, 80, 80]."
+                "The factor to multiply the q-point mesh to get the fine k-point mesh"
+                "If not specified, the fine kpoints will be generated from the parent folder of the nscf calculation."
                 )
             )
+
+        spec.input(
+            'w90_chk_to_ukk_script',
+            valid_type=orm.RemoteData,
+            required=False,
+            help=(
+                "A julia script to convert the prefix.chk file (generated by wannier90.x) "
+                "to a prefix.ukk file (to be used by epw.x). "
+                "If provided along with parent_folder_chk, the script will be prepended to the batch script."
+            )
+        )
 
         spec.inputs.validator = validate_inputs
 
@@ -186,7 +196,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         :param w90_chk_to_ukk_script: a julia script to convert the prefix.chk file (generated by wannier90.x) to a prefix.ukk file (to be used by epw.x)
         :return: a process builder instance with all inputs defined ready for launch.
         """
-        from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
+        from aiida_quantumespresso.workflows.protocols.utils import (
+            recursive_merge,
+        )
 
         type_check(code, orm.Code)
         type_check(structure, orm.StructureData)
@@ -201,18 +213,13 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             parameter_overrides = overrides.get("parameters", {})
             parameters = recursive_merge(parameters, parameter_overrides)
 
-        metadata = inputs.pop("metadata")
-
-        if options:
-            metadata["options"] = recursive_merge(metadata["options"], options)
-
         # pylint: disable=no-member
         builder = cls.get_builder()
         builder.structure = structure
         builder.code = code
         builder.parameters = orm.Dict(parameters)
         ## Must firstly pop the options from the metadata dictionary.
-        builder.options = metadata.pop("options")
+        builder.options = orm.Dict(inputs.pop("options"))
 
         if w90_chk_to_ukk_script:
             type_check(w90_chk_to_ukk_script, orm.RemoteData)
@@ -269,10 +276,10 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         parameters = self.ctx.inputs.parameters.get_dict()
 
         if "parent_folder_chk" in self.inputs:
-            w90_params = (
-                self.inputs.parent_folder_chk.creator.inputs.parameters.get_dict()
-            )
-            exclude_bands = w90_params.get("exclude_bands", None)  # TODO check this!
+            w90_params = self.inputs.parent_folder_chk.creator.inputs.parameters.get_dict()
+            exclude_bands = w90_params.get(
+                "exclude_bands", None
+            )  # TODO check this!
 
             if exclude_bands:
                 parameters["INPUTEPW"]["bands_skipped"] = (
@@ -282,37 +289,37 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             parameters["INPUTEPW"]["nbndsub"] = w90_params["num_wann"]
 
         if "parent_folder_epw" in self.inputs:
-            epw_params = (
-                self.inputs.parent_folder_epw.creator.inputs.parameters.get_dict()
-            )
+            calculation = find_related_calculation(self.inputs.parent_folder_epw)
+            epw_params = calculation.inputs.parameters.get_dict()
+
             parameters["INPUTEPW"]["use_ws"] = epw_params["INPUTEPW"].get(
                 "use_ws", False
             )
-            parameters["INPUTEPW"]["nbndsub"] = epw_params["INPUTEPW"]["nbndsub"]
+            parameters["INPUTEPW"]["nbndsub"] = epw_params["INPUTEPW"][
+                "nbndsub"
+            ]
             if "bands_skipped" in epw_params["INPUTEPW"]:
-                parameters["INPUTEPW"]["bands_skipped"] = epw_params["INPUTEPW"].get(
-                    "bands_skipped"
-                )
+                parameters["INPUTEPW"]["bands_skipped"] = epw_params[
+                    "INPUTEPW"
+                ].get("bands_skipped")
 
         self.ctx.inputs.parameters = orm.Dict(parameters)
 
     # We should validate the kpoints and qpoints on the fly
     # because they are usually not determined at the creation of the inputs.
     def validate_kpoints(self):
-        """
-        Validate the inputs related to k-points.
+        """Validate the inputs related to k-points.
         `epw.x` requires coarse k-points and q-points to be compatible, which means the kpoints should be multiple of qpoints.
         e.g. if qpoints are [2,2,2], kpoints should be [2*l,2*m,2*n] for integer l,m,n.
         We firstly construct qpoints. Either an explicit `KpointsData` with given mesh/path, or a desired qpoints distance should be specified.
         In the case of the latter, the `KpointsData` will be constructed for the input `StructureData` using the `create_kpoints_from_distance` calculation function.
         Then we construct kpoints by multiplying the qpoints mesh by the `kpoints_factor`.
         """
-
         # If there is already the parent folder of a previous EPW calculation, the coarse k/q grid is already there and must be valid.
         # We only need to take the kpointsdata from it and continue to generate the find grid.
 
         if "parent_folder_epw" in self.inputs:
-            epw_calc = self.inputs.parent_folder_epw.creator
+            epw_calc = find_related_calculation(self.inputs.parent_folder_epw)
             kpoints = epw_calc.inputs.kpoints
             qpoints = epw_calc.inputs.qpoints
 
@@ -322,7 +329,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             if "kpoints" in self.inputs:
                 kpoints = self.inputs.kpoints
             elif "parent_folder_chk" in self.inputs:
-                kpoints = get_kpoints_from_chk_folder(self.inputs.parent_folder_chk)
+                kpoints = get_kpoints_from_chk_folder(
+                    self.inputs.parent_folder_chk
+                )
             else:
                 self.report(
                     "Could not determine the coarse k-points from the inputs or the parent folder of the wannier90 calculation."
@@ -346,7 +355,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             f"Successfully determined coarse q-points from the inputs: {qpoints.get_kpoints_mesh()[0]}"
         )
 
-        is_compatible, message = check_kpoints_qpoints_compatibility(kpoints, qpoints)
+        is_compatible, message = check_kpoints_qpoints_compatibility(
+            kpoints, qpoints
+        )
 
         self.ctx.inputs.kpoints = kpoints
         self.ctx.inputs.qpoints = qpoints
@@ -366,7 +377,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 "force_parity": self.inputs.get(
                     "qfpoints_force_parity", orm.Bool(False)
                 ),
-                "metadata": {"call_link_label": "create_qfpoints_from_distance"},
+                "metadata": {
+                    "call_link_label": "create_qfpoints_from_distance"
+                },
             }
             qfpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
 
@@ -383,8 +396,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.inputs.kfpoints = kfpoints
 
     def prepare_process(self):
-        """
-        Prepare inputs for the next calculation.
+        """Prepare inputs for the next calculation.
 
         Currently, no modifications to `self.ctx.inputs` are needed before
         submission. We rely on the parent `run_process` to create the builder.
@@ -412,7 +424,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
     def handle_unrecoverable_failure(self, calculation):
         """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""
         if calculation.is_failed and calculation.exit_status < 400:
-            self.report_error_handled(calculation, "unrecoverable error, aborting...")
+            self.report_error_handled(
+                calculation, "unrecoverable error, aborting..."
+            )
             return ProcessHandlerReport(
                 True, self.exit_codes.ERROR_UNRECOVERABLE_FAILURE
             )

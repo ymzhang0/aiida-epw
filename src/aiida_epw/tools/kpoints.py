@@ -1,9 +1,11 @@
+"""Functions related to kpoints."""
+
+
 def check_kpoints_qpoints_compatibility(
     kpoints,
     qpoints,
 ) -> tuple[bool, str]:
     """Check if the kpoints and qpoints are compatible."""
-
     kpoints_mesh, kpoints_shift = kpoints.get_kpoints_mesh()
     qpoints_mesh, qpoints_shift = qpoints.get_kpoints_mesh()
 

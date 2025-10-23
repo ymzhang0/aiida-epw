@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "aiida-core~=2.5",
-    "aiida-quantumespresso~=4.10",
+    "aiida-quantumespresso>=4.11",
     "aiida_wannier90_workflows",
     "numpy",
 ]
@@ -38,25 +38,8 @@ Source = "https://github.com/aiidaplugins/aiida-epw"
 
 [project.entry-points.'aiida.workflows']
 'epw.base' = 'aiida_epw.workflows.base:EpwBaseWorkChain'
-'epw.epw_prep' = 'aiida_epw.workflows.prep:EpwPrepWorkChain'
+'epw.prep' = 'aiida_epw.workflows.prep:EpwPrepWorkChain'
 'epw.supercon' = 'aiida_epw.workflows.supercon:SuperConWorkChain'
-
-[project.optional-dependencies]
-docs = [
-"mystmd"
-]
-tests = [
-  "pytest",
-  "pytest-regressions"
-]
-pre-commit = [
-  "pre-commit"
-]
-
-[dependency-groups]
-dev = [
-  "aiida-epw[docs,tests,pre-commit]",
-]
 
 [tool.hatch.version]
 path = "src/aiida_epw/__about__.py"
@@ -72,25 +55,20 @@ scripts.serve = "cd docs && myst start"
 [tool.hatch.envs.pre-commit]
 features = ["pre-commit"]
 scripts.install = "pre-commit install"
-scripts.run = "pre-commit run {args}"
-
-[tool.hatch.envs.hatch-test]
-features = ["tests"]
-randomize = false
-parallel = false
-run = "pytest {args}"
-
-[[tool.hatch.envs.hatch-test.matrix]]
-python = ["3.9", "3.10", "3.11", "3.12", "3.13"]
+scripts.run = "pre-commit run {args:--all-files}"
 
 [tool.ruff]
-lint.ignore = [
-    "TRY003",  # https://docs.astral.sh/ruff/rules/raise-vanilla-args/
-    "EM101",   # https://docs.astral.sh/ruff/rules/raw-string-in-exception/
-    "EM102",   # https://docs.astral.sh/ruff/rules/f-string-in-exception/
-    "PLR2004", # https://docs.astral.sh/ruff/rules/magic-value-comparison/
-    "FBT002",  # https://docs.astral.sh/ruff/rules/boolean-default-value-positional-argument/
-    "TID252",  # https://docs.astral.sh/ruff/rules/relative-imports/
+# Set the maximum line length to 79.
+line-length = 79
+
+[tool.ruff.lint]
+# Add the `line-too-long` rule to the enforced rule set. By default, Ruff omits rules that
+# overlap with the use of a formatter, like Black, but we can override this behavior by
+# explicitly adding the rule.
+extend-select = [
+  "UP",  # pyupgrade
+  "D",   # pydocstyle
 ]
-[tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["INP001", "S101"]
+ignore = ["D205"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
