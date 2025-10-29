@@ -161,16 +161,21 @@ class EpwCalculation(CalcJob):
             'PARENT_FOLDER_SYMLINK', self._default_symlink_usage
         ) else remote_copy_list
 
+        # If parent_folder_nscf is provided, we need to copy the nscf outdir to the epw folder.
+        # We don't do symlink because epw will append new files into this folder
 
         if 'parent_folder_nscf' in self.inputs:
             parent_folder_nscf = self.inputs.parent_folder_nscf
 
-            remote_list.append((
+            remote_copy_list.append((
                 parent_folder_nscf.computer.uuid,
                 Path(parent_folder_nscf.get_remote_path(), PwCalculation._OUTPUT_SUBFOLDER).as_posix(),
                 self._OUTPUT_SUBFOLDER
             ))
 
+        # If parent_folder_chk is provided, we need to copy the .chk, .bvec, and .mmn files to the epw folder.
+        # We can do symlink for .chk and .bvec. .mmn file is already a symlink as defined in wannier workflow.
+        # Not that we do some modification to the .mmn file in site so here we rename it to avoid overwriting.
         if 'parent_folder_chk' in self.inputs:
             parent_folder_chk = self.inputs.parent_folder_chk
 
@@ -189,7 +194,10 @@ class EpwCalculation(CalcJob):
                     self._PREFIX + '.wannier90.mmn'
                 )
             )
-            
+        
+        # If parent_folder_ph is provided, we need to copy the dvscf files from _ph0 folder
+        # into the save subfolder. This can be a symlink as the save folder will only be read by epw.x
+
         if 'parent_folder_ph' in self.inputs:
             parent_folder_ph = self.inputs.parent_folder_ph
 
@@ -241,43 +249,33 @@ class EpwCalculation(CalcJob):
                     Path('save', f'{prefix}.dyn_q{iqpt}').as_posix()
                 ))
 
-        if 'parent_folder_epw' in self.inputs:
 
+        # If parent_folder_epw is provided, we need to copy the .epmatwp file to the epw folder.
+        # We can do symlink for .epmatwp file.
+
+        if 'parent_folder_epw' in self.inputs:
             parent_folder_epw = self.inputs.parent_folder_epw
             if isinstance(parent_folder_epw, orm.RemoteStashFolderData):
                 epw_path = Path(parent_folder_epw.target_basepath)
             else:
                 epw_path = Path(parent_folder_epw.get_remote_path())
 
-
-
             file_list = []
 
-            if (
-                (not parameters['INPUTEPW'].get('ephwrite', True))
-                and
-                parameters['INPUTEPW'].get('restart', False)
-                ):
-                file_list = [
-                    'crystal.fmt', 'selecq.fmt', 'restart.fmt', f'{self._PREFIX}.a2f'
-                    ]
-
-                remote_symlink_list.append(
-                    (
-                        parent_folder_epw.computer.uuid,
-                        Path(epw_path, f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix(),
-                        Path(f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix()
-                    )
-                )
             # If epwread = .true., it must be that prefix.epmatwp file is saved.
             # From EPW 5.9, vmedata.fmt and dmedata.fmt are always saved and used no matter vme = dipole or wannier.
             # and prefix.mmn, prefix.bvec are also used.
-            elif parameters['INPUTEPW'].get('epwread', False):
+            if (
+                parameters['INPUTEPW'].get('epwread', False)
+                and
+                parameters['INPUTEPW'].get('elph', False)
+                ):
                 file_list = [
                     'crystal.fmt', 'epwdata.fmt', 'vmedata.fmt', 'dmedata.fmt',
                     f'{self._PREFIX}.kgmap', f'{self._PREFIX}.kmap',
                     f'{self._PREFIX}.ukk', f'{self._PREFIX}.mmn', f'{self._PREFIX}.bvec'
                 ]
+                # We force the .epmatwp file to be a symlink because it's quite large.
 
                 remote_symlink_list.append(
                     (
@@ -287,6 +285,47 @@ class EpwCalculation(CalcJob):
                     )
                 )                
 
+            ## If eliashberg = .true., we are doing superconductivity calculations.
+            if parameters['INPUTEPW'].get('eliashberg', False):
+                # if it is still writing ephmat folder, no matter it starts from scratch or from interrupted calculation, 
+                # We should always have these file copied. 
+                if (
+                    parameters['INPUTEPW'].get('ephwrite', True)
+                    ):
+                    file_list = [
+                        'crystal.fmt', 'epwdata.fmt', 'vmedata.fmt', 'dmedata.fmt',
+                        f'{self._PREFIX}.kgmap', f'{self._PREFIX}.kmap',
+                        f'{self._PREFIX}.ukk', f'{self._PREFIX}.mmn', f'{self._PREFIX}.bvec'
+                    ]
+                    remote_symlink_list.append(
+                        (
+                            parent_folder_epw.computer.uuid,
+                            Path(epw_path, f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp').as_posix(),
+                            Path(f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp').as_posix()
+                        )
+                    )     
+                    # In case it's a restart function, we should link the ephmat sub folder.
+                    if parameters['INPUTEPW'].get('restart', False):
+                        file_list = ['crystal.fmt', 'restart.fmt', 'selecq.fmt']
+                        remote_symlink_list.append(
+                            (
+                                parent_folder_epw.computer.uuid,
+                                Path(epw_path, f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix(),
+                                Path(f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix()
+                            )
+                        )
+                # It is only when ephwrite = .false. is explicitly specified, we can only
+                # link the ephmat sub folder.
+                else:
+                    file_list = ['crystal.fmt', 'selecq.fmt']
+                    remote_symlink_list.append(
+                        (
+                            parent_folder_epw.computer.uuid,
+                            Path(epw_path, f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix(),
+                            Path(f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix()
+                        )
+                    )
+
             for filename in file_list:
                 remote_list.append(
                     (
@@ -294,7 +333,6 @@ class EpwCalculation(CalcJob):
                         Path(epw_path, filename).as_posix(), 
                         Path(filename).as_posix())
                 )
-
         # check if wannierize is True and if parent_folder_epw or parent_folder_chk is provided
         wannierize = parameters['INPUTEPW'].get('wannierize', False)
 
@@ -365,24 +403,28 @@ class EpwCalculation(CalcJob):
         except NotImplementedError as exception:
             raise exceptions.InputValidationError('Cannot get the fine k-point grid') from exception
 
+        # If band_plot = .true., we need to retrieve the interpolated electronic and phonon bands.
         if parameters['INPUTEPW'].get('band_plot'):
             retrieve_list += ['band.eig', 'phband.freq']
 
+        # If eliashberg = .true., we need to retrieve the spectral function,
         if parameters['INPUTEPW'].get('eliashberg', False):
             retrieve_list.append(self._OUTPUT_A2F_FILE)
+            # if it's a first time calculation, epw.x will also output dos files for electron and phonon.
             if not parameters['INPUTEPW'].get('restart', False):
                 retrieve_list.append(self._OUTPUT_A2F_PROJ_FILE)
                 retrieve_list.append(self._OUTPUT_PHDOS_FILE)
                 retrieve_list.append(self._OUTPUT_PHDOS_PROJ_FILE)
                 retrieve_list.append(Path(self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE).as_posix())
 
+        # If liso = .true., and we are not using linearized Eliashberg equations, we need to retrieve the isotropic gap function.
         if (
             parameters['INPUTEPW'].get('liso', False) 
             and 
             not parameters['INPUTEPW'].get('tc_linear', False)
             ):
             retrieve_list.append('aiida.imag_iso_*')
-
+        # If laniso = .true., and, we need to retrieve the anisotropic gap function.
         if parameters['INPUTEPW'].get('laniso', False):
             retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
             retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
