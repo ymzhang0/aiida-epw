@@ -27,16 +27,24 @@ class EpwCalculation(CalcJob):
     # Default input and output files
     _PREFIX = 'aiida'
     _DEFAULT_INPUT_FILE = 'aiida.in'
-    _kfpoints_input_file = 'kfpoints.kpt'
-    _qfpoints_input_file = 'qfpoints.kpt'
     _DEFAULT_OUTPUT_FILE = 'aiida.out'
-    _OUTPUT_XML_TENSOR_FILE_NAME = 'tensors.xml'
-    _OUTPUT_A2F_FILE = 'aiida.a2f'
     _OUTPUT_SUBFOLDER = './out/'
-    _output_elbands_file = 'band.eig'
-    _output_phbands_file = 'phband.freq'
     _FOLDER_SAVE = 'save'
     _FOLDER_DYNAMICAL_MATRIX = 'DYN_MAT'
+    _kfpoints_input_file = 'kfpoints.kpt'
+    _qfpoints_input_file = 'qfpoints.kpt'
+    _OUTPUT_XML_TENSOR_FILE_NAME = 'tensors.xml'
+    _OUTPUT_DOS_FILE = _PREFIX + '.dos'
+    _OUTPUT_PHDOS_FILE = _PREFIX + '.phdos'
+    _OUTPUT_PHDOS_PROJ_FILE = _PREFIX + '.phdos_proj'
+    _OUTPUT_A2F_FILE = _PREFIX + '.a2f'
+    _OUTPUT_A2F_PROJ_FILE = _PREFIX + '.a2f_proj'
+    _OUTPUT_LAMBDA_FS_FILE = _PREFIX + '.lambda_FS'
+    _OUTPUT_LAMBDA_K_PAIRS_FILE = _PREFIX + '.lambda_k_pairs'
+    _output_elbands_file = 'band.eig'
+    _output_phbands_file = 'phband.freq'
+
+    _MAX_NSTEMP = 50
 
     # Not using symlink in pw to allow multiple nscf to run on top of the same scf
     _default_symlink_usage = False
@@ -57,22 +65,50 @@ class EpwCalculation(CalcJob):
         spec.input('settings', valid_type=orm.Dict, required=False, help='')
         spec.input('parent_folder_nscf', required=False, valid_type=orm.RemoteData,
                    help='the folder of a completed nscf `PwCalculation`')
-        spec.input('parent_folder_ph', required=False, valid_type=orm.RemoteData,
+        spec.input('parent_folder_chk', required=False, valid_type=orm.RemoteData,
+                   help='the folder of a completed wannier90 `Wannier90Calculation`')
+        spec.input('parent_folder_ph', required=False, valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
                    help='the folder of a completed `PhCalculation`')
         spec.input('parent_folder_epw', required=False, valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
                    help='folder that contains all files required to restart an `EpwCalculation`')
-        spec.inputs['metadata']['options']['parser_name'].default = 'quantumespresso.epw'
+        spec.input(
+            'w90_chk_to_ukk_script',
+            valid_type=orm.RemoteData,
+            required=False,
+            help=(
+                "The script to convert the chk file to a ukk file"
+                "If not specified, the wannierization will be skipped."
+                )
+            )
+
+        spec.inputs['metadata']['options']['parser_name'].default = 'epw.epw'
 
         spec.output('output_parameters', valid_type=orm.Dict,
                     help='The `output_parameters` output node of the successful calculation.')
+        spec.output('dos', valid_type=orm.XyData, required=False,
+            help='The electron density of states.')
+        spec.output('phdos', valid_type=orm.XyData, required=False,
+            help='The phonon density of states.')
+        spec.output('phdos_proj', valid_type=orm.XyData, required=False,
+            help='The phonon density of states projected on the atomic orbitals.')
         spec.output('max_eigenvalue', valid_type=orm.XyData, required=False,
                     help='The temperature dependence of the max eigenvalue.')
         spec.output('a2f', valid_type=orm.XyData, required=False,
                     help='The contents of the `.a2f` file.')
+        spec.output('a2f_proj', valid_type=orm.XyData, required=False,
+            help='The contents of the `.a2f_proj` file.')
+        spec.output('lambda_FS', valid_type=orm.ArrayData, required=False,
+            help='The electron-phonon coupling on the Fermi surface.')
+        spec.output('lambda_k_pairs', valid_type=orm.XyData, required=False,
+            help='The density of the electron-phonon coupling on the k-points.')
         spec.output('el_band_structure', valid_type=orm.BandsData, required=False,
                     help='The interpolated electronic band structure.')
         spec.output('ph_band_structure', valid_type=orm.BandsData, required=False,
                     help='The interpolated phonon band structure.')
+        spec.output('iso_gap_functions', valid_type=orm.ArrayData, required=False,
+            help='The interpolated isotropic gap function.')
+        spec.output('aniso_gap_functions', valid_type=orm.ArrayData, required=False,
+            help='The interpolated anisotropic gap function.')
 
         spec.exit_code(300, 'ERROR_NO_RETRIEVED_FOLDER',
             message='The retrieved folder data node could not be accessed.')
@@ -81,7 +117,9 @@ class EpwCalculation(CalcJob):
         spec.exit_code(312, 'ERROR_OUTPUT_STDOUT_INCOMPLETE',
             message='The stdout output file was incomplete probably because the calculation got interrupted.')
         # yapf: enable
-
+        spec.exit_code(314, 'ERROR_PARAMETERS_NOT_VALID',
+            message='The parameters are not valid.')
+            
     def prepare_for_submission(self, folder):
         """Prepare the calculation job for submission by transforming input nodes into input files.
 
@@ -123,15 +161,35 @@ class EpwCalculation(CalcJob):
             'PARENT_FOLDER_SYMLINK', self._default_symlink_usage
         ) else remote_copy_list
 
+
         if 'parent_folder_nscf' in self.inputs:
             parent_folder_nscf = self.inputs.parent_folder_nscf
 
             remote_list.append((
                 parent_folder_nscf.computer.uuid,
                 Path(parent_folder_nscf.get_remote_path(), PwCalculation._OUTPUT_SUBFOLDER).as_posix(),
-                self._OUTPUT_SUBFOLDER,
+                self._OUTPUT_SUBFOLDER
             ))
 
+        if 'parent_folder_chk' in self.inputs:
+            parent_folder_chk = self.inputs.parent_folder_chk
+
+            for suffix in ['chk', 'bvec']:
+                remote_list.append(
+                    (
+                        parent_folder_chk.computer.uuid, 
+                        Path(parent_folder_chk.get_remote_path(), self._PREFIX + '.' + suffix).as_posix(),
+                        self._PREFIX + '.' + suffix
+                    )
+                )
+            remote_list.append(
+                (
+                    parent_folder_chk.computer.uuid, 
+                    Path(parent_folder_chk.get_remote_path(), self._PREFIX + '.mmn').as_posix(),
+                    self._PREFIX + '.wannier90.mmn'
+                )
+            )
+            
         if 'parent_folder_ph' in self.inputs:
             parent_folder_ph = self.inputs.parent_folder_ph
 
@@ -191,22 +249,67 @@ class EpwCalculation(CalcJob):
             else:
                 epw_path = Path(parent_folder_epw.get_remote_path())
 
-            vme_fmt_dict = {
-                'dipole': 'dmedata.fmt',
-                'wannier': 'vmedata.fmt',
-            }
-            file_list = [
-                'selecq.fmt', 'crystal.fmt', 'epwdata.fmt', vme_fmt_dict[parameters['INPUTEPW']['vme']],
-                f'{self._PREFIX}.kgmap', f'{self._PREFIX}.kmap', f'{self._PREFIX}.ukk', self._OUTPUT_SUBFOLDER,
-                self._FOLDER_SAVE
-            ]
-            if parameters['INPUTEPW'].get('restart', False):
-                file_list.append('restart.fmt')
+
+
+            file_list = []
+
+            if (
+                (not parameters['INPUTEPW'].get('ephwrite', True))
+                and
+                parameters['INPUTEPW'].get('restart', False)
+                ):
+                file_list = [
+                    'crystal.fmt', 'selecq.fmt', 'restart.fmt', f'{self._PREFIX}.a2f'
+                    ]
+
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(epw_path, f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix(),
+                        Path(f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat').as_posix()
+                    )
+                )
+            # If epwread = .true., it must be that prefix.epmatwp file is saved.
+            # From EPW 5.9, vmedata.fmt and dmedata.fmt are always saved and used no matter vme = dipole or wannier.
+            # and prefix.mmn, prefix.bvec are also used.
+            elif parameters['INPUTEPW'].get('epwread', False):
+                file_list = [
+                    'crystal.fmt', 'epwdata.fmt', 'vmedata.fmt', 'dmedata.fmt',
+                    f'{self._PREFIX}.kgmap', f'{self._PREFIX}.kmap',
+                    f'{self._PREFIX}.ukk', f'{self._PREFIX}.mmn', f'{self._PREFIX}.bvec'
+                ]
+
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(epw_path, f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp').as_posix(),
+                        Path(f'{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp').as_posix()
+                    )
+                )                
 
             for filename in file_list:
                 remote_list.append(
-                    (parent_folder_epw.computer.uuid, Path(epw_path, filename).as_posix(), Path(filename).as_posix())
+                    (
+                        parent_folder_epw.computer.uuid, 
+                        Path(epw_path, filename).as_posix(), 
+                        Path(filename).as_posix())
                 )
+
+        # check if wannierize is True and if parent_folder_epw or parent_folder_chk is provided
+        wannierize = parameters['INPUTEPW'].get('wannierize', False)
+
+        if wannierize and any(
+            _ in self.inputs
+            for _ in ["parent_folder_epw", "parent_folder_chk"]
+        ):
+            self.report("Should not have a parent folder of epw or chk if wannierize is True")
+            return self.exit_codes.ERROR_PARAMETERS_NOT_VALID
+            
+        # check if nstemp is too large
+        nstemp = parameters['INPUTEPW'].get('nstemp', None)
+        if nstemp and nstemp > self._MAX_NSTEMP:
+            self.report(f'nstemp too large, reset it to maximum allowed: {self._MAX_NSTEMP}')
+            parameters['INPUTEPW']['nstemp'] = self._MAX_NSTEMP
 
         parameters['INPUTEPW']['outdir'] = self._OUTPUT_SUBFOLDER
         parameters['INPUTEPW']['dvscf_dir'] = self._FOLDER_SAVE
@@ -265,9 +368,26 @@ class EpwCalculation(CalcJob):
         if parameters['INPUTEPW'].get('band_plot'):
             retrieve_list += ['band.eig', 'phband.freq']
 
-        if parameters['INPUTEPW'].get('laniso', False):
-            retrieve_list.append('aiida.imag_aniso_gap*')
+        if parameters['INPUTEPW'].get('eliashberg', False):
+            retrieve_list.append(self._OUTPUT_A2F_FILE)
+            if not parameters['INPUTEPW'].get('restart', False):
+                retrieve_list.append(self._OUTPUT_A2F_PROJ_FILE)
+                retrieve_list.append(self._OUTPUT_PHDOS_FILE)
+                retrieve_list.append(self._OUTPUT_PHDOS_PROJ_FILE)
+                retrieve_list.append(Path(self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE).as_posix())
 
+        if (
+            parameters['INPUTEPW'].get('liso', False) 
+            and 
+            not parameters['INPUTEPW'].get('tc_linear', False)
+            ):
+            retrieve_list.append('aiida.imag_iso_*')
+
+        if parameters['INPUTEPW'].get('laniso', False):
+            retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
+            retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
+            retrieve_list.append('aiida.imag_aniso_gap*')
+            
         # customized namelists, otherwise not present in the distributed epw code
         try:
             namelists_toprint = settings.pop('NAMELISTS')
