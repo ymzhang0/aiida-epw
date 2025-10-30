@@ -308,7 +308,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def run_epw(self):
         """Run the `EpwBaseWorkChain`."""        
-        inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain))
+        inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain, namespace='epw'))
 
         # The EpwBaseWorkChain will take the parent folder of the previous
         # PhCalculation, PwCalculation, and Wannier90Calculation.
