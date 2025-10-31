@@ -20,6 +20,10 @@ default_inputs:
             noinv: False
           CONTROL:
             calculation: bands
+    wannier90:
+      wannier90:
+        parameters:
+          write_bvec: True
   ph_base:
     ph:
       settings:
