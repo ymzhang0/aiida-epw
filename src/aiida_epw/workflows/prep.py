@@ -163,6 +163,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             "ERROR_SUB_PROCESS_FAILED_EPW",
             message="The `EpwWorkChain` sub process failed",
         )
+        spec.exit_code(
+            406,
+            "ERROR_SUB_PROCESS_FAILED_EPW_BANDS",
+            message="The `EpwBandsWorkChain` sub process failed",
+        )
 
     @classmethod
     def get_protocol_filepath(cls):
@@ -408,6 +413,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_base")
         )
 
+        inputs.structure = self.inputs.structure
+
         # The EpwBaseWorkChain will take the parent folder of the previous
         # PhCalculation, PwCalculation, and Wannier90Calculation.
         inputs.parent_folder_ph = self.ctx.workchain_ph.outputs.remote_folder
@@ -470,6 +477,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         inputs = AttributeDict(
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_bands")
         )
+        inputs.structure = self.inputs.structure
         inputs.parent_folder_epw = self.ctx.workchain_epw.outputs.remote_stash
 
         if "bands_kpoints" in self.ctx.workchain_w90_bands.inputs:
@@ -501,7 +509,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.report(
                 f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
             )
-            # return self.exit_codes.ERROR_SUB_PROCESS_FAILED_EPW_BANDS
+            return self.exit_codes.ERROR_SUB_PROCESS_FAILED_EPW_BANDS
 
     def results(self):
         """Add the most important results to the outputs of the work chain."""

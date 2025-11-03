@@ -12,7 +12,6 @@ from aiida.engine import (
 )
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
-from aiida_epw.tools.calculators import calculate_iso_tc
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
 
@@ -82,6 +81,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             EpwBaseWorkChain,
             namespace="epw_interp",
             exclude=(
+                "structure",
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
@@ -97,6 +97,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             EpwBaseWorkChain,
             namespace="epw_final_iso",
             exclude=(
+                "structure",
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
@@ -112,6 +113,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             EpwBaseWorkChain,
             namespace="epw_final_aniso",
             exclude=(
+                "structure",
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
@@ -137,23 +139,23 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             ),
             cls.results,
         )
-        spec.output(
-            "parameters",
-            valid_type=orm.Dict,
-            help="The `output_parameters` output node of the final EPW calculation.",
+        spec.expose_outputs(
+            EpwBaseWorkChain,
+            namespace="epw_final_a2f",
         )
-        spec.output(
-            "max_eigenvalue",
-            valid_type=orm.XyData,
-            help="The temperature dependence of the max eigenvalue for the final EPW.",
+        spec.expose_outputs(
+            EpwBaseWorkChain,
+            namespace="epw_final_iso",
+            namespace_options={
+                "required": False,
+            },
         )
-        spec.output(
-            "a2f",
-            valid_type=orm.XyData,
-            help="The contents of the `.a2f` file for the final EPW.",
-        )
-        spec.output(
-            "Tc_iso", valid_type=orm.Float, help="The critical temperature."
+        spec.expose_outputs(
+            EpwBaseWorkChain,
+            namespace="epw_final_aniso",
+            namespace_options={
+                "required": False,
+            },
         )
 
         spec.exit_code(
@@ -222,13 +224,13 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
 
         if parent_folder_epw is None:
             if (
-                epw_source.inputs.epw.code.computer.hostname
+                epw_source.inputs.code.computer.hostname
                 != epw_code.computer.hostname
             ):
                 raise ValueError(
                     "The `epw_code` must be configured on the same computer as that where the `parent_epw` was run."
                 )
-            parent_folder_epw = parent_epw.outputs.epw_folder
+            parent_folder_epw = epw_source.outputs.remote_folder
         else:
             # TODO: Add check to make sure parent_folder_epw is on same computer as epw_code
             pass
@@ -348,6 +350,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_interp")
         )
 
+        inputs.structure = self.inputs.structure
         inputs.parent_folder_epw = self.inputs.parent_folder_epw
         inputs.kfpoints_factor = self.inputs.epw_interp.kfpoints_factor
         inputs.qfpoints_distance = self.ctx.interpolation_list.pop()
@@ -411,6 +414,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_final_iso")
         )
 
+        inputs.structure = self.inputs.structure
         parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
         inputs.parent_folder_epw = parent_folder_epw
         inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
@@ -446,6 +450,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_final_aniso")
         )
 
+        inputs.structure = self.inputs.structure
         parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
         inputs.parent_folder_epw = parent_folder_epw
         inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
@@ -470,18 +475,30 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_ANISO
 
     def results(self):
-        """TODO."""
-        self.out(
-            "Tc_iso",
-            calculate_iso_tc(self.ctx.final_epw_iso.outputs.max_eigenvalue),
+        """Add the most important results to the outputs of the work chain."""
+        self.out_many(
+            self.exposed_outputs(
+                self.ctx.epw_interp[-1],
+                EpwBaseWorkChain,
+                namespace="epw_final_a2f",
+            )
         )
-        self.out(
-            "parameters", self.ctx.final_epw_iso.outputs.output_parameters
-        )
-        self.out(
-            "max_eigenvalue", self.ctx.final_epw_iso.outputs.max_eigenvalue
-        )
-        self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
+        if "final_epw_iso" in self.ctx:
+            self.out_many(
+                self.exposed_outputs(
+                    self.ctx.final_epw_iso,
+                    EpwBaseWorkChain,
+                    namespace="epw_final_iso",
+                )
+            )
+        if "final_epw_aniso" in self.ctx:
+            self.out_many(
+                self.exposed_outputs(
+                    self.ctx.final_epw_aniso,
+                    EpwBaseWorkChain,
+                    namespace="epw_final_aniso",
+                )
+            )
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""

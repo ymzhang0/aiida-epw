@@ -317,34 +317,34 @@ class EpwCalculation(CalcJob):
             # If epwread = .true., it must be that prefix.epmatwp file is saved.
             # From EPW 5.9, vmedata.fmt and dmedata.fmt are always saved and used no matter vme = dipole or wannier.
             # and prefix.mmn, prefix.bvec are also used.
-            if parameters["INPUTEPW"].get("epwread", False) and parameters[
-                "INPUTEPW"
-            ].get("elph", False):
-                file_list = [
-                    "crystal.fmt",
-                    "epwdata.fmt",
-                    "vmedata.fmt",
-                    "dmedata.fmt",
-                    f"{self._PREFIX}.kgmap",
-                    f"{self._PREFIX}.kmap",
-                    f"{self._PREFIX}.ukk",
-                    f"{self._PREFIX}.mmn",
-                    f"{self._PREFIX}.bvec",
-                ]
-                # We force the .epmatwp file to be a symlink because it's quite large.
+            # if parameters["INPUTEPW"].get("epwread", False) and parameters[
+            #     "INPUTEPW"
+            # ].get("elph", False):
+            #     file_list = [
+            #         "crystal.fmt",
+            #         "epwdata.fmt",
+            #         "vmedata.fmt",
+            #         "dmedata.fmt",
+            #         f"{self._PREFIX}.kgmap",
+            #         f"{self._PREFIX}.kmap",
+            #         f"{self._PREFIX}.ukk",
+            #         f"{self._PREFIX}.mmn",
+            #         f"{self._PREFIX}.bvec",
+            #     ]
+            #     # We force the .epmatwp file to be a symlink because it's quite large.
 
-                remote_symlink_list.append(
-                    (
-                        parent_folder_epw.computer.uuid,
-                        Path(
-                            epw_path,
-                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
-                        ).as_posix(),
-                        Path(
-                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
-                        ).as_posix(),
-                    )
-                )
+            #     remote_symlink_list.append(
+            #         (
+            #             parent_folder_epw.computer.uuid,
+            #             Path(
+            #                 epw_path,
+            #                 f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
+            #             ).as_posix(),
+            #             Path(
+            #                 f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
+            #             ).as_posix(),
+            #         )
+            #     )
 
             ## If eliashberg = .true., we are doing superconductivity calculations.
             if parameters["INPUTEPW"].get("eliashberg", False):

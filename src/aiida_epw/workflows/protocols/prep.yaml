@@ -28,6 +28,15 @@ default_inputs:
     ph:
       settings:
         PREPARE_FOR_EPW: True
+    metadata:
+      options:
+        withmpi: True
+        stash:
+          source_list:
+            - DYN_MAT
+            - out/_ph0/aiida.dvscf1
+            - out/_ph0/aiida.q_*/aiida.dvscf1
+            - out/_ph0/aiida.phsave/
   epw_base:
     metadata:
       options:
@@ -41,10 +50,13 @@ default_inputs:
             - dmedata.fmt
             - epwdata.fmt
             - selecq.fmt
+            - dmedata.fmt
             - vmedata.fmt
             - aiida.kgmap
             - aiida.kmap
             - aiida.ukk
+            - aiida.mmn
+            - aiida.bvec
             - out/aiida.epmatwp
             - save
     parameters:
@@ -62,13 +74,30 @@ default_inputs:
         temps: 300
         vme: 'dipole'
         wannierize: False
+  epw_bands:
+    metadata:
+      options:
+        resources:
+          num_machines: 1
+        max_wallclock_seconds: 43200  # Twelve hours
+        withmpi: True
+    parameters:
+      INPUTEPW:
+        band_plot: True
+        elph: True
+        epbread: False
+        epbwrite: False
+        epwread: True
+        epwwrite: False
+        wannierize: False
+
 default_protocol: moderate
 protocols:
   moderate:
     description: 'Protocol to perform a electron-phonon calculation at normal precision at moderate computational cost.'
   precise:
     description: 'Protocol to perform a electron-phonon calculation at high precision at higher computational cost.'
-    qpoints_distance: 0.3
+    qpoints_distance: 0.1
   fast:
     description: 'Protocol to perform a electron-phonon calculation at low precision at minimal computational cost for testing purposes.'
-    qpoints_distance: 1.1
+    qpoints_distance: 0.3

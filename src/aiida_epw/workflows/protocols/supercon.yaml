@@ -36,18 +36,13 @@ default_inputs:
         epwwrite: False
         etf_mem: 1
         fsthick: 0.8
-        liso: True
-        laniso: False
-        limag: True
-        lpade: True
         mp_mesh_k: True
         muc: 0.13
         nqstep: 500
-        nsiter: 1
         nstemp: 1
         restart: False
         selecqread: False
-        temps: 10.0
+        temps: 1.0
         vme: 'dipole'
         wannierize: False
         wscut: 0.5
@@ -61,7 +56,7 @@ default_inputs:
     parameters:
       INPUTEPW:
         conv_thr_iaxis: 0.01
-        degaussq: 0.5
+        degaussq: 0.3
         degaussw: 0.05
         elecselfen: False
         eliashberg: True
