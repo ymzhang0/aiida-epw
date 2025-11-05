@@ -24,6 +24,24 @@ from aiida_wannier90_workflows.workflows.bands import (
 
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
+def get_target_basepath(computer):
+    """Set the target basepath for the stash folder."""
+    if computer.transport_type == "core.local":
+        target_basepath = Path(
+            computer.get_workdir(), "stash"
+        ).as_posix()
+    elif computer.transport_type == "core.ssh":
+        target_basepath = Path(
+            computer.get_workdir().format(
+                username=computer.get_configuration()[
+                    "username"
+                ]
+            ),
+            "stash",
+        ).as_posix()
+    else:
+        raise ValueError(f"Unsupported transport type: {computer.transport_type}")
+    return target_basepath
 
 class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     """Main work chain to start calculating properties using EPW.
@@ -76,6 +94,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "clean_workdir",
             ),
             namespace_options={
+                'populate_defaults': False,
                 "help": "Inputs for the `Wannier90OptimizeWorkChain/Wannier90BandsWorkChain`."
             },
         )
@@ -204,8 +223,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         builder = cls.get_builder()
         builder.structure = structure
 
+        pseudo_family = inputs.pop("pseudo_family", None)
         w90_bands_inputs = inputs.get("w90_bands", {})
-        pseudo_family = w90_bands_inputs.pop("pseudo_family", None)
 
         if reference_bands:
             w90_bands = Wannier90OptimizeWorkChain.get_builder_from_protocol(
@@ -243,8 +262,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         builder.w90_bands = w90_bands
 
         args = (codes["ph"], None, protocol)
+        ph_base_inputs = inputs.get("ph_base", None)
+        if "target_base" not in ph_base_inputs['ph']['metadata']['options']["stash"]:
+            ph_base_inputs['ph']['metadata']['options']['stash']['target_base'] = get_target_basepath(codes["ph"].computer)
         ph_base = PhBaseWorkChain.get_builder_from_protocol(
-            *args, overrides=inputs.get("ph_base", None), **kwargs
+            *args, overrides=ph_base_inputs, **kwargs
         )
         ph_base.pop("clean_workdir", None)
         ph_base.pop("qpoints_distance")
@@ -259,26 +281,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             if namespace == "epw_base":
                 if (
                     "target_base"
-                    not in epw_inputs["metadata"]["options"]["stash"]
+                    not in epw_inputs['options']["stash"]
                 ):
-                    epw_computer = codes["epw"].computer
-                    if epw_computer.transport_type == "core.local":
-                        target_basepath = Path(
-                            epw_computer.get_workdir(), "stash"
-                        ).as_posix()
-                    elif epw_computer.transport_type == "core.ssh":
-                        target_basepath = Path(
-                            epw_computer.get_workdir().format(
-                                username=epw_computer.get_configuration()[
-                                    "username"
-                                ]
-                            ),
-                            "stash",
-                        ).as_posix()
 
-                    epw_inputs["metadata"]["options"]["stash"][
+                    epw_inputs['options']["stash"][
                         "target_base"
-                    ] = target_basepath
+                    ] = get_target_basepath(codes["epw"].computer)
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
                 code=codes["epw"],
@@ -340,19 +348,21 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def run_wannier90(self):
         """Run the wannier90 workflow."""
-        if "reference_bands" in self.inputs.w90_bands:
-            w90_class = Wannier90OptimizeWorkChain
-        else:
-            w90_class = Wannier90BandsWorkChain
-
-        self.ctx.w90_class_name = w90_class.get_name()
-        self.report(f"Running a {self.ctx.w90_class_name}.")
 
         inputs = AttributeDict(
             self.exposed_inputs(
                 Wannier90OptimizeWorkChain, namespace="w90_bands"
             )
         )
+        if "reference_bands" in self.inputs.w90_bands:
+            w90_class = Wannier90OptimizeWorkChain
+            # inputs.pop('projwfc')
+        else:
+            w90_class = Wannier90BandsWorkChain
+
+        self.ctx.w90_class_name = w90_class.get_name()
+        self.report(f"Running a {self.ctx.w90_class_name}.")
+
         inputs.metadata.call_link_label = "w90_bands"
         inputs.structure = self.inputs.structure
 

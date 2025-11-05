@@ -95,16 +95,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 "It must be defined in the top-level as a solution of the conflict between `metadata_calculation` of the WorkChain and `metadata` of the Calculation."
                 )
             )
-        # spec.input(
-        #     'metadata_calculation',
-        #     valid_type=orm.Dict,
-        #     required=True,
-        #     serializer=to_aiida_type,
-        #     help=(
-        #         "The metadata dictionary for the calculation."
-        #         "It must be defined in the top-level as a solution of the conflict between `metadata_calculation` of the WorkChain and `metadata` of the Calculation."
-        #         )
-        #     )
+
         spec.input(
             'structure',
             valid_type=orm.StructureData,
@@ -210,18 +201,13 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             parameter_overrides = overrides.get("parameters", {})
             parameters = recursive_merge(parameters, parameter_overrides)
 
-        metadata = inputs.pop("metadata")
-
-        if options:
-            metadata["options"] = recursive_merge(metadata["options"], options)
-
         # pylint: disable=no-member
         builder = cls.get_builder()
         builder.structure = structure
         builder.code = code
         builder.parameters = orm.Dict(parameters)
         ## Must firstly pop the options from the metadata dictionary.
-        builder.options = metadata.pop("options")
+        builder.options = orm.Dict(inputs.pop("options"))
 
         if w90_chk_to_ukk_script:
             type_check(w90_chk_to_ukk_script, orm.RemoteData)
