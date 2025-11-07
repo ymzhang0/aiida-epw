@@ -24,24 +24,24 @@ from aiida_wannier90_workflows.workflows.bands import (
 
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
+
 def get_target_basepath(computer):
     """Set the target basepath for the stash folder."""
     if computer.transport_type == "core.local":
-        target_basepath = Path(
-            computer.get_workdir(), "stash"
-        ).as_posix()
+        target_basepath = Path(computer.get_workdir(), "stash").as_posix()
     elif computer.transport_type == "core.ssh":
         target_basepath = Path(
             computer.get_workdir().format(
-                username=computer.get_configuration()[
-                    "username"
-                ]
+                username=computer.get_configuration()["username"]
             ),
             "stash",
         ).as_posix()
     else:
-        raise ValueError(f"Unsupported transport type: {computer.transport_type}")
+        raise ValueError(
+            f"Unsupported transport type: {computer.transport_type}"
+        )
     return target_basepath
+
 
 class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     """Main work chain to start calculating properties using EPW.
@@ -94,8 +94,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "clean_workdir",
             ),
             namespace_options={
-                'populate_defaults': False,
-                "help": "Inputs for the `Wannier90OptimizeWorkChain/Wannier90BandsWorkChain`."
+                "populate_defaults": False,
+                "help": "Inputs for the `Wannier90OptimizeWorkChain/Wannier90BandsWorkChain`.",
             },
         )
         spec.inputs["w90_bands"].validator = validate_inputs_bands
@@ -263,8 +263,13 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         args = (codes["ph"], None, protocol)
         ph_base_inputs = inputs.get("ph_base", None)
-        if "target_base" not in ph_base_inputs['ph']['metadata']['options']["stash"]:
-            ph_base_inputs['ph']['metadata']['options']['stash']['target_base'] = get_target_basepath(codes["ph"].computer)
+        if (
+            "target_base"
+            not in ph_base_inputs["ph"]["metadata"]["options"]["stash"]
+        ):
+            ph_base_inputs["ph"]["metadata"]["options"]["stash"][
+                "target_base"
+            ] = get_target_basepath(codes["ph"].computer)
         ph_base = PhBaseWorkChain.get_builder_from_protocol(
             *args, overrides=ph_base_inputs, **kwargs
         )
@@ -279,14 +284,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         for namespace in ["epw_base", "epw_bands"]:
             epw_inputs = inputs.get(namespace, None)
             if namespace == "epw_base":
-                if (
-                    "target_base"
-                    not in epw_inputs['options']["stash"]
-                ):
-
-                    epw_inputs['options']["stash"][
-                        "target_base"
-                    ] = get_target_basepath(codes["epw"].computer)
+                if "target_base" not in epw_inputs["options"]["stash"]:
+                    epw_inputs["options"]["stash"]["target_base"] = (
+                        get_target_basepath(codes["epw"].computer)
+                    )
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
                 code=codes["epw"],
@@ -348,7 +349,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def run_wannier90(self):
         """Run the wannier90 workflow."""
-
         inputs = AttributeDict(
             self.exposed_inputs(
                 Wannier90OptimizeWorkChain, namespace="w90_bands"
@@ -501,6 +501,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 .node.outputs.explicit_kpoints
             )
 
+        inputs.kpoints = self.ctx.kpoints_nscf
+        inputs.qpoints = self.ctx.qpoints
         inputs.qfpoints = bands_kpoints
         inputs.kfpoints = bands_kpoints
 
