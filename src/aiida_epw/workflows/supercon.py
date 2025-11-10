@@ -61,6 +61,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
         )
         spec.input("interpolation_distance", valid_type=(orm.Float, orm.List))
+        spec.input("kfpoints_factor", valid_type=orm.Int, default=lambda: orm.Int(1))
         spec.input(
             "convergence_threshold", valid_type=orm.Float, required=False
         )
@@ -281,6 +282,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         )
         builder.structure = parent_epw.inputs.structure
         builder.parent_folder_epw = parent_folder_epw
+        builder.kfpoints_factor = orm.Int(inputs.get("kfpoints_factor"))
         builder.clean_workdir = orm.Bool(inputs["clean_workdir"])
 
         return builder
@@ -352,7 +354,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
 
         inputs.structure = self.inputs.structure
         inputs.parent_folder_epw = self.inputs.parent_folder_epw
-        inputs.kfpoints_factor = self.inputs.epw_interp.kfpoints_factor
+        inputs.kfpoints_factor = self.inputs.kfpoints_factor
         inputs.qfpoints_distance = self.ctx.interpolation_list.pop()
 
         if self.ctx.degaussq:
