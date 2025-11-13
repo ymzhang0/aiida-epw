@@ -17,6 +17,7 @@ from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance i
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida_epw.tools.kpoints import check_kpoints_qpoints_compatibility
+from aiida_epw.tools.workchain import find_related_calculation
 
 EpwCalculation = CalculationFactory("epw.epw")
 
@@ -277,7 +278,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             parameters["INPUTEPW"]["nbndsub"] = w90_params["num_wann"]
 
         if "parent_folder_epw" in self.inputs:
-            epw_params = self.inputs.parent_folder_epw.creator.inputs.parameters.get_dict()
+            calculation = find_related_calculation(self.inputs.parent_folder_epw)
+            epw_params = calculation.inputs.parameters.get_dict()
+
             parameters["INPUTEPW"]["use_ws"] = epw_params["INPUTEPW"].get(
                 "use_ws", False
             )
@@ -305,7 +308,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # We only need to take the kpointsdata from it and continue to generate the find grid.
 
         if "parent_folder_epw" in self.inputs:
-            epw_calc = self.inputs.parent_folder_epw.creator
+            epw_calc = find_related_calculation(self.inputs.parent_folder_epw)
             kpoints = epw_calc.inputs.kpoints
             qpoints = epw_calc.inputs.qpoints
 

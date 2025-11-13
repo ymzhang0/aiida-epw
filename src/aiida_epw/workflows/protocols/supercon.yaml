@@ -6,8 +6,8 @@ default_inputs:
     - 0.2
     - 0.1
     - 0.08
+    - 0.07
     - 0.06
-    - 0.05
   convergence_threshold: 0.5
   always_run_final: True
   kfpoints_factor: 1
@@ -29,7 +29,7 @@ default_inputs:
         epbread: False
         epbwrite: False
         ephwrite: True
-        eps_acoustic: 1
+        eps_acoustic: 0.1
         epwread: True
         epwwrite: False
         etf_mem: 1

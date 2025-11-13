@@ -14,7 +14,6 @@ from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
-
 @calcfunction
 def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
     """Convert a ``RemoteStashFolderData`` into a ``RemoteData``."""
@@ -307,14 +306,14 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         if "convergence_threshold" in self.inputs:
             try:
                 self.ctx.epw_interp[-3].outputs.output_parameters[
-                    "allen_dynes"
+                    "Allen_Dynes_Tc"
                 ]  # This is to check that we have at least 3 allen-dynes
                 prev_allen_dynes = self.ctx.epw_interp[
                     -2
-                ].outputs.output_parameters["allen_dynes"]
+                ].outputs.output_parameters["Allen_Dynes_Tc"]
                 new_allen_dynes = self.ctx.epw_interp[
                     -1
-                ].outputs.output_parameters["allen_dynes"]
+                ].outputs.output_parameters["Allen_Dynes_Tc"]
                 self.ctx.is_converged = (
                     abs(prev_allen_dynes - new_allen_dynes)
                     < self.inputs.convergence_threshold
