@@ -34,7 +34,7 @@ default_inputs:
           withmpi: True
           stash:
             source_list:
-              - DYN_MAT
+              - DYN_MAT/*
               - out/_ph0/aiida.dvscf1
               - out/_ph0/aiida.q_*/aiida.dvscf1
               - out/_ph0/aiida.phsave/

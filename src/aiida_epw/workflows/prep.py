@@ -81,6 +81,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Bool,
             default=lambda: orm.Bool(True),
         )
+
+        spec.input(
+            "parent_folder_ph",
+            valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
+            required=False,
+        )
         spec.input(
             "w90_chk_to_ukk_script",
             valid_type=(orm.RemoteData, orm.SinglefileData),
@@ -94,6 +100,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "clean_workdir",
             ),
             namespace_options={
+                "required": False,
                 "populate_defaults": False,
                 "help": "Inputs for the `Wannier90OptimizeWorkChain/Wannier90BandsWorkChain`.",
             },
@@ -155,8 +162,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         spec.outline(
             cls.generate_reciprocal_points,
-            cls.run_wannier90,
-            cls.inspect_wannier90,
+            if_(cls.should_run_wannier90)(
+                cls.run_wannier90,
+                cls.inspect_wannier90,
+            ),
             cls.run_ph,
             cls.inspect_ph,
             cls.run_epw,
@@ -207,6 +216,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         wannier_projection_type=WannierProjectionType.ATOMIC_PROJECTORS_QE,
         reference_bands=None,
         bands_kpoints=None,
+        parent_folder_ph=None,
         **kwargs,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -310,6 +320,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             inputs["kpoints_distance_scf"]
         )
         builder.kpoints_factor_nscf = orm.Int(inputs["kpoints_factor_nscf"])
+        if parent_folder_ph:
+            builder.parent_folder_ph = parent_folder_ph
         builder.clean_workdir = orm.Bool(inputs["clean_workdir"])
 
         return builder
@@ -325,27 +337,35 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             "metadata": {"call_link_label": "create_qpoints_from_distance"},
         }
         qpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
-        inputs = {
-            "structure": self.inputs.structure,
-            "distance": self.inputs.kpoints_distance_scf,
-            "force_parity": self.inputs.get(
-                "kpoints_force_parity", orm.Bool(False)
-            ),
-            "metadata": {
-                "call_link_label": "create_kpoints_scf_from_distance"
-            },
-        }
-        kpoints_scf = create_kpoints_from_distance(**inputs)
-
-        qpoints_mesh = qpoints.get_kpoints_mesh()[0]
-        kpoints_nscf = orm.KpointsData()
-        kpoints_nscf.set_kpoints_mesh(
-            [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
-        )
-
         self.ctx.qpoints = qpoints
-        self.ctx.kpoints_scf = kpoints_scf
-        self.ctx.kpoints_nscf = kpoints_nscf
+
+        if 'w90_bands' in self.inputs:
+            inputs = {
+                "structure": self.inputs.structure,
+                "distance": self.inputs.kpoints_distance_scf,
+                "force_parity": self.inputs.get(
+                    "kpoints_force_parity", orm.Bool(False)
+                ),
+                "metadata": {
+                    "call_link_label": "create_kpoints_scf_from_distance"
+                },
+            }
+
+            kpoints_scf = create_kpoints_from_distance(**inputs)
+
+            self.ctx.kpoints_scf = kpoints_scf
+
+            qpoints_mesh = qpoints.get_kpoints_mesh()[0]
+
+            kpoints_nscf = orm.KpointsData()
+            kpoints_nscf.set_kpoints_mesh(
+                [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
+            )
+            self.ctx.kpoints_nscf = kpoints_nscf
+
+    def should_run_wannier90(self):
+        """Check if the wannier90 workflow should be run."""
+        return "w90_bands" in self.inputs
 
     def run_wannier90(self):
         """Run the wannier90 workflow."""
@@ -390,14 +410,19 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(PhBaseWorkChain, namespace="ph_base")
         )
 
-        scf_base_wc = (
-            self.ctx.workchain_w90_bands.base.links.get_outgoing(
-                link_label_filter="scf"
+
+        if 'parent_folder_ph' in self.inputs and self.inputs.parent_folder_ph.creator.process_label == "PhCalculation":
+            inputs.ph.parent_folder = self.inputs.parent_folder_ph
+            inputs.ph.qpoints = self.inputs.parent_folder_ph.creator.inputs.qpoints
+        else:
+            scf_base_wc = (
+                self.ctx.workchain_w90_bands.base.links.get_outgoing(
+                    link_label_filter="scf"
+                )
+                .first()
+                .node
             )
-            .first()
-            .node
-        )
-        inputs.ph.parent_folder = scf_base_wc.outputs.remote_folder
+            inputs.ph.parent_folder = scf_base_wc.outputs.remote_folder
 
         inputs.qpoints = self.ctx.qpoints
 
