@@ -9,3 +9,10 @@ project:
   # To autogenerate a Table of Contents, run "myst init --write-toc"
 site:
   template: book-theme
+  nav:
+    - title: Installation
+      url: /installation
+    - title: Quick Start
+      url: /quickstart
+    - title: Developer Guide
+      url: /developer
