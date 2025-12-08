@@ -94,9 +94,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             required=True,
             serializer=to_aiida_type,
             help=(
-                "Dictionary containing the options for the calculation job."
-                "This input is defined at the top-level to resolve the conflict between"
-                "the WorkChain's `metadata` and the Calculation's `metadata` namespace."
+                "Dictionary containing the `metadata.options` for the `EpwCalculation`."
                 )
             )
 
@@ -105,14 +103,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             valid_type=orm.StructureData,
             required=False,
             help=(
-                "The StructureData used for generating k-points and q-points via the "
-                "`create_kpoints_from_distance` calculation function. This structure should match "
-                "the one used in the previous calculation (e.g., SCF, NSCF, or phonon calculation). "
-                "This input is only required when fine k/q-points need to be generated from a "
-                "distance specification. If coarse and fine k/q-points are explicitly provided "
-                "as `KpointsData` nodes, this input is not necessary. Note: This manual input "
-                "may be removed in future versions when automatic structure extraction from parent "
-                "calculations is implemented."
+                "Structure used to generate k-point and q-point meshes. Should match the "
+                "one used in the previous `Wannier90BandsWorkChain`. Only required when "
+                "fine k/q meshes are built from a distance."
                 )
             )
 
@@ -122,12 +115,10 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             serializer=to_aiida_type,
             required=False,
             help=(
-                "The distance between q-points in the fine q-point mesh. "
-                "If specified, the fine q-points will be automatically generated using the "
-                "`create_kpoints_from_distance` calculation function based on this distance and "
-                "the input StructureData. If not specified, the fine q-points must be explicitly "
-                "provided via the `qfpoints` input as a `KpointsData` node. This parameter is "
-                "mutually exclusive with `qfpoints` - only one should be provided."
+                "Distance between q-points in the fine mesh. Mutually exclusive with "
+                "`qfpoints`; provide only one. When set, fine q-points are generated "
+                "from the input structure and this distance. Otherwise, supply fine "
+                "q-points explicitly."
                 )
             )
 
@@ -138,13 +129,10 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             serializer=to_aiida_type,
             required=False,
             help=(
-                "Integer factor used to multiply each dimension of the fine q-point mesh to "
-                "obtain the fine k-point mesh. For example, if the fine q-point mesh is [4, 4, 4] "
-                "and `kfpoints_factor` is 2, the fine k-point mesh will be [8, 8, 8]. This ensures "
-                "that the k-point and q-point meshes are compatible. If not specified, the fine "
-                "k-points will be automatically extracted from the parent folder of the NSCF "
-                "calculation (when available), or must be explicitly provided via the `kfpoints` "
-                "input. This parameter is mutually exclusive with `kfpoints` - only one should be provided."
+                "Factor applied to each dimension of the fine q-point mesh to obtain the "
+                "fine k-point mesh. Mutually exclusive with `kfpoints`; provide only one. "
+                "For example, a fine q-mesh [40, 40, 40] with `kfpoints_factor=2` becomes "
+                "[80, 80, 80]."
                 )
             )
 

@@ -58,9 +58,9 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             "structure",
             valid_type=orm.StructureData,
             help=(
-                "The StructureData for which the `SuperConWorkChain` will be performed. "
-                "This structure should match the one used in the "
-                "parent `EpwBaseWorkChain` or `EpwPrepWorkChain` (i.e. creator of the `parent_folder_epw`)."
+                "Structure used for this `SuperConWorkChain`. Should match the structure "
+                "used in the parent `EpwBaseWorkChain` or `EpwPrepWorkChain` that "
+                "produced `parent_folder_epw`."
             )
         )
         spec.input(
@@ -76,19 +76,18 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             "parent_folder_epw",
             valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
             help=(
-                "The remote folder containing the output files from a previous `epw.x` calculation. "
-                "This usually comes from the output of an `EpwBaseWorkChain` or `EpwPrepWorkChain` that "
-                "has performed the `epw.x` calculation for the transition from coarse Bloch representation to Wannier representation.   "
-                "The folder contains the out/prefix.epmatwp, crystal.fmt, dmedata.fmt, vmedata.fmt, ... files "
-                "needed for the subsequent `EpwBaseWorkChain` calculations. "
+                "Remote folder with outputs from a previous `epw.x` run (typically from "
+                "`EpwBaseWorkChain` or `EpwPrepWorkChain`). Must contain files such as "
+                "`out/prefix.epmatwp`, `crystal.fmt`, `dmedata.fmt`, `vmedata.fmt`, etc., "
+                "needed by the next `EpwBaseWorkChain` calculations."
             )
         )
         spec.input(
             "interpolation_distance",
             valid_type=(orm.Float, orm.List),
             help=(
-                "A list of distances between q-points in the fine q-point "
-                "mesh used for the convergence study of the Allen-Dynes critical temperature. "
+                "Distance (or list of distances) between q-points in the fine mesh used "
+                "to converge the Allen-Dynes critical temperature."
             )
         )
         spec.input(
@@ -96,8 +95,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Float,
             required=False,
             help=(
-                "The convergence threshold for the Allen-Dynes critical temperature. "
-                "The convergence loop will stop when the difference between consecutive Allen-Dynes critical temperatures is less than this threshold. "
+                "Stopping threshold for the Allen-Dynes critical temperature: the loop "
+                "stops when consecutive values differ by less than this amount."
             )
         )
         spec.input(
@@ -105,8 +104,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Bool,
             default=lambda: orm.Bool(False),
             help=(
-                "Whether the final isotropic and anisotropic `EpwBaseWorkChain`s will be run "
-                "even if the Allen-Dynes critical temperature has not converged with respect to the convergence threshold. "
+                "Run the final isotropic and anisotropic `EpwBaseWorkChain`s even if the "
+                "Allen-Dynes temperature has not yet converged."
             )
         )
 
@@ -123,9 +122,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "help": (
-                    "Inputs for the `EpwBaseWorkChain` that performs the `epw.x` calculation for Allen-Dynes Tc convergence. "
-                    "The `clean_workdir`, `parent_folder_epw`, `qfpoints_distance`, and `kfpoints_factor` inputs "
-                    "are excluded as they are coordinated by the `SuperConWorkChain`."
+                    "Inputs forwarded to `EpwBaseWorkChain` for the `epw.x` runs used in "
+                    "the Allen-Dynes Tc convergence."
                 )
             },
         )
@@ -142,9 +140,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "help": (
-                    "Inputs for the final `EpwBaseWorkChain` that performs the `epw.x` calculation for the isotropic Migdal-Eliashberg equation. "
-                    "The `clean_workdir`, `parent_folder_epw`, `qfpoints`, and `kfpoints` inputs "
-                    "are excluded as they are coordinated by the `SuperConWorkChain`."
+                    "Inputs forwarded to the final `EpwBaseWorkChain` for the isotropic "
+                    "Migdal-Eliashberg calculation."
                 )
             },
         )
@@ -161,9 +158,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "help": (
-                    "Inputs for the final `EpwBaseWorkChain` that performs the `epw.x` calculation for the anisotropic Migdal-Eliashberg equation. "
-                    "The `clean_workdir`, `parent_folder_epw`, `qfpoints`, and `kfpoints` inputs "
-                    "are excluded as they are coordinated by the `SuperConWorkChain`."
+                    "Inputs forwarded to the final `EpwBaseWorkChain` for the anisotropic "
+                    "Migdal-Eliashberg calculation."
                 )
             },
         )

@@ -42,9 +42,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             "structure",
             valid_type=orm.StructureData,
             help=(
-                "The StructureData for which the `EpwPrepWorkChain` will be performed. "
-                "This structure is used throughout the workflow for generating k-points and "
-                "q-points meshes, and is passed to all sub-workchains (Wannier90, phonon, and EPW)."
+                "Structure used to generate k-point and q-point meshes and passed to all "
+                "child workflows (`Wannier90BandsWorkChain`/`Wannier90OptimizeWorkChain`, "
+                "`PhBaseWorkChain`, and `EpwBaseWorkChain`)."
             )
         )
         spec.input(
@@ -52,8 +52,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Bool,
             default=lambda: orm.Bool(False),
             help=(
-                "Whether the remote working directories of all child calculations "
-                "will be cleaned up after the workchain terminates."
+                "Whether the remote working directories of all child calculations will be "
+                "cleaned up after the workchain terminates."
             )
         )
         spec.input(
@@ -61,9 +61,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Float,
             default=lambda: orm.Float(0.5),
             help=(
-                "The distance between q-points in the coarse q-point "
-                "mesh used for the `PhBaseWorkChain`. This distance is used to automatically "
-                "generate the q-point mesh via `create_kpoints_from_distance`."
+                "Distance between q-points in the coarse q-point mesh used for the `PhBaseWorkChain`."
             )
         )
         spec.input(
@@ -71,10 +69,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Float,
             default=lambda: orm.Float(0.15),
             help=(
-                "The distance between k-points in the k-point mesh "
-                "used for the `Wannier90OptimizeWorkChain` or `Wannier90BandsWorkChain`."
-                "This distance is used to automatically "
-                "generate the k-point mesh via `create_kpoints_from_distance`. "
+                "Distance between k-points in the k-point mesh used for the "
+                "`Wannier90OptimizeWorkChain`/`Wannier90BandsWorkChain`."
             )
         )
         spec.input(
@@ -82,20 +78,18 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Int,
             default=lambda: orm.Int(2),
             help=(
-                "Factor used to multiply each dimension of the coarse q-point mesh to "
-                "obtain the coarse k-point mesh for the `Wannier90OptimizeWorkChain` or `Wannier90BandsWorkChain`. "
-                "For example, if the coarse q-point mesh is [4, 4, 4] and `kpoints_factor_nscf` is 2, "
-                "the coarse k-point mesh will be [8, 8, 8]. This ensures compatibility between "
-                "coarse k-point and coarse q-point meshes as required by `EpwBaseWorkChain`. "
+                "Factor applied to each dimension of the coarse q-point mesh to build the "
+                "coarse k-point mesh for the `Wannier90OptimizeWorkChain`/`Wannier90BandsWorkChain`. "
+                "For example, a q-mesh [4, 4, 4] with `kpoints_factor_nscf=2` becomes a k-mesh [8, 8, 8]. "
             )
         )
         spec.input(
             "w90_chk_to_ukk_script",
             valid_type=(orm.RemoteData, orm.SinglefileData),
             help=(
-                "A Julia script that converts the Wannier90 output files "
-                "(`prefix.chk`, `prefix.mmn`, ...) to the `epw.x` input format. This script is executed "
-                "as a prepend command before running `epw.x`. "
+                "Julia script that converts `prefix.chk` from `wannier90.x` to the "
+                "`epw.x`-readable `prefix.ukk` (and adapts `prefix.mmn` for EPW >= v6.0). "
+                "Run as a prepend command before launching `epw.x`."
             )
         )
 
@@ -108,8 +102,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "help": (
-                    "Inputs for the `Wannier90OptimizeWorkChain` or `Wannier90BandsWorkChain` that performs the Wannierization externally. "
-                    "The `structure` and `clean_workdir` inputs are excluded as they are coordinated by the `EpwPrepWorkChain` "
+                    "Inputs forwarded to `Wannier90OptimizeWorkChain / Wannier90BandsWorkChain` "
+                    "that handle Wannierisation independently of the `epw.x` calculation."
                 )
             },
         )
@@ -125,9 +119,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "help": (
-                    "Inputs for the `PhBaseWorkChain` that performs the `ph.x` calculation. "
-                    "The `clean_workdir`, `ph.parent_folder`, `qpoints`, "
-                    "and `qpoints_distance` inputs are excluded as they are coordinated by the `EpwPrepWorkChain`."
+                    "Inputs forwarded to `PhBaseWorkChain` for running the `ph.x` calculation."
                 )
             },
         )
@@ -150,11 +142,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "help": (
-                    "Inputs for the `EpwBaseWorkChain` that performs the `epw.x` calculation "
-                    "for the transition from coarse Bloch representation to Wannier representation. "
-                    "The `structure`, `clean_workdir`, `kpoints`, `qpoints`, `kfpoints`, `qfpoints`, "
-                    "`qfpoints_distance`, `kfpoints_factor`, and parent folder inputs are excluded "
-                    "as they are coordinated by the `EpwPrepWorkChain`."
+                    "Inputs forwarded to `EpwBaseWorkChain` for the `epw.x` calculation that "
+                    "bridges coarse Bloch and Wannier representations."
                 )
             },
         )
@@ -176,10 +165,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "help": (
                     "Inputs for the `EpwBaseWorkChain` that performs the `epw.x` calculation "
                     "for the interpolation of electron and phonon band structures. "
-                    "The `structure`, `clean_workdir`, `kpoints`, `qpoints`, `kfpoints`, `qfpoints`, "
-                    "`qfpoints_distance`, `kfpoints_factor`, and `parent_folder_epw` inputs are "
-                    "excluded as they are coordinated by the `EpwPrepWorkChain`. The fine k/q-points "
-                    "are set to the band structure k-points path for the interpolation."
                 )
             },
         )
