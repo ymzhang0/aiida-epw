@@ -370,7 +370,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in a2f mode: convergence #{self.ctx.iteration}"
         )
 
-        return ToContext(epw_interp=append_(workchain_node))
+        return  {"epw_interp":append_(workchain_node)}
 
     def inspect_conv(self):
         """Verify that the EpwBaseWorkChain in interpolation mode finished successfully."""
@@ -433,7 +433,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in isotropic mode"
         )
 
-        return ToContext(final_epw_iso=workchain_node)
+        return {"final_epw_iso": workchain_node}
 
     def inspect_final_epw_iso(self):
         """Verify that the final EpwBaseWorkChain in isotropic mode finished successfully."""
@@ -463,7 +463,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in anisotropic mode"
         )
 
-        return ToContext(final_epw_aniso=workchain_node)
+        return {"final_epw_aniso": workchain_node}
 
     def inspect_final_epw_aniso(self):
         """Verify that the final EpwBaseWorkChain in anisotropic mode finished successfully."""
