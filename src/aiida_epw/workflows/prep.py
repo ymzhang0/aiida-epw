@@ -269,6 +269,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         w90_bands.pop("structure", None)
         w90_bands.pop("open_grid", None)
 
+        print(w90_bands["pw2wannier90"]["pw2wannier90"]['parameters'].get_dict())
         builder.w90_bands = w90_bands
 
         args = (codes["ph"], None, protocol)
