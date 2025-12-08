@@ -375,7 +375,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     def run_epw(self):
         """Run the `EpwBaseWorkChain`."""
         inputs = AttributeDict(
-            self.exposed_inputs(EpwBaseWorkChain), namespace="epw_base"
+            self.exposed_inputs(EpwBaseWorkChain, namespace="epw_base")
         )
 
         # The EpwBaseWorkChain will take the parent folder of the previous
