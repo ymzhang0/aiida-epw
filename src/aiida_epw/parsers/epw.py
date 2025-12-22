@@ -4,6 +4,11 @@ from aiida import orm
 import numpy
 
 from aiida_epw.calculations.epw import EpwCalculation
+from aiida_epw.tools.parsers import (
+    parse_epw_a2f,
+    parse_epw_bands,
+    parse_epw_max_eigenvalue,
+)
 from aiida_quantumespresso.parsers.base import BaseParser
 from aiida_quantumespresso.utils.mapping import get_logging_container
 
@@ -72,16 +77,12 @@ class EpwParser(BaseParser):
         """Parse the ``stdout``."""
 
         def parse_max_eigenvalue(stdout_block):
-            re_pattern = re.compile(
-                r"\s+([\d\.]+)\s+([\d\.-]+)\s+\d+\s+[\d\.]+\s+\d+\n"
-            )
-            parsing_block = stdout_block.split(
-                "Finish: Solving (isotropic) linearized Eliashberg"
-            )[0]
+            """Parse max eigenvalue using tools.parsers function."""
+            parsed = parse_epw_max_eigenvalue(stdout_block)
             max_eigenvalue_array = orm.XyData()
             max_eigenvalue_array.set_array(
                 "max_eigenvalue",
-                numpy.array(re_pattern.findall(parsing_block), dtype=float),
+                parsed["max_eigenvalue"],
             )
             return max_eigenvalue_array
 
@@ -115,83 +116,39 @@ class EpwParser(BaseParser):
 
             for data_key, data_marker, block_parser in data_block_marker_parser:
                 if data_marker in line:
-                    parsed_data[data_key] = block_parser(stdout[line_number:])
+                    parsed_data[data_key] = block_parser(stdout)
 
         return parsed_data, logs
 
     @staticmethod
     def parse_a2f(content):
         """Parse the contents of the `.a2f` file."""
-        a2f_array = numpy.array(
-            [line.split() for line in content.splitlines()[1:501]], dtype=float
-        )
+        parsed = parse_epw_a2f(content)
+
+        parsed_data = {
+            "degaussw": parsed.pop("electron_smearing"),
+            "fsthick": parsed.pop("fermi_window"),
+        }
 
         a2f_xydata = orm.XyData()
-        a2f_xydata.set_array("frequency", a2f_array[:, 0])
-        a2f_xydata.set_array("a2f", a2f_array[:, 1:])
-        a2f_xydata.set_array(
-            "lambda",
-            numpy.array(
-                [
-                    value
-                    for value in re.search(
-                        r"Integrated el-ph coupling\n\s+\#\s+([\d\.\s]+)", content
-                    )
-                    .groups()[0]
-                    .split()
-                ],
-                dtype=float,
-            ),
-        )
-        a2f_xydata.set_array(
-            "degaussq",
-            numpy.array(
-                [
-                    value
-                    for value in re.search(
-                        r"Phonon smearing \(meV\)\n\s+\#\s+([\d\.\s]+)", content
-                    )
-                    .groups()[0]
-                    .split()
-                ],
-                dtype=float,
-            ),
-        )
-        parsed_data = {
-            "degaussw": float(
-                re.search(r"Electron smearing \(eV\)\s+([\d\.]+)", content).groups()[0]
-            ),
-            "fsthick": float(
-                re.search(r"Fermi window \(eV\)\s+([\d\.]+)", content).groups()[0]
-            ),
-        }
+
+        for key, value in parsed.items():
+            a2f_xydata.set_array(key, value)
+
         return a2f_xydata, parsed_data
 
-    @staticmethod
-    def parse_bands(content):
+
+    def parse_bands(self, content):
         """Parse the contents of a band structure file."""
-        nbnd, nks = (
-            int(v)
-            for v in re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content).groups()
-        )
-        kpt_pattern = re.compile(r"\s([\s-][\d\.]+)" * 3)
-        band_pattern = re.compile(r"\s+([-\d\.]+)" * nbnd)
-
-        kpts = []
-        bands = []
-
-        for number, line in enumerate(content.splitlines()):
-            match_kpt = re.search(kpt_pattern, line)
-            if match_kpt and number % 2 == 1:
-                kpts.append(list(match_kpt.groups()))
-
-            match_band = re.search(band_pattern, line)
-            if match_band and number % 2 == 0:
-                bands.append(list(match_band.groups()))
+        parsed = parse_epw_bands(content)
 
         kpoints_data = orm.KpointsData()
-        kpoints_data.set_kpoints(numpy.array(kpts, dtype=float))
-        bands = numpy.array(bands, dtype=float)
+        if self.inputs.kfpoints:
+            kpoints_data.set_kpoints(self.inputs.kfpoints.get_kpoints())
+        else:
+            kpoints_data.set_kpoints(parsed["kpoints"])
+
+        bands = parsed["bands"]
 
         bands_data = orm.BandsData()
         bands_data.set_kpointsdata(kpoints_data)
