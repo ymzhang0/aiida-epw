@@ -87,10 +87,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
             required=False,
         )
-        spec.input(
-            "w90_chk_to_ukk_script",
-            valid_type=(orm.RemoteData, orm.SinglefileData),
-        )
 
         spec.expose_inputs(
             Wannier90OptimizeWorkChain,
@@ -269,7 +265,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         w90_bands.pop("structure", None)
         w90_bands.pop("open_grid", None)
 
-        print(w90_bands["pw2wannier90"]["pw2wannier90"]['parameters'].get_dict())
         builder.w90_bands = w90_bands
 
         args = (codes["ph"], None, protocol)

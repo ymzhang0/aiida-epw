@@ -80,15 +80,6 @@ class EpwCalculation(CalcJob):
                    help='the folder of a completed `PhCalculation`')
         spec.input('parent_folder_epw', required=False, valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
                    help='folder that contains all files required to restart an `EpwCalculation`')
-        spec.input(
-            'w90_chk_to_ukk_script',
-            valid_type=orm.RemoteData,
-            required=False,
-            help=(
-                "The script to convert the chk file to a ukk file"
-                "If not specified, the wannierization will be skipped."
-                )
-            )
 
         spec.inputs['metadata']['options']['parser_name'].default = 'epw.epw'
 
