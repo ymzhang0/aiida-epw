@@ -38,23 +38,59 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         """Define the work chain specification."""
         super().define(spec)
 
-        spec.input("structure", valid_type=orm.StructureData)
         spec.input(
-            "clean_workdir", valid_type=orm.Bool, default=lambda: orm.Bool(False)
+            "structure",
+            valid_type=orm.StructureData,
+            help=(
+                "Structure used to generate k-point and q-point meshes and passed to all "
+                "child workflows (`Wannier90BandsWorkChain`/`Wannier90OptimizeWorkChain`, "
+                "`PhBaseWorkChain`, and `EpwBaseWorkChain`)."
+            )
         )
         spec.input(
-            "qpoints_distance", valid_type=orm.Float, default=lambda: orm.Float(0.5)
+            "clean_workdir",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(False),
+            help=(
+                "Whether the remote working directories of all child calculations will be "
+                "cleaned up after the workchain terminates."
+            )
+        )
+        spec.input(
+            "qpoints_distance",
+            valid_type=orm.Float,
+            default=lambda: orm.Float(0.5),
+            help=(
+                "Distance between q-points in the coarse q-point mesh used for the `PhBaseWorkChain`."
+            )
         )
         spec.input(
             "kpoints_distance_scf",
             valid_type=orm.Float,
             default=lambda: orm.Float(0.15),
+            help=(
+                "Distance between k-points in the k-point mesh used for the "
+                "`Wannier90OptimizeWorkChain`/`Wannier90BandsWorkChain`."
+            )
         )
         spec.input(
-            "kpoints_factor_nscf", valid_type=orm.Int, default=lambda: orm.Int(2)
+            "kpoints_factor_nscf",
+            valid_type=orm.Int,
+            default=lambda: orm.Int(2),
+            help=(
+                "Factor applied to each dimension of the coarse q-point mesh to build the "
+                "coarse k-point mesh for the `Wannier90OptimizeWorkChain`/`Wannier90BandsWorkChain`. "
+                "For example, a q-mesh [4, 4, 4] with `kpoints_factor_nscf=2` becomes a k-mesh [8, 8, 8]. "
+            )
         )
         spec.input(
-            "w90_chk_to_ukk_script", valid_type=(orm.RemoteData, orm.SinglefileData)
+            "w90_chk_to_ukk_script",
+            valid_type=(orm.RemoteData, orm.SinglefileData),
+            help=(
+                "Julia script that converts `prefix.chk` from `wannier90.x` to the "
+                "`epw.x`-readable `prefix.ukk` (and adapts `prefix.mmn` for EPW >= v6.0). "
+                "Run as a prepend command before launching `epw.x`."
+            )
         )
 
         spec.expose_inputs(
@@ -65,7 +101,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "clean_workdir",
             ),
             namespace_options={
-                "help": "Inputs for the `Wannier90OptimizeWorkChain/Wannier90BandsWorkChain`."
+                "help": (
+                    "Inputs forwarded to `Wannier90OptimizeWorkChain / Wannier90BandsWorkChain` "
+                    "that handle Wannierisation independently of the `epw.x` calculation."
+                )
             },
         )
         spec.inputs["w90_bands"].validator = validate_inputs_bands
@@ -79,7 +118,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "qpoints_distance",
             ),
             namespace_options={
-                "help": "Inputs for the `PhBaseWorkChain` that does the `ph.x` calculation."
+                "help": (
+                    "Inputs forwarded to `PhBaseWorkChain` for running the `ph.x` calculation."
+                )
             },
         )
         spec.expose_inputs(
@@ -99,7 +140,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_epw",
                 "parent_folder_chk",
             ),
-            namespace_options={"help": "Inputs for the `EpwBaseWorkChain`."},
+            namespace_options={
+                "help": (
+                    "Inputs forwarded to `EpwBaseWorkChain` for the `epw.x` calculation that "
+                    "bridges coarse Bloch and Wannier representations."
+                )
+            },
         )
         spec.expose_inputs(
             EpwBaseWorkChain,
@@ -115,7 +161,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "kfpoints_factor",
                 "parent_folder_epw",
             ),
-            namespace_options={"help": "Inputs namespace for `EpwBaseWorkChain` that runs the `epw.x` calculation in interpolation mode, i.e. the interpolated electron and phonon band structures."},
+            namespace_options={
+                "help": (
+                    "Inputs for the `EpwBaseWorkChain` that performs the `epw.x` calculation "
+                    "for the interpolation of electron and phonon band structures. "
+                )
+            },
         )
         spec.output("retrieved", valid_type=orm.FolderData)
         spec.output("epw_folder", valid_type=orm.RemoteStashFolderData)
