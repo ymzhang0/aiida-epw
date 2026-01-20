@@ -13,16 +13,12 @@ def parse_epw_a2f(file_content):
 
     a2f, footer = file_content.split("\n Integrated el-ph coupling")
 
-    a2f_array = numpy.array(
-        [line.split() for line in a2f.split("\n")], dtype=float
-    )
+    a2f_array = numpy.array([line.split() for line in a2f.split("\n")], dtype=float)
     parsed_data["frequency"] = a2f_array[:, 0]
     parsed_data["a2f"] = a2f_array[:, 1:]
 
     footer = footer.split("\n")
-    parsed_data["lambda"] = numpy.array(
-        footer[1].strip("# ").split(), dtype=float
-    )
+    parsed_data["lambda"] = numpy.array(footer[1].strip("# ").split(), dtype=float)
     parsed_data["phonon_smearing"] = numpy.array(
         footer[3].strip("# ").split(), dtype=float
     )

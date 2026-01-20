@@ -69,9 +69,7 @@ def gap_iso_imag_temp(
             label="Fit",
         )
     if destpath:
-        plt.savefig(
-            os.path.join(destpath, f"{prefix}_iso_gap_imag_vs_Temp.pdf")
-        )
+        plt.savefig(os.path.join(destpath, f"{prefix}_iso_gap_imag_vs_Temp.pdf"))
     plt.show()
 
 
@@ -94,9 +92,7 @@ def gap_aniso_temp(
         for arrayname, array in aniso_gap_functions.get_iterarrays()
     }
     # Determine the maximum y-limit value from the first file's data
-    max_y_value = (
-        max(dict_files[list(dict_files.keys())[0]][:, 1]) if dict_files else 1
-    )
+    max_y_value = max(dict_files[list(dict_files.keys())[0]][:, 1]) if dict_files else 1
     Ts = []
     average_deltas = []
 

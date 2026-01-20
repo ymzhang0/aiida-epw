@@ -16,9 +16,7 @@ def allen_dynes(lambo, omega_log, mu_star):
     else:
         return (
             omega_log
-            * numpy.exp(
-                -1.04 * (1 + lambo) / (lambo - mu_star * (1 + 0.62 * lambo))
-            )
+            * numpy.exp(-1.04 * (1 + lambo) / (lambo - mu_star * (1 + 0.62 * lambo)))
             / 1.2
         )
 
@@ -35,9 +33,7 @@ def calculate_lambda_omega(frequency: ArrayLike, spectrum: ArrayLike) -> tuple:
     omega_log = numpy.exp(
         2
         / lambda_
-        * numpy.trapezoid(
-            spectrum / frequency * numpy.log(frequency), frequency
-        )
+        * numpy.trapezoid(spectrum / frequency * numpy.log(frequency), frequency)
     )  # eV
     omega_log = omega_log * meV_to_Kelvin
 
@@ -70,9 +66,7 @@ def _calculate_iso_tc(max_eigenvalue, allow_extrapolation=False):
 @calcfunction
 def calculate_iso_tc(max_eigenvalue: orm.XyData) -> orm.Float:
     """Calculate the isotropic critical temperature Tc from the linearized Eliashberg equations."""
-    return orm.Float(
-        _calculate_iso_tc(max_eigenvalue.get_array("max_eigenvalue"))
-    )
+    return orm.Float(_calculate_iso_tc(max_eigenvalue.get_array("max_eigenvalue")))
 
 
 # This function is taken from https://www.sciencedirect.com/science/article/pii/S0010465516302260 eq.81

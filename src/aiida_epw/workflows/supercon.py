@@ -3,7 +3,6 @@
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import (
-    ToContext,
     WorkChain,
     append_,
     calcfunction,
@@ -13,6 +12,7 @@ from aiida.engine import (
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida_epw.workflows.base import EpwBaseWorkChain
+
 
 @calcfunction
 def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
@@ -32,9 +32,7 @@ def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
 @calcfunction
 def split_list(list_node: orm.List) -> dict:
     """Split a list into a dictionary of floats."""
-    return {
-        f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())
-    }
+    return {f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())}
 
 
 class SuperConWorkChain(ProtocolMixin, WorkChain):
@@ -61,9 +59,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         )
         spec.input("interpolation_distance", valid_type=(orm.Float, orm.List))
         spec.input("kfpoints_factor", valid_type=orm.Int, default=lambda: orm.Int(1))
-        spec.input(
-            "convergence_threshold", valid_type=orm.Float, required=False
-        )
+        spec.input("convergence_threshold", valid_type=orm.Float, required=False)
         spec.input(
             "always_run_final",
             valid_type=orm.Bool,
@@ -209,24 +205,17 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
 
         if parent_epw.process_label == "EpwPrepWorkChain":
             epw_source = (
-                parent_epw.base.links.get_outgoing(
-                    link_label_filter="epw_base"
-                )
+                parent_epw.base.links.get_outgoing(link_label_filter="epw_base")
                 .first()
                 .node
             )
         elif parent_epw.process_label == "EpwBaseWorkChain":
             epw_source = parent_epw
         else:
-            raise ValueError(
-                f"Invalid parent_epw process: {parent_epw.process_label}"
-            )
+            raise ValueError(f"Invalid parent_epw process: {parent_epw.process_label}")
 
         if parent_folder_epw is None:
-            if (
-                epw_source.inputs.code.computer.hostname
-                != epw_code.computer.hostname
-            ):
+            if epw_source.inputs.code.computer.hostname != epw_code.computer.hostname:
                 raise ValueError(
                     "The `epw_code` must be configured on the same computer as that where the `parent_epw` was run."
                 )
@@ -263,22 +252,14 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             builder[epw_namespace] = epw_builder
 
         if isinstance(inputs["interpolation_distance"], float):
-            builder.interpolation_distance = orm.Float(
-                inputs["interpolation_distance"]
-            )
+            builder.interpolation_distance = orm.Float(inputs["interpolation_distance"])
         if isinstance(inputs["interpolation_distance"], list):
             # qpoints_distance = parent_epw.inputs.qpoints_distance
             # interpolation_distance = [v for v in inputs['interpolation_distance'] if v < qpoints_distance / 2]
-            builder.interpolation_distance = orm.List(
-                inputs["interpolation_distance"]
-            )
+            builder.interpolation_distance = orm.List(inputs["interpolation_distance"])
 
-        builder.convergence_threshold = orm.Float(
-            inputs["convergence_threshold"]
-        )
-        builder.always_run_final = orm.Bool(
-            inputs.get("always_run_final", False)
-        )
+        builder.convergence_threshold = orm.Float(inputs["convergence_threshold"])
+        builder.always_run_final = orm.Bool(inputs.get("always_run_final", False))
         builder.structure = parent_epw.inputs.structure
         builder.parent_folder_epw = parent_folder_epw
         builder.kfpoints_factor = orm.Int(inputs.get("kfpoints_factor"))
@@ -308,12 +289,12 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 self.ctx.epw_interp[-3].outputs.output_parameters[
                     "Allen_Dynes_Tc"
                 ]  # This is to check that we have at least 3 allen-dynes
-                prev_allen_dynes = self.ctx.epw_interp[
-                    -2
-                ].outputs.output_parameters["Allen_Dynes_Tc"]
-                new_allen_dynes = self.ctx.epw_interp[
-                    -1
-                ].outputs.output_parameters["Allen_Dynes_Tc"]
+                prev_allen_dynes = self.ctx.epw_interp[-2].outputs.output_parameters[
+                    "Allen_Dynes_Tc"
+                ]
+                new_allen_dynes = self.ctx.epw_interp[-1].outputs.output_parameters[
+                    "Allen_Dynes_Tc"
+                ]
                 self.ctx.is_converged = (
                     abs(prev_allen_dynes - new_allen_dynes) / new_allen_dynes
                     < self.inputs.convergence_threshold
@@ -339,9 +320,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             )
             self.ctx.is_converged = True
 
-        return (
-            len(self.ctx.interpolation_list) > 0 and not self.ctx.is_converged
-        )
+        return len(self.ctx.interpolation_list) > 0 and not self.ctx.is_converged
 
     def run_conv(self):
         """Run the EpwBaseWorkChain in interpolation mode for the current interpolation distance."""
@@ -370,7 +349,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in a2f mode: convergence #{self.ctx.iteration}"
         )
 
-        return  {"epw_interp":append_(workchain_node)}
+        return {"epw_interp": append_(workchain_node)}
 
     def inspect_conv(self):
         """Verify that the EpwBaseWorkChain in interpolation mode finished successfully."""

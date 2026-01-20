@@ -37,9 +37,7 @@ def get_target_basepath(computer):
             "stash",
         ).as_posix()
     else:
-        raise ValueError(
-            f"Unsupported transport type: {computer.transport_type}"
-        )
+        raise ValueError(f"Unsupported transport type: {computer.transport_type}")
     return target_basepath
 
 
@@ -256,10 +254,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 bands_kpoints=bands_kpoints,
             )
 
-        if (
-            wannier_projection_type
-            == WannierProjectionType.ATOMIC_PROJECTORS_QE
-        ):
+        if wannier_projection_type == WannierProjectionType.ATOMIC_PROJECTORS_QE:
             w90_bands.pop("projwfc", None)
 
         w90_bands.pop("structure", None)
@@ -269,13 +264,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         args = (codes["ph"], None, protocol)
         ph_base_inputs = inputs.get("ph_base", None)
-        if (
-            "target_base"
-            not in ph_base_inputs["ph"]["metadata"]["options"]["stash"]
-        ):
-            ph_base_inputs["ph"]["metadata"]["options"]["stash"][
-                "target_base"
-            ] = get_target_basepath(codes["ph"].computer)
+        if "target_base" not in ph_base_inputs["ph"]["metadata"]["options"]["stash"]:
+            ph_base_inputs["ph"]["metadata"]["options"]["stash"]["target_base"] = (
+                get_target_basepath(codes["ph"].computer)
+            )
         ph_base = PhBaseWorkChain.get_builder_from_protocol(
             *args, overrides=ph_base_inputs, **kwargs
         )
@@ -291,8 +283,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             epw_inputs = inputs.get(namespace, None)
             if namespace == "epw_base":
                 if "target_base" not in epw_inputs["options"]["stash"]:
-                    epw_inputs["options"]["stash"]["target_base"] = (
-                        get_target_basepath(codes["epw"].computer)
+                    epw_inputs["options"]["stash"]["target_base"] = get_target_basepath(
+                        codes["epw"].computer
                     )
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
@@ -306,15 +298,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             if "settings" in epw_inputs:
                 epw_builder.settings = orm.Dict(epw_inputs["settings"])
             if "parallelization" in epw_inputs:
-                epw_builder.parallelization = orm.Dict(
-                    epw_inputs["parallelization"]
-                )
+                epw_builder.parallelization = orm.Dict(epw_inputs["parallelization"])
             builder[namespace] = epw_builder
 
         builder.qpoints_distance = orm.Float(inputs["qpoints_distance"])
-        builder.kpoints_distance_scf = orm.Float(
-            inputs["kpoints_distance_scf"]
-        )
+        builder.kpoints_distance_scf = orm.Float(inputs["kpoints_distance_scf"])
         builder.kpoints_factor_nscf = orm.Int(inputs["kpoints_factor_nscf"])
         if parent_folder_ph:
             builder.parent_folder_ph = parent_folder_ph
@@ -327,24 +315,20 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         inputs = {
             "structure": self.inputs.structure,
             "distance": self.inputs.qpoints_distance,
-            "force_parity": self.inputs.get(
-                "kpoints_force_parity", orm.Bool(False)
-            ),
+            "force_parity": self.inputs.get("kpoints_force_parity", orm.Bool(False)),
             "metadata": {"call_link_label": "create_qpoints_from_distance"},
         }
         qpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
         self.ctx.qpoints = qpoints
 
-        if 'w90_bands' in self.inputs:
+        if "w90_bands" in self.inputs:
             inputs = {
                 "structure": self.inputs.structure,
                 "distance": self.inputs.kpoints_distance_scf,
                 "force_parity": self.inputs.get(
                     "kpoints_force_parity", orm.Bool(False)
                 ),
-                "metadata": {
-                    "call_link_label": "create_kpoints_scf_from_distance"
-                },
+                "metadata": {"call_link_label": "create_kpoints_scf_from_distance"},
             }
 
             kpoints_scf = create_kpoints_from_distance(**inputs)
@@ -366,9 +350,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     def run_wannier90(self):
         """Run the wannier90 workflow."""
         inputs = AttributeDict(
-            self.exposed_inputs(
-                Wannier90OptimizeWorkChain, namespace="w90_bands"
-            )
+            self.exposed_inputs(Wannier90OptimizeWorkChain, namespace="w90_bands")
         )
         if "reference_bands" in self.inputs.w90_bands:
             w90_class = Wannier90OptimizeWorkChain
@@ -406,8 +388,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(PhBaseWorkChain, namespace="ph_base")
         )
 
-
-        if 'parent_folder_ph' in self.inputs and self.inputs.parent_folder_ph.creator.process_label == "PhCalculation":
+        if (
+            "parent_folder_ph" in self.inputs
+            and self.inputs.parent_folder_ph.creator.process_label == "PhCalculation"
+        ):
             inputs.ph.parent_folder = self.inputs.parent_folder_ph
             inputs.ph.qpoints = self.inputs.parent_folder_ph.creator.inputs.qpoints
         else:
@@ -460,9 +444,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 w90_workchain.outputs.wannier90_optimal__remote_folder
             )
         else:
-            inputs.parent_folder_chk = (
-                w90_workchain.outputs.wannier90.remote_folder
-            )
+            inputs.parent_folder_chk = w90_workchain.outputs.wannier90.remote_folder
 
         fine_points = orm.KpointsData()
         fine_points.set_kpoints_mesh([1, 1, 1])

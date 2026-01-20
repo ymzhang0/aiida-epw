@@ -276,10 +276,10 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         parameters = self.ctx.inputs.parameters.get_dict()
 
         if "parent_folder_chk" in self.inputs:
-            w90_params = self.inputs.parent_folder_chk.creator.inputs.parameters.get_dict()
-            exclude_bands = w90_params.get(
-                "exclude_bands", None
-            )  # TODO check this!
+            w90_params = (
+                self.inputs.parent_folder_chk.creator.inputs.parameters.get_dict()
+            )
+            exclude_bands = w90_params.get("exclude_bands", None)  # TODO check this!
 
             if exclude_bands:
                 parameters["INPUTEPW"]["bands_skipped"] = (
@@ -295,13 +295,11 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             parameters["INPUTEPW"]["use_ws"] = epw_params["INPUTEPW"].get(
                 "use_ws", False
             )
-            parameters["INPUTEPW"]["nbndsub"] = epw_params["INPUTEPW"][
-                "nbndsub"
-            ]
+            parameters["INPUTEPW"]["nbndsub"] = epw_params["INPUTEPW"]["nbndsub"]
             if "bands_skipped" in epw_params["INPUTEPW"]:
-                parameters["INPUTEPW"]["bands_skipped"] = epw_params[
-                    "INPUTEPW"
-                ].get("bands_skipped")
+                parameters["INPUTEPW"]["bands_skipped"] = epw_params["INPUTEPW"].get(
+                    "bands_skipped"
+                )
 
         self.ctx.inputs.parameters = orm.Dict(parameters)
 
@@ -329,9 +327,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             if "kpoints" in self.inputs:
                 kpoints = self.inputs.kpoints
             elif "parent_folder_chk" in self.inputs:
-                kpoints = get_kpoints_from_chk_folder(
-                    self.inputs.parent_folder_chk
-                )
+                kpoints = get_kpoints_from_chk_folder(self.inputs.parent_folder_chk)
             else:
                 self.report(
                     "Could not determine the coarse k-points from the inputs or the parent folder of the wannier90 calculation."
@@ -355,9 +351,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             f"Successfully determined coarse q-points from the inputs: {qpoints.get_kpoints_mesh()[0]}"
         )
 
-        is_compatible, message = check_kpoints_qpoints_compatibility(
-            kpoints, qpoints
-        )
+        is_compatible, message = check_kpoints_qpoints_compatibility(kpoints, qpoints)
 
         self.ctx.inputs.kpoints = kpoints
         self.ctx.inputs.qpoints = qpoints
@@ -377,9 +371,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 "force_parity": self.inputs.get(
                     "qfpoints_force_parity", orm.Bool(False)
                 ),
-                "metadata": {
-                    "call_link_label": "create_qfpoints_from_distance"
-                },
+                "metadata": {"call_link_label": "create_qfpoints_from_distance"},
             }
             qfpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
 
@@ -424,9 +416,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
     def handle_unrecoverable_failure(self, calculation):
         """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""
         if calculation.is_failed and calculation.exit_status < 400:
-            self.report_error_handled(
-                calculation, "unrecoverable error, aborting..."
-            )
+            self.report_error_handled(calculation, "unrecoverable error, aborting...")
             return ProcessHandlerReport(
                 True, self.exit_codes.ERROR_UNRECOVERABLE_FAILURE
             )

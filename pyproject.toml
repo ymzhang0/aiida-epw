@@ -58,17 +58,13 @@ scripts.install = "pre-commit install"
 scripts.run = "pre-commit run {args:--all-files}"
 
 [tool.ruff]
-# Set the maximum line length to 79.
-line-length = 79
-
-[tool.ruff.lint]
-# Add the `line-too-long` rule to the enforced rule set. By default, Ruff omits rules that
-# overlap with the use of a formatter, like Black, but we can override this behavior by
-# explicitly adding the rule.
-extend-select = [
-  "UP",  # pyupgrade
-  "D",   # pydocstyle
+lint.ignore = [
+    "TRY003",  # https://docs.astral.sh/ruff/rules/raise-vanilla-args/
+    "EM101",   # https://docs.astral.sh/ruff/rules/raw-string-in-exception/
+    "EM102",   # https://docs.astral.sh/ruff/rules/f-string-in-exception/
+    "PLR2004", # https://docs.astral.sh/ruff/rules/magic-value-comparison/
+    "FBT002",  # https://docs.astral.sh/ruff/rules/boolean-default-value-positional-argument/
+    "TID252",  # https://docs.astral.sh/ruff/rules/relative-imports/
 ]
-ignore = ["D205"]
-[tool.ruff.lint.pydocstyle]
-convention = "google"
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["INP001", "S101"]

@@ -39,32 +39,24 @@ class EpwParser(BaseParser):
             EpwCalculation._output_elbands_file
             in self.retrieved.base.repository.list_object_names()
         ):
-            elbands_contents = (
-                self.retrieved.base.repository.get_object_content(
-                    EpwCalculation._output_elbands_file
-                )
+            elbands_contents = self.retrieved.base.repository.get_object_content(
+                EpwCalculation._output_elbands_file
             )
             self.out(
                 "el_band_structure",
-                self.parse_bands(
-                    elbands_contents, self.node.inputs.kfpoints, "eV"
-                ),
+                self.parse_bands(elbands_contents, self.node.inputs.kfpoints, "eV"),
             )
 
         if (
             EpwCalculation._output_phbands_file
             in self.retrieved.base.repository.list_object_names()
         ):
-            phbands_contents = (
-                self.retrieved.base.repository.get_object_content(
-                    EpwCalculation._output_phbands_file
-                )
+            phbands_contents = self.retrieved.base.repository.get_object_content(
+                EpwCalculation._output_phbands_file
             )
             self.out(
                 "ph_band_structure",
-                self.parse_bands(
-                    phbands_contents, self.node.inputs.qfpoints, "meV"
-                ),
+                self.parse_bands(phbands_contents, self.node.inputs.qfpoints, "meV"),
             )
 
         if (
@@ -100,10 +92,8 @@ class EpwParser(BaseParser):
             EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
             in self.retrieved.base.repository.list_object_names()
         ):
-            phdos_proj_contents = (
-                self.retrieved.base.repository.get_object_content(
-                    EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
-                )
+            phdos_proj_contents = self.retrieved.base.repository.get_object_content(
+                EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
             )
             self.out("phdos_proj", self.parse_phdos(phdos_proj_contents))
 
@@ -111,10 +101,8 @@ class EpwParser(BaseParser):
             EpwCalculation._OUTPUT_A2F_PROJ_FILE
             in self.retrieved.base.repository.list_object_names()
         ):
-            a2f_proj_contents = (
-                self.retrieved.base.repository.get_object_content(
-                    EpwCalculation._OUTPUT_A2F_PROJ_FILE
-                )
+            a2f_proj_contents = self.retrieved.base.repository.get_object_content(
+                EpwCalculation._OUTPUT_A2F_PROJ_FILE
             )
             self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
 
@@ -122,10 +110,8 @@ class EpwParser(BaseParser):
             EpwCalculation._OUTPUT_LAMBDA_FS_FILE
             in self.retrieved.base.repository.list_object_names()
         ):
-            lambda_FS_contents = (
-                self.retrieved.base.repository.get_object_content(
-                    EpwCalculation._OUTPUT_LAMBDA_FS_FILE
-                )
+            lambda_FS_contents = self.retrieved.base.repository.get_object_content(
+                EpwCalculation._OUTPUT_LAMBDA_FS_FILE
             )
             self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
 
@@ -133,10 +119,8 @@ class EpwParser(BaseParser):
             EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
             in self.retrieved.base.repository.list_object_names()
         ):
-            lambda_k_pairs_contents = (
-                self.retrieved.base.repository.get_object_content(
-                    EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
-                )
+            lambda_k_pairs_contents = self.retrieved.base.repository.get_object_content(
+                EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
             )
             self.out(
                 "lambda_k_pairs",
@@ -179,9 +163,7 @@ class EpwParser(BaseParser):
         if imag_aniso_filecontents != []:
             aniso_gap_functions_arraydata = orm.ArrayData()
             for T, imag_aniso_filecontent in imag_aniso_filecontents:
-                aniso_gap_function = self.parse_gap_function(
-                    imag_aniso_filecontent
-                )
+                aniso_gap_function = self.parse_gap_function(imag_aniso_filecontent)
                 aniso_gap_functions_arraydata.set_array(
                     T.replace(".", "_"), aniso_gap_function
                 )
@@ -232,9 +214,7 @@ class EpwParser(BaseParser):
                 (
                     "fermi_energy_coarse",
                     float,
-                    re.compile(
-                        r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"
-                    ),
+                    re.compile(r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"),
                 ),
             )
         else:
@@ -243,23 +223,17 @@ class EpwParser(BaseParser):
                 (
                     "ws_vectors_electrons",
                     int,
-                    re.compile(
-                        r"^\s*Number of WS vectors for electrons\s+(\d+)"
-                    ),
+                    re.compile(r"^\s*Number of WS vectors for electrons\s+(\d+)"),
                 ),
                 (
                     "ws_vectors_phonons",
                     int,
-                    re.compile(
-                        r"^\s*Number of WS vectors for phonons\s+(\d+)"
-                    ),
+                    re.compile(r"^\s*Number of WS vectors for phonons\s+(\d+)"),
                 ),
                 (
                     "ws_vectors_electron_phonon",
                     int,
-                    re.compile(
-                        r"^\s*Number of WS vectors for electron-phonon\s+(\d+)"
-                    ),
+                    re.compile(r"^\s*Number of WS vectors for electron-phonon\s+(\d+)"),
                 ),
                 (
                     "max_cores_parallelization",
@@ -289,9 +263,7 @@ class EpwParser(BaseParser):
                 (
                     "fermi_energy_coarse",
                     float,
-                    re.compile(
-                        r"^\s*Fermi energy coarse grid =\s*([+-]?[\d\.]+)\s+eV"
-                    ),
+                    re.compile(r"^\s*Fermi energy coarse grid =\s*([+-]?[\d\.]+)\s+eV"),
                 ),
                 (
                     "fermi_energy_fine",
@@ -318,9 +290,7 @@ class EpwParser(BaseParser):
                 (
                     "DOS",
                     lambda s: float(s.replace("D", "E").replace("d", "E")),
-                    re.compile(
-                        r"DOS\(states/spin/eV/Unit Cell\)\s*=\s*([\d\.D+-]+)"
-                    ),
+                    re.compile(r"DOS\(states/spin/eV/Unit Cell\)\s*=\s*([\d\.D+-]+)"),
                 ),
                 (
                     "electron_smearing",
@@ -335,9 +305,7 @@ class EpwParser(BaseParser):
                 (
                     "lambda",
                     float,
-                    re.compile(
-                        r"Electron-phonon coupling strength\s*=\s*([\d\.]+)"
-                    ),
+                    re.compile(r"Electron-phonon coupling strength\s*=\s*([\d\.]+)"),
                 ),
                 # For EPW > 6.0
                 # ('Allen_Dynes_Tc', float, re.compile(r'Estimated Allen-Dynes Tc\s*=\s*([\d\.]+) K for muc')),
@@ -447,14 +415,10 @@ class EpwParser(BaseParser):
         )
         parsed_data = {
             "degaussw": float(
-                re.search(
-                    r"Electron smearing \(eV\)\s+([\d\.]+)", content
-                ).groups()[0]
+                re.search(r"Electron smearing \(eV\)\s+([\d\.]+)", content).groups()[0]
             ),
             "fsthick": float(
-                re.search(
-                    r"Fermi window \(eV\)\s+([\d\.]+)", content
-                ).groups()[0]
+                re.search(r"Fermi window \(eV\)\s+([\d\.]+)", content).groups()[0]
             ),
         }
         return a2f_xydata, parsed_data
@@ -477,9 +441,7 @@ class EpwParser(BaseParser):
         """Parse the contents of a band structure file."""
         nbnd, nks = (
             int(v)
-            for v in re.search(
-                r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content
-            ).groups()
+            for v in re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content).groups()
         )
         # kpt_pattern = re.compile(r'\s([\s-][\d\.]+)' * 3)
         band_pattern = re.compile(r"\s+([-\d\.]+)" * nbnd)
@@ -538,9 +500,7 @@ class EpwParser(BaseParser):
         import io
 
         lambda_FS_arraydata = orm.ArrayData()
-        lambda_FS = numpy.loadtxt(
-            io.StringIO(content), dtype=float, comments="#"
-        )
+        lambda_FS = numpy.loadtxt(io.StringIO(content), dtype=float, comments="#")
 
         lambda_FS_arraydata.set_array("kpoints", lambda_FS[:, :3])
         lambda_FS_arraydata.set_array("band", lambda_FS[:, 3])
@@ -555,9 +515,7 @@ class EpwParser(BaseParser):
         import io
 
         lambda_k_pairs_xydata = orm.XyData()
-        lambda_k_pairs = numpy.loadtxt(
-            io.StringIO(content), dtype=float, comments="#"
-        )
+        lambda_k_pairs = numpy.loadtxt(io.StringIO(content), dtype=float, comments="#")
         lambda_k_pairs_xydata.set_array("lambda_nk", lambda_k_pairs[:, 0])
         lambda_k_pairs_xydata.set_array("rho", lambda_k_pairs[:, 1])
 

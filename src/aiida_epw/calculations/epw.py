@@ -62,59 +62,143 @@ class EpwCalculation(CalcJob):
     def define(cls, spec):
         """Define the process specification."""
         super().define(spec)
-        spec.input('metadata.options.input_filename', valid_type=str, default=cls._DEFAULT_INPUT_FILE)
-        spec.input('metadata.options.output_filename', valid_type=str, default=cls._DEFAULT_OUTPUT_FILE)
-        spec.input('metadata.options.withmpi', valid_type=bool, default=True)
-        spec.input('kpoints', valid_type=orm.KpointsData, help='coarse kpoint mesh')
-        spec.input('qpoints', valid_type=orm.KpointsData, help='coarse qpoint mesh')
-        spec.input('kfpoints', valid_type=orm.KpointsData, help='fine kpoint mesh')
-        spec.input('qfpoints', valid_type=orm.KpointsData, help='fine qpoint mesh')
-        spec.input('parameters', valid_type=orm.Dict, help='')
-        spec.input('settings', valid_type=orm.Dict, required=False, help='')
-        spec.input('parent_folder_nscf', required=False, valid_type=orm.RemoteData,
-                   help='the folder of a completed nscf `PwCalculation`')
-        spec.input('parent_folder_chk', required=False, valid_type=orm.RemoteData,
-                   help='the folder of a completed wannier90 `Wannier90Calculation`')
-        spec.input('parent_folder_ph', required=False, valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
-                   help='the folder of a completed `PhCalculation`')
-        spec.input('parent_folder_epw', required=False, valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
-                   help='folder that contains all files required to restart an `EpwCalculation`')
+        spec.input(
+            "metadata.options.input_filename",
+            valid_type=str,
+            default=cls._DEFAULT_INPUT_FILE,
+        )
+        spec.input(
+            "metadata.options.output_filename",
+            valid_type=str,
+            default=cls._DEFAULT_OUTPUT_FILE,
+        )
+        spec.input("metadata.options.withmpi", valid_type=bool, default=True)
+        spec.input("kpoints", valid_type=orm.KpointsData, help="coarse kpoint mesh")
+        spec.input("qpoints", valid_type=orm.KpointsData, help="coarse qpoint mesh")
+        spec.input("kfpoints", valid_type=orm.KpointsData, help="fine kpoint mesh")
+        spec.input("qfpoints", valid_type=orm.KpointsData, help="fine qpoint mesh")
+        spec.input("parameters", valid_type=orm.Dict, help="")
+        spec.input("settings", valid_type=orm.Dict, required=False, help="")
+        spec.input(
+            "parent_folder_nscf",
+            required=False,
+            valid_type=orm.RemoteData,
+            help="the folder of a completed nscf `PwCalculation`",
+        )
+        spec.input(
+            "parent_folder_chk",
+            required=False,
+            valid_type=orm.RemoteData,
+            help="the folder of a completed wannier90 `Wannier90Calculation`",
+        )
+        spec.input(
+            "parent_folder_ph",
+            required=False,
+            valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
+            help="the folder of a completed `PhCalculation`",
+        )
+        spec.input(
+            "parent_folder_epw",
+            required=False,
+            valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
+            help="folder that contains all files required to restart an `EpwCalculation`",
+        )
 
-        spec.inputs['metadata']['options']['parser_name'].default = 'epw.epw'
+        spec.inputs["metadata"]["options"]["parser_name"].default = "epw.epw"
 
-        spec.output('output_parameters', valid_type=orm.Dict,
-                    help='The `output_parameters` output node of the successful calculation.')
-        spec.output('dos', valid_type=orm.XyData, required=False,
-            help='The electron density of states.')
-        spec.output('phdos', valid_type=orm.XyData, required=False,
-            help='The phonon density of states.')
-        spec.output('phdos_proj', valid_type=orm.XyData, required=False,
-            help='The phonon density of states projected on the atomic orbitals.')
-        spec.output('max_eigenvalue', valid_type=orm.XyData, required=False,
-                    help='The temperature dependence of the max eigenvalue.')
-        spec.output('a2f', valid_type=orm.XyData, required=False,
-                    help='The contents of the `.a2f` file.')
-        spec.output('a2f_proj', valid_type=orm.XyData, required=False,
-            help='The contents of the `.a2f_proj` file.')
-        spec.output('lambda_FS', valid_type=orm.ArrayData, required=False,
-            help='The electron-phonon coupling on the Fermi surface.')
-        spec.output('lambda_k_pairs', valid_type=orm.XyData, required=False,
-            help='The density of the electron-phonon coupling on the k-points.')
-        spec.output('el_band_structure', valid_type=orm.BandsData, required=False,
-                    help='The interpolated electronic band structure.')
-        spec.output('ph_band_structure', valid_type=orm.BandsData, required=False,
-                    help='The interpolated phonon band structure.')
-        spec.output('iso_gap_functions', valid_type=orm.ArrayData, required=False,
-            help='The interpolated isotropic gap function.')
-        spec.output('aniso_gap_functions', valid_type=orm.ArrayData, required=False,
-            help='The interpolated anisotropic gap function.')
+        spec.output(
+            "output_parameters",
+            valid_type=orm.Dict,
+            help="The `output_parameters` output node of the successful calculation.",
+        )
+        spec.output(
+            "dos",
+            valid_type=orm.XyData,
+            required=False,
+            help="The electron density of states.",
+        )
+        spec.output(
+            "phdos",
+            valid_type=orm.XyData,
+            required=False,
+            help="The phonon density of states.",
+        )
+        spec.output(
+            "phdos_proj",
+            valid_type=orm.XyData,
+            required=False,
+            help="The phonon density of states projected on the atomic orbitals.",
+        )
+        spec.output(
+            "max_eigenvalue",
+            valid_type=orm.XyData,
+            required=False,
+            help="The temperature dependence of the max eigenvalue.",
+        )
+        spec.output(
+            "a2f",
+            valid_type=orm.XyData,
+            required=False,
+            help="The contents of the `.a2f` file.",
+        )
+        spec.output(
+            "a2f_proj",
+            valid_type=orm.XyData,
+            required=False,
+            help="The contents of the `.a2f_proj` file.",
+        )
+        spec.output(
+            "lambda_FS",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The electron-phonon coupling on the Fermi surface.",
+        )
+        spec.output(
+            "lambda_k_pairs",
+            valid_type=orm.XyData,
+            required=False,
+            help="The density of the electron-phonon coupling on the k-points.",
+        )
+        spec.output(
+            "el_band_structure",
+            valid_type=orm.BandsData,
+            required=False,
+            help="The interpolated electronic band structure.",
+        )
+        spec.output(
+            "ph_band_structure",
+            valid_type=orm.BandsData,
+            required=False,
+            help="The interpolated phonon band structure.",
+        )
+        spec.output(
+            "iso_gap_functions",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The interpolated isotropic gap function.",
+        )
+        spec.output(
+            "aniso_gap_functions",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The interpolated anisotropic gap function.",
+        )
 
-        spec.exit_code(300, 'ERROR_NO_RETRIEVED_FOLDER',
-            message='The retrieved folder data node could not be accessed.')
-        spec.exit_code(310, 'ERROR_OUTPUT_STDOUT_READ',
-            message='The stdout output file could not be read.')
-        spec.exit_code(312, 'ERROR_OUTPUT_STDOUT_INCOMPLETE',
-            message='The stdout output file was incomplete probably because the calculation got interrupted.')
+        spec.exit_code(
+            300,
+            "ERROR_NO_RETRIEVED_FOLDER",
+            message="The retrieved folder data node could not be accessed.",
+        )
+        spec.exit_code(
+            310,
+            "ERROR_OUTPUT_STDOUT_READ",
+            message="The stdout output file could not be read.",
+        )
+        spec.exit_code(
+            312,
+            "ERROR_OUTPUT_STDOUT_INCOMPLETE",
+            message="The stdout output file was incomplete probably because the calculation got interrupted.",
+        )
         # yapf: enable
         spec.exit_code(
             314,
@@ -150,9 +234,7 @@ class EpwCalculation(CalcJob):
         parameters = _uppercase_dict(
             self.inputs.parameters.get_dict(), dict_name="parameters"
         )
-        parameters = {
-            k: _lowercase_dict(v, dict_name=k) for k, v in parameters.items()
-        }
+        parameters = {k: _lowercase_dict(v, dict_name=k) for k, v in parameters.items()}
 
         if "INPUTEPW" not in parameters:
             raise exceptions.InputValidationError(
@@ -168,9 +250,7 @@ class EpwCalculation(CalcJob):
 
         remote_list = (
             remote_symlink_list
-            if settings.pop(
-                "PARENT_FOLDER_SYMLINK", self._default_symlink_usage
-            )
+            if settings.pop("PARENT_FOLDER_SYMLINK", self._default_symlink_usage)
             else remote_copy_list
         )
 
@@ -254,9 +334,7 @@ class EpwCalculation(CalcJob):
             remote_list.append(
                 (
                     parent_folder_ph.computer.uuid,
-                    Path(
-                        ph_path, outdir, "_ph0", f"{prefix}.phsave"
-                    ).as_posix(),
+                    Path(ph_path, outdir, "_ph0", f"{prefix}.phsave").as_posix(),
                     "save",
                 )
             )
@@ -389,8 +467,7 @@ class EpwCalculation(CalcJob):
         wannierize = parameters["INPUTEPW"].get("wannierize", False)
 
         if wannierize and any(
-            _ in self.inputs
-            for _ in ["parent_folder_epw", "parent_folder_chk"]
+            _ in self.inputs for _ in ["parent_folder_epw", "parent_folder_chk"]
         ):
             self.report(
                 "Should not have a parent folder of epw or chk if wannierize is True"
@@ -443,8 +520,7 @@ class EpwCalculation(CalcJob):
                 handle.write(f"{len(qfpoints)} crystal\n")
                 for kpt in qfpoints:
                     handle.write(
-                        " ".join([f"{coord:.12}" for coord in kpt])
-                        + "   1.0\n"
+                        " ".join([f"{coord:.12}" for coord in kpt]) + "   1.0\n"
                     )
             parameters["INPUTEPW"]["filqf"] = self._qfpoints_input_file
         except NotImplementedError as exception:
@@ -464,8 +540,7 @@ class EpwCalculation(CalcJob):
                 handle.write(f"{len(kfpoints)} crystal\n")
                 for kpt in kfpoints:
                     handle.write(
-                        " ".join([f"{coord:.12}" for coord in kpt])
-                        + "   1.0\n"
+                        " ".join([f"{coord:.12}" for coord in kpt]) + "   1.0\n"
                     )
             parameters["INPUTEPW"]["filkf"] = self._kfpoints_input_file
         except NotImplementedError as exception:
@@ -486,15 +561,13 @@ class EpwCalculation(CalcJob):
                 retrieve_list.append(self._OUTPUT_PHDOS_FILE)
                 retrieve_list.append(self._OUTPUT_PHDOS_PROJ_FILE)
                 retrieve_list.append(
-                    Path(
-                        self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE
-                    ).as_posix()
+                    Path(self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE).as_posix()
                 )
 
         # If liso = .true., and we are not using linearized Eliashberg equations, we need to retrieve the isotropic gap function.
-        if parameters["INPUTEPW"].get("liso", False) and not parameters[
-            "INPUTEPW"
-        ].get("tc_linear", False):
+        if parameters["INPUTEPW"].get("liso", False) and not parameters["INPUTEPW"].get(
+            "tc_linear", False
+        ):
             retrieve_list.append("aiida.imag_iso_*")
         # If laniso = .true., and, we need to retrieve the anisotropic gap function.
         if parameters["INPUTEPW"].get("laniso", False):
