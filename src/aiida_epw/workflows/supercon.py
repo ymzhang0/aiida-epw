@@ -315,7 +315,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                     -1
                 ].outputs.output_parameters["Allen_Dynes_Tc"]
                 self.ctx.is_converged = (
-                    abs(prev_allen_dynes - new_allen_dynes)
+                    abs(prev_allen_dynes - new_allen_dynes) / new_allen_dynes
                     < self.inputs.convergence_threshold
                 )
                 self.report(
