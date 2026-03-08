@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from aiida import orm
+from aiida.common.datastructures import StashMode
 from aiida.common import exceptions
+from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 
 from aiida_epw.calculations.epw import EpwCalculation
@@ -311,3 +313,31 @@ def test_epw_stages_epw_restart_files_without_copying_epmatwp(
     }
     copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
     assert expected_copied.issubset(copied_targets)
+
+
+def test_epw_stages_ph_stash_folder_by_target_basepath(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+):
+    """Test that stashed PH folders use their target base path instead of `get_remote_path()`."""
+    parent_folder = orm.RemoteStashFolderData(
+        stash_mode=StashMode.COPY,
+        target_basepath="/stash/ph",
+        source_list=["out", "DYN_MAT"],
+    )
+    parent_folder.computer = fixture_localhost
+
+    inputs = generate_inputs_epw(
+        parent_folder_ph=parent_folder,
+        settings=orm.Dict({"NUMBER_OF_QPOINTS": 1}),
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert (
+        parent_folder.computer.uuid,
+        Path("/stash/ph", PhCalculation._OUTPUT_SUBFOLDER, "_ph0", "aiida.phsave").as_posix(),
+        "save",
+    ) in calc_info.remote_copy_list

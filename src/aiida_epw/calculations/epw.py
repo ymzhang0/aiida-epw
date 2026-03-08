@@ -430,12 +430,12 @@ class EpwCalculation(NamelistsCalculation):
         return len(qibz_ar)
 
     @staticmethod
-    def get_parent_epw_path(parent_folder_epw):
-        """Return the filesystem path that should be used for EPW restart staging."""
-        if isinstance(parent_folder_epw, orm.RemoteStashFolderData):
-            return Path(parent_folder_epw.target_basepath)
+    def get_parent_folder_path(parent_folder):
+        """Return the filesystem path for a remote or stashed parent folder."""
+        if isinstance(parent_folder, orm.RemoteStashFolderData):
+            return Path(parent_folder.target_basepath)
 
-        return Path(parent_folder_epw.get_remote_path())
+        return Path(parent_folder.get_remote_path())
 
     def stage_nscf_parent(self, remote_copy_list):
         """Stage the NSCF output directory into the EPW working directory."""
@@ -495,7 +495,7 @@ class EpwCalculation(NamelistsCalculation):
         outdir = PhCalculation._OUTPUT_SUBFOLDER
         fildvscf = PhCalculation._DVSCF_PREFIX
         fildyn = PhCalculation._OUTPUT_DYNAMICAL_MATRIX_PREFIX
-        ph_path = Path(parent_folder_ph.get_remote_path())
+        ph_path = self.get_parent_folder_path(parent_folder_ph)
 
         remote_list.append(
             (
@@ -533,7 +533,7 @@ class EpwCalculation(NamelistsCalculation):
             return
 
         parent_folder_epw = self.inputs.parent_folder_epw
-        epw_path = self.get_parent_epw_path(parent_folder_epw)
+        epw_path = self.get_parent_folder_path(parent_folder_epw)
         file_list = []
 
         if parameters["INPUTEPW"].get("epwread", False) and parameters["INPUTEPW"].get(
