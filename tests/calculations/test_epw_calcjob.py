@@ -159,6 +159,24 @@ def test_epw_accepts_parser_options_setting(
     assert calc_info.retrieve_list == ["aiida.out"]
 
 
+def test_epw_additional_retrieve_list_emits_deprecation_warning(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that legacy additional retrieve settings match QE namelist behavior."""
+    inputs = generate_inputs_epw(
+        settings=orm.Dict({"ADDITIONAL_RETRIEVE_LIST": ["custom.dat"]})
+    )
+
+    with pytest.warns(AiidaDeprecationWarning) as captured_warnings:
+        calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert calc_info.retrieve_list == ["aiida.out", "custom.dat"]
+    assert any(
+        "ADDITIONAL_RETRIEVE_LIST" in str(warning.message)
+        for warning in captured_warnings.list
+    )
+
+
 def test_epw_rejects_invalid_parallelization_flag(
     fixture_sandbox, generate_calc_job, generate_inputs_epw
 ):

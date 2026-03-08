@@ -389,6 +389,31 @@ class EpwCalculation(NamelistsCalculation):
 
         return namelists_toprint
 
+    def get_settings(self):
+        """Return normalized settings, matching the QE namelist calculation contract."""
+        if "settings" in self.inputs:
+            settings = _uppercase_dict(
+                self.inputs.settings.get_dict(), dict_name="settings"
+            )
+            if "ADDITIONAL_RETRIEVE_LIST" in settings:
+                warnings.warn(
+                    "The key `ADDITIONAL_RETRIEVE_LIST` in the settings input is "
+                    "deprecated and will be removed in the future. Use the "
+                    "`CalcJob.metadata.options.additional_retrieve_list` input instead.",
+                    AiidaDeprecationWarning,
+                )
+        else:
+            settings = {}
+
+        return settings
+
+    def get_parameters(self):
+        """Return normalized calculation parameters."""
+        if "parameters" in self.inputs:
+            return self.normalize_parameters(self.inputs.parameters.get_dict())
+
+        return {}
+
     def get_additional_retrieve_list(self, parameters):
         """Return additional files that should be retrieved for the configured EPW run."""
         retrieve_list = []
@@ -679,6 +704,15 @@ class EpwCalculation(NamelistsCalculation):
 
         return codeinfo
 
+    def write_input_file(self, folder, parameters, settings):
+        """Write the EPW input file to the sandbox folder."""
+        namelists_toprint = self.get_namelists_to_print(settings)
+        file_content = self.generate_input_file(
+            self.filter_namelists(parameters, namelists_toprint)
+        )
+        with folder.open(self.metadata.options.input_filename, "w") as infile:
+            infile.write(file_content)
+
     def create_calcinfo(
         self,
         settings,
@@ -730,7 +764,7 @@ class EpwCalculation(NamelistsCalculation):
         remote_copy_list = []
         remote_symlink_list = []
 
-        parameters = self.normalize_parameters(self.inputs.parameters.get_dict())
+        parameters = self.get_parameters()
 
         if "INPUTEPW" not in parameters:
             raise exceptions.InputValidationError(
@@ -739,12 +773,7 @@ class EpwCalculation(NamelistsCalculation):
 
         parameters = self.set_blocked_keywords(parameters)
 
-        if "settings" in self.inputs:
-            settings = _uppercase_dict(
-                self.inputs.settings.get_dict(), dict_name="settings"
-            )
-        else:
-            settings = {}
+        settings = self.get_settings()
 
         self.stage_parent_folders(
             folder, parameters, settings, remote_copy_list, remote_symlink_list
@@ -803,13 +832,7 @@ class EpwCalculation(NamelistsCalculation):
         )
 
         retrieve_list = self.get_additional_retrieve_list(parameters)
-        namelists_toprint = self.get_namelists_to_print(settings)
-
-        file_content = self.generate_input_file(
-            self.filter_namelists(parameters, namelists_toprint)
-        )
-        with folder.open(self.metadata.options.input_filename, "w") as infile:
-            infile.write(file_content)
+        self.write_input_file(folder, parameters, settings)
 
         codeinfo = self.create_codeinfo(settings)
         calcinfo = self.create_calcinfo(
