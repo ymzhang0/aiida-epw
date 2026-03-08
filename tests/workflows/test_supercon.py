@@ -141,6 +141,49 @@ def test_get_builder_from_protocol_uses_parent_epw_inputs(
     assert serialized["epw_interp"]["qpoints"] == ([3, 3, 3], [0.0, 0.0, 0.0])
 
 
+def test_get_builder_from_protocol_accepts_prep_parent(
+    fixture_code,
+    fixture_localhost,
+    generate_kpoints_mesh,
+    generate_remote_data,
+    generate_structure,
+    serialize_builder,
+):
+    """The supercon builder should also accept `EpwPrepWorkChain` parents."""
+    structure = generate_structure()
+    parent_folder_epw = generate_remote_data(fixture_localhost, "/remote/restart")
+    epw_source = SimpleNamespace(
+        inputs=SimpleNamespace(
+            structure=structure,
+            kpoints=generate_kpoints_mesh([8, 8, 8]),
+            qpoints=generate_kpoints_mesh([4, 4, 4]),
+        )
+    )
+    parent_epw = SimpleNamespace(
+        process_label="EpwPrepWorkChain",
+        inputs=SimpleNamespace(structure=structure),
+        outputs=SimpleNamespace(epw_folder=parent_folder_epw),
+        base=SimpleNamespace(
+            links=SimpleNamespace(
+                get_outgoing=lambda **_: SimpleNamespace(
+                    first=lambda: SimpleNamespace(node=epw_source)
+                )
+            )
+        ),
+    )
+
+    builder = SuperConWorkChain.get_builder_from_protocol(
+        epw_code=fixture_code("epw.epw"),
+        parent_epw=parent_epw,
+        protocol="fast",
+    )
+    serialized = serialize_builder(builder)
+
+    assert builder.parent_folder_epw == parent_folder_epw
+    assert serialized["epw_interp"]["kpoints"] == ([8, 8, 8], [0.0, 0.0, 0.0])
+    assert serialized["epw_interp"]["qpoints"] == ([4, 4, 4], [0.0, 0.0, 0.0])
+
+
 def test_setup_sorts_interpolation_distances(generate_workchain, generate_inputs_supercon):
     """Interpolation distances should be normalized into an ascending list."""
     process = generate_workchain("epw.supercon", generate_inputs_supercon())
