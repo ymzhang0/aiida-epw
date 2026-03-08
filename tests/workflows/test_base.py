@@ -26,3 +26,4 @@ def test_get_builder_from_protocol_accepts_parallelization_override(fixture_code
     )
 
     assert builder.parallelization.get_dict() == {"npool": 2}
+    assert "parent_folder" not in builder

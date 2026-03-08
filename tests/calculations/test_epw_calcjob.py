@@ -190,3 +190,19 @@ def test_epw_rejects_wannierize_with_restart_parent(
 
     with pytest.raises(ValueError, match="wannierize"):
         generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+
+def test_epw_rejects_generic_parent_folder(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that the inherited generic parent-folder port is not accepted."""
+    inputs = generate_inputs_epw(
+        parent_folder=generate_remote_data(fixture_localhost, fixture_sandbox.abspath)
+    )
+
+    with pytest.raises(ValueError, match="parent_folder"):
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs)

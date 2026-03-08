@@ -83,7 +83,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # but will only be provided when the EpwBaseWorkChain is run.
         spec.expose_inputs(
             EpwCalculation,
-            exclude=('metadata', 'qfpoints', 'kfpoints', 'kpoints', 'qpoints')
+            exclude=('metadata', 'parent_folder', 'qfpoints', 'kfpoints', 'kpoints', 'qpoints')
         )
 
         spec.input(

@@ -5,18 +5,18 @@ from pathlib import Path
 
 from aiida import orm
 from aiida.common import datastructures, exceptions
-from aiida.engine import CalcJob
 from aiida_quantumespresso.calculations import (
     _lowercase_dict,
     _pop_parser_options,
     _uppercase_dict,
 )
+from aiida_quantumespresso.calculations.namelists import NamelistsCalculation
 from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
 
-class EpwCalculation(CalcJob):
+class EpwCalculation(NamelistsCalculation):
     """`CalcJob` implementation for the epw.x code of Quantum ESPRESSO."""
 
     # Keywords that cannot be set by the user but will be set by the plugin
@@ -42,7 +42,8 @@ class EpwCalculation(CalcJob):
 
     _use_kpoints = True
 
-    _compulsory_namelists = ["INPUTEPW"]
+    _default_namelists = ["INPUTEPW"]
+    _default_parser = "epw.epw"
 
     # Default input and output files
     _PREFIX = "aiida"
@@ -89,27 +90,10 @@ class EpwCalculation(CalcJob):
     def define(cls, spec):
         """Define the process specification."""
         super().define(spec)
-        spec.input(
-            "metadata.options.input_filename",
-            valid_type=str,
-            default=cls._DEFAULT_INPUT_FILE,
-        )
-        spec.input(
-            "metadata.options.output_filename",
-            valid_type=str,
-            default=cls._DEFAULT_OUTPUT_FILE,
-        )
-        spec.input("metadata.options.withmpi", valid_type=bool, default=True)
         spec.input("kpoints", valid_type=orm.KpointsData, help="coarse kpoint mesh")
         spec.input("qpoints", valid_type=orm.KpointsData, help="coarse qpoint mesh")
         spec.input("kfpoints", valid_type=orm.KpointsData, help="fine kpoint mesh")
         spec.input("qfpoints", valid_type=orm.KpointsData, help="fine qpoint mesh")
-        spec.input(
-            "parameters",
-            valid_type=orm.Dict,
-            help="",
-        )
-        spec.input("settings", valid_type=orm.Dict, required=False, help="")
         spec.input(
             "parallelization",
             valid_type=orm.Dict,
@@ -142,7 +126,6 @@ class EpwCalculation(CalcJob):
             help="folder that contains all files required to restart an `EpwCalculation`",
         )
 
-        spec.inputs["metadata"]["options"]["parser_name"].default = "epw.epw"
         spec.inputs.validator = cls.validate_inputs
 
         spec.output(
@@ -229,16 +212,6 @@ class EpwCalculation(CalcJob):
             message="The retrieved folder data node could not be accessed.",
         )
         spec.exit_code(
-            310,
-            "ERROR_OUTPUT_STDOUT_READ",
-            message="The stdout output file could not be read.",
-        )
-        spec.exit_code(
-            312,
-            "ERROR_OUTPUT_STDOUT_INCOMPLETE",
-            message="The stdout output file was incomplete probably because the calculation got interrupted.",
-        )
-        spec.exit_code(
             313,
             "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
             message="The required memory exceeds the EPW `max_memlt` setting.",
@@ -268,6 +241,16 @@ class EpwCalculation(CalcJob):
     @classmethod
     def validate_inputs(cls, value, _):
         """Validate the top-level inputs for the calculation."""
+        if "parameters" not in value:
+            return "required value was not provided for the `parameters` input."
+
+        if "parent_folder" in value:
+            return (
+                "`parent_folder` is not supported for `EpwCalculation`; use "
+                "`parent_folder_nscf`, `parent_folder_chk`, `parent_folder_ph`, "
+                "or `parent_folder_epw` instead."
+            )
+
         parameters = cls.normalize_parameters(value["parameters"].get_dict())
 
         if "INPUTEPW" not in parameters:
@@ -285,6 +268,12 @@ class EpwCalculation(CalcJob):
                         f"`{input_name}` cannot be specified when "
                         "`parameters.INPUTEPW.wannierize` is true."
                     )
+
+    @classmethod
+    def set_blocked_keywords(cls, parameters):
+        """Validate plugin-managed keywords without mutating the parameter dictionary."""
+        cls.validate_blocked_keywords(parameters)
+        return parameters
 
     @classmethod
     def validate_parallelization(cls, value, _):
@@ -312,21 +301,6 @@ class EpwCalculation(CalcJob):
                 "Parallelization values must be positive integers; "
                 f"got invalid values {invalid_values}."
             )
-
-    @staticmethod
-    def filter_namelists(parameters, namelists_toprint):
-        """Filter the normalized parameter dictionary to the namelists to be written."""
-        filtered = {}
-        for namelist_name in namelists_toprint:
-            filtered[namelist_name] = parameters.pop(namelist_name, {})
-
-        if parameters:
-            raise exceptions.InputValidationError(
-                "The following namelists are specified in parameters, but are not valid namelists for the current type "
-                f"of calculation: {','.join(list(parameters.keys()))}"
-            )
-
-        return filtered
 
     @staticmethod
     def generate_input_file(parameters):
@@ -417,7 +391,7 @@ class EpwCalculation(CalcJob):
                 "required namelist INPUTEPW not specified"
             )
 
-        self.validate_blocked_keywords(parameters)
+        parameters = self.set_blocked_keywords(parameters)
 
         if "settings" in self.inputs:
             settings = _uppercase_dict(
@@ -763,7 +737,7 @@ class EpwCalculation(CalcJob):
         except (
             KeyError
         ):  # list of namelists not specified in the settings; do automatic detection
-            namelists_toprint = self._compulsory_namelists
+            namelists_toprint = self._default_namelists
 
         file_content = self.generate_input_file(
             self.filter_namelists(parameters, namelists_toprint)
@@ -787,8 +761,8 @@ class EpwCalculation(CalcJob):
 
         calcinfo.retrieve_list = retrieve_list
         calcinfo.retrieve_list += settings.pop("ADDITIONAL_RETRIEVE_LIST", [])
-        calcinfo.retrieve_temporary_list = []
-        calcinfo.retrieve_singlefile_list = []
+        calcinfo.retrieve_temporary_list = self._retrieve_temporary_list
+        calcinfo.retrieve_singlefile_list = self._retrieve_singlefile_list
 
         _pop_parser_options(self, settings)
 
