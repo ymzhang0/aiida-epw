@@ -9,7 +9,9 @@ class A2fData(orm.ArrayData):
     """Store an EPW a2F spectrum together with its smearing grids and metadata."""
 
     ARRAY_FREQUENCY = "frequency"
-    ARRAY_SPECTRUM = "a2f"
+    ARRAY_RAW_SPECTRUM = "a2f"
+    ARRAY_SPECTRUM = "a2f_spectrum"
+    ARRAY_CUMULATIVE_LAMBDA = "lambda_cumulative"
     ARRAY_LAMBDA = "lambda"
     ARRAY_PHONON_SMEARING = "degaussq"
 
@@ -24,6 +26,7 @@ class A2fData(orm.ArrayData):
         lambda_values,
         phonon_smearing,
         *,
+        cumulative_lambda=None,
         electron_smearing=None,
         fermi_window=None,
         summed_elph_coupling=None,
@@ -33,6 +36,8 @@ class A2fData(orm.ArrayData):
         spectrum = numpy.array(spectrum, dtype=float)
         lambda_values = numpy.array(lambda_values, dtype=float)
         phonon_smearing = numpy.array(phonon_smearing, dtype=float)
+        if cumulative_lambda is not None:
+            cumulative_lambda = numpy.array(cumulative_lambda, dtype=float)
 
         if frequency.ndim != 1:
             raise exceptions.ValidationError("`frequency` must be a one-dimensional array.")
@@ -46,19 +51,46 @@ class A2fData(orm.ArrayData):
             raise exceptions.ValidationError(
                 "The first spectrum dimension must match the frequency grid length."
             )
-        if spectrum.shape[1] != lambda_values.shape[0]:
-            raise exceptions.ValidationError(
-                "The second spectrum dimension must match the lambda grid length."
-            )
         if lambda_values.shape != phonon_smearing.shape:
             raise exceptions.ValidationError(
                 "`lambda_values` and `phonon_smearing` must have the same shape."
             )
 
+        num_smearings = lambda_values.shape[0]
+
+        if cumulative_lambda is not None:
+            if cumulative_lambda.ndim != 2:
+                raise exceptions.ValidationError(
+                    "`cumulative_lambda` must be a two-dimensional array."
+                )
+            if cumulative_lambda.shape != spectrum.shape:
+                raise exceptions.ValidationError(
+                    "`cumulative_lambda` must have the same shape as `spectrum`."
+                )
+            raw_spectrum = numpy.concatenate([spectrum, cumulative_lambda], axis=1)
+            spectrum_data = spectrum
+        elif spectrum.shape[1] == num_smearings:
+            raw_spectrum = spectrum
+            spectrum_data = spectrum
+            cumulative_lambda = None
+        elif spectrum.shape[1] == 2 * num_smearings:
+            spectrum_data = spectrum[:, :num_smearings]
+            cumulative_lambda = spectrum[:, num_smearings:]
+            raw_spectrum = spectrum
+        else:
+            raise exceptions.ValidationError(
+                "The spectrum must have either one or two blocks of columns per smearing value."
+            )
+
         self.set_array(self.ARRAY_FREQUENCY, frequency)
-        self.set_array(self.ARRAY_SPECTRUM, spectrum)
+        self.set_array(self.ARRAY_RAW_SPECTRUM, raw_spectrum)
+        self.set_array(self.ARRAY_SPECTRUM, spectrum_data)
         self.set_array(self.ARRAY_LAMBDA, lambda_values)
         self.set_array(self.ARRAY_PHONON_SMEARING, phonon_smearing)
+        if cumulative_lambda is None:
+            self._delete_optional_array(self.ARRAY_CUMULATIVE_LAMBDA)
+        else:
+            self.set_array(self.ARRAY_CUMULATIVE_LAMBDA, cumulative_lambda)
 
         self._set_optional_attribute(
             self.ATTRIBUTE_ELECTRON_SMEARING, electron_smearing
@@ -75,6 +107,13 @@ class A2fData(orm.ArrayData):
     def get_spectrum(self):
         """Return the a2F spectrum values."""
         return self.get_array(self.ARRAY_SPECTRUM)
+
+    def get_cumulative_lambda(self):
+        """Return the cumulative integrated lambda spectrum if available."""
+        if self.ARRAY_CUMULATIVE_LAMBDA not in self.get_arraynames():
+            return None
+
+        return self.get_array(self.ARRAY_CUMULATIVE_LAMBDA)
 
     def get_lambda(self):
         """Return the integrated electron-phonon coupling values."""
@@ -102,7 +141,15 @@ class A2fData(orm.ArrayData):
     def _set_optional_attribute(self, key, value):
         """Set or clear an optional scalar attribute."""
         if value is None:
-            self.base.attributes.delete(key)
+            try:
+                self.base.attributes.delete(key)
+            except AttributeError:
+                pass
             return
 
         self.base.attributes.set(key, float(value))
+
+    def _delete_optional_array(self, name):
+        """Delete an optional array if it exists."""
+        if name in self.get_arraynames():
+            self.delete_array(name)

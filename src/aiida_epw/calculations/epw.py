@@ -18,6 +18,8 @@ from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
+from aiida_epw.data import A2fData
+
 
 class EpwCalculation(NamelistsCalculation):
     """`CalcJob` implementation for the epw.x code of Quantum ESPRESSO."""
@@ -162,7 +164,7 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "a2f",
-            valid_type=orm.XyData,
+            valid_type=A2fData,
             required=False,
             help="The contents of the `.a2f` file.",
         )

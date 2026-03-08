@@ -9,6 +9,7 @@ from aiida.plugins.entry_point import (
 )
 
 from aiida_epw.calculations.epw import EpwCalculation
+from aiida_epw.data import A2fData
 from aiida_epw.parsers.epw import EpwParser
 
 
@@ -31,9 +32,12 @@ def test_epw(parse_from_files, data_regression, test_name):
         "output_parameters": results["output_parameters"].get_dict(),
     }
     if test_name == "default":
+        assert isinstance(results["a2f"], A2fData)
         data_regression_dict["a2f"] = results["a2f"].get_array("a2f").tolist()[::50]
         data_regression_dict["lambda"] = results["a2f"].get_array("lambda").tolist()
         data_regression_dict["degaussq"] = results["a2f"].get_array("degaussq").tolist()
+        assert results["a2f"].get_spectrum().shape[1] == 10
+        assert results["a2f"].get_cumulative_lambda().shape[1] == 10
     if test_name == "isotropic_eliashberg":
         data_regression_dict["max_eigenvalue"] = (
             results["max_eigenvalue"].get_array("max_eigenvalue").tolist()
@@ -120,10 +124,13 @@ Fermi window (eV)   0.8000000
 
     a2f, parsed = EpwParser.parse_a2f(content)
 
+    assert isinstance(a2f, A2fData)
     assert a2f.get_array("frequency").tolist() == [0.1, 0.2]
     assert a2f.get_array("a2f").tolist() == [[1.0, 2.0], [3.0, 4.0]]
     assert a2f.get_array("lambda").tolist() == [0.1, 0.2]
     assert a2f.get_array("degaussq").tolist() == [0.5, 0.6]
+    assert a2f.electron_smearing == pytest.approx(0.05)
+    assert a2f.fermi_window == pytest.approx(0.8)
     assert parsed == {"degaussw": 0.05, "fsthick": 0.8}
 
 

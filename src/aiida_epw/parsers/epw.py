@@ -10,6 +10,8 @@ from aiida_quantumespresso.utils.mapping import get_logging_container
 from packaging.version import Version
 
 from aiida_epw.calculations.epw import EpwCalculation
+from aiida_epw.data import A2fData
+from aiida_epw.tools.parsers import parse_epw_a2f
 
 
 class EpwParser(BaseParser):
@@ -71,8 +73,8 @@ class EpwParser(BaseParser):
 
         a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
         if a2f_contents is not None:
-            a2f_xydata, parsed_a2f = self.parse_a2f(a2f_contents)
-            self.out("a2f", a2f_xydata)
+            a2f_data, parsed_a2f = self.parse_a2f(a2f_contents)
+            self.out("a2f", a2f_data)
             parsed_data.update(parsed_a2f)
 
         dos_contents = self.get_retrieved_content(
@@ -365,54 +367,24 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_a2f(content):
         """Parse the contents of the `.a2f` file."""
-        a2f_block, _ = content.split("\n Integrated el-ph coupling", maxsplit=1)
-        a2f_array = numpy.array(
-            [line.split() for line in a2f_block.splitlines()[1:] if line.strip()],
-            dtype=float,
+        parsed_a2f = parse_epw_a2f(content)
+
+        a2f_data = A2fData()
+        a2f_data.set_a2f_data(
+            frequency=parsed_a2f["frequency"],
+            spectrum=parsed_a2f["a2f"],
+            lambda_values=parsed_a2f["lambda"],
+            phonon_smearing=parsed_a2f["phonon_smearing"],
+            electron_smearing=parsed_a2f.get("electron_smearing"),
+            fermi_window=parsed_a2f.get("fermi_window"),
+            summed_elph_coupling=parsed_a2f.get("summed_elph_coupling"),
         )
 
-        a2f_xydata = orm.XyData()
-        a2f_xydata.set_array("frequency", a2f_array[:, 0])
-        a2f_xydata.set_array("a2f", a2f_array[:, 1:])
-        a2f_xydata.set_array(
-            "lambda",
-            numpy.array(
-                [
-                    value
-                    for value in re.search(
-                        r"Integrated el-ph coupling\n\s+\#\s+([\d\.\s]+)",
-                        content,
-                    )
-                    .groups()[0]
-                    .split()
-                ],
-                dtype=float,
-            ),
-        )
-        a2f_xydata.set_array(
-            "degaussq",
-            numpy.array(
-                [
-                    value
-                    for value in re.search(
-                        r"Phonon smearing \(meV\)\n\s+\#\s+([\d\.\s]+)",
-                        content,
-                    )
-                    .groups()[0]
-                    .split()
-                ],
-                dtype=float,
-            ),
-        )
         parsed_data = {
-            "degaussw": float(
-                re.search(r"Electron smearing \(eV\)\s+([\d\.]+)", content).groups()[0]
-            ),
-            "fsthick": float(
-                re.search(r"Fermi window \(eV\)\s+([\d\.]+)", content).groups()[0]
-            ),
+            "degaussw": parsed_a2f["electron_smearing"],
+            "fsthick": parsed_a2f["fermi_window"],
         }
-        return a2f_xydata, parsed_data
+        return a2f_data, parsed_data
 
     @staticmethod
     def parse_a2f_proj(content):

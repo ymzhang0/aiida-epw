@@ -9,6 +9,7 @@ from aiida.common import AttributeDict, LinkType
 from aiida.engine import WorkChain
 from aiida.plugins.entry_point import format_entry_point_string
 
+from aiida_epw.data import A2fData
 from aiida_epw.workflows.base import EpwBaseWorkChain
 from aiida_epw.workflows.supercon import (
     SuperConWorkChain,
@@ -280,6 +281,35 @@ def test_should_run_final_returns_exit_code_when_not_converged(
     result = process.should_run_final()
 
     assert result == process.exit_codes.ERROR_ALLEN_DYNES_NOT_CONVERGED
+
+
+def test_inspect_conv_uses_a2f_frequency_to_seed_degaussq(
+    generate_workchain, generate_inputs_supercon
+):
+    """The first successful interpolation should derive `degaussq` from the A2fData grid."""
+    process = generate_workchain("epw.supercon", generate_inputs_supercon())
+    process.setup()
+    a2f = A2fData()
+    a2f.set_a2f_data(
+        frequency=[1.0, 4.0],
+        spectrum=[[0.1], [0.2]],
+        lambda_values=[0.3],
+        phonon_smearing=[0.4],
+    )
+    process.ctx.epw_interp = [
+        SimpleNamespace(
+            pk=123,
+            is_finished_ok=True,
+            outputs=SimpleNamespace(
+                output_parameters={"Allen_Dynes_Tc": 10.0},
+                a2f=a2f,
+            ),
+        )
+    ]
+
+    process.inspect_conv()
+
+    assert process.ctx.degaussq == pytest.approx(0.04)
 
 
 def test_run_conv_passes_restart_inputs(

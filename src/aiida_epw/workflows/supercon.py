@@ -387,7 +387,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 )
 
             if self.ctx.degaussq is None:
-                frequency = workchain.outputs.a2f.get_array("frequency")
+                frequency = workchain.outputs.a2f.get_frequency()
                 self.ctx.degaussq = frequency[-1] / 100
 
     def should_run_final(self):
