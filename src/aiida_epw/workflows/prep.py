@@ -41,6 +41,35 @@ def get_target_basepath(computer):
     return target_basepath
 
 
+def should_run_bands_interpolation(inputs) -> bool:
+    """Return whether the EPW bands interpolation step should run."""
+    do_bands = inputs.get("do_bands_interpolation", True)
+    if isinstance(do_bands, orm.Bool):
+        do_bands = do_bands.value
+
+    return bool(do_bands) and "epw_bands" in inputs
+
+
+def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
+    inputs, ctx=None
+):
+    """Validate the inputs of the `EpwPrepWorkChain`."""
+    do_bands = inputs.get("do_bands_interpolation", True)
+    if isinstance(do_bands, orm.Bool):
+        do_bands = do_bands.value
+
+    if "w90_bands" not in inputs:
+        return (
+            "`w90_bands` inputs are required because this work chain needs the "
+            "NSCF and Wannier checkpoint folders produced by the Wannier90 step."
+        )
+
+    if do_bands and "epw_bands" not in inputs:
+        return (
+            "`epw_bands` inputs are required when `do_bands_interpolation` is enabled."
+        )
+
+
 class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     """Main work chain to start calculating properties using EPW.
 
@@ -94,7 +123,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "clean_workdir",
             ),
             namespace_options={
-                "required": False,
                 "populate_defaults": False,
                 "help": "Inputs for the `Wannier90OptimizeWorkChain/Wannier90BandsWorkChain`.",
             },
@@ -149,8 +177,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_epw",
                 "parent_folder_chk",
             ),
-            namespace_options={"help": "Inputs for the `EpwBaseWorkChain`."},
+            namespace_options={
+                "required": False,
+                "help": "Inputs for the `EpwBaseWorkChain`.",
+            },
         )
+        spec.inputs.validator = validate_inputs
         spec.output("retrieved", valid_type=orm.FolderData)
         spec.output("epw_folder", valid_type=orm.RemoteStashFolderData)
 
@@ -280,6 +312,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         # Here I have a loop for the epw builders for furture extension of another epw bands interpolation
         # .
         for namespace in ["epw_base", "epw_bands"]:
+            if namespace == "epw_bands" and not inputs.get(
+                "do_bands_interpolation", True
+            ):
+                continue
+
             epw_inputs = inputs.get(namespace, None)
             if namespace == "epw_base":
                 if "target_base" not in epw_inputs["options"]["stash"]:
@@ -483,7 +520,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def should_run_epw_bands(self):
         """Check if the bands interpolation should be run."""
-        return "epw_bands" in self.inputs
+        return should_run_bands_interpolation(self.inputs)
 
     def run_epw_bands(self):
         """Run the `EpwBaseWorkChain` in bands interpolation mode."""

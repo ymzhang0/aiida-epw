@@ -11,6 +11,7 @@ from aiida.engine import (
 )
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
+from aiida_epw.tools.workchain import find_related_calculation
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
 
@@ -33,6 +34,19 @@ def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
 def split_list(list_node: orm.List) -> dict:
     """Split a list into a dictionary of floats."""
     return {f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())}
+
+
+def get_restart_parent_folder(node):
+    """Return the most robust restart folder exposed by an EPW process node."""
+    for output_label in ("epw_folder", "remote_stash", "remote_folder"):
+        try:
+            return getattr(node.outputs, output_label)
+        except AttributeError:
+            continue
+
+    raise ValueError(
+        f"Could not determine a restart folder from `{node.process_label}` outputs."
+    )
 
 
 class SuperConWorkChain(ProtocolMixin, WorkChain):
@@ -215,11 +229,12 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             raise ValueError(f"Invalid parent_epw process: {parent_epw.process_label}")
 
         if parent_folder_epw is None:
-            if epw_source.inputs.code.computer.hostname != epw_code.computer.hostname:
+            parent_folder_epw = get_restart_parent_folder(parent_epw)
+
+            if parent_folder_epw.computer.hostname != epw_code.computer.hostname:
                 raise ValueError(
                     "The `epw_code` must be configured on the same computer as that where the `parent_epw` was run."
                 )
-            parent_folder_epw = epw_source.outputs.remote_folder
         else:
             # TODO: Add check to make sure parent_folder_epw is on same computer as epw_code
             pass
@@ -394,10 +409,11 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         )
 
         inputs.structure = self.inputs.structure
-        parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
+        parent_folder_epw = get_restart_parent_folder(self.ctx.epw_interp[-1])
+        restart_calculation = find_related_calculation(parent_folder_epw)
         inputs.parent_folder_epw = parent_folder_epw
-        inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
-        inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
+        inputs.kfpoints = restart_calculation.inputs.kfpoints
+        inputs.qfpoints = restart_calculation.inputs.qfpoints
 
         if self.ctx.degaussq:
             parameters = inputs.parameters.get_dict()
@@ -430,10 +446,11 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         )
 
         inputs.structure = self.inputs.structure
-        parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
+        parent_folder_epw = get_restart_parent_folder(self.ctx.epw_interp[-1])
+        restart_calculation = find_related_calculation(parent_folder_epw)
         inputs.parent_folder_epw = parent_folder_epw
-        inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
-        inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
+        inputs.kfpoints = restart_calculation.inputs.kfpoints
+        inputs.qfpoints = restart_calculation.inputs.qfpoints
 
         inputs.metadata.call_link_label = "epw_final_aniso"
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
