@@ -52,6 +52,9 @@ Source = "https://github.com/aiidaplugins/aiida-epw"
 [project.entry-points.'aiida.parsers']
 'epw.epw' = 'aiida_epw.parsers.epw:EpwParser'
 
+[project.entry-points.'aiida.data']
+'epw.a2f' = 'aiida_epw.data.a2f:A2fData'
+
 [project.entry-points.'aiida.workflows']
 'epw.base' = 'aiida_epw.workflows.base:EpwBaseWorkChain'
 'epw.prep' = 'aiida_epw.workflows.prep:EpwPrepWorkChain'
