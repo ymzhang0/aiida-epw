@@ -4,6 +4,9 @@ import pytest
 
 from aiida import orm
 from aiida.common import exceptions
+from aiida_quantumespresso.calculations.pw import PwCalculation
+
+from aiida_epw.calculations.epw import EpwCalculation
 
 
 def generate_kpoints_mesh(mesh):
@@ -206,3 +209,105 @@ def test_epw_rejects_generic_parent_folder(
 
     with pytest.raises(ValueError, match="parent_folder"):
         generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+
+def test_epw_stages_nscf_parent_output_folder(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that the NSCF parent contributes the QE output directory by copy."""
+    parent_folder = generate_remote_data(
+        fixture_localhost, "/remote/nscf", "quantumespresso.pw"
+    )
+    inputs = generate_inputs_epw(parent_folder_nscf=parent_folder)
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert (
+        parent_folder.computer.uuid,
+        Path(parent_folder.get_remote_path(), PwCalculation._OUTPUT_SUBFOLDER).as_posix(),
+        EpwCalculation._OUTPUT_SUBFOLDER,
+    ) in calc_info.remote_copy_list
+
+
+def test_epw_stages_chk_parent_into_requested_transport_list(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that Wannier checkpoint files follow the selected copy/symlink mode."""
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/chk")
+    inputs = generate_inputs_epw(
+        parent_folder_chk=parent_folder,
+        settings=orm.Dict({"PARENT_FOLDER_SYMLINK": True}),
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    expected = {
+        (
+            parent_folder.computer.uuid,
+            Path(parent_folder.get_remote_path(), "aiida.chk").as_posix(),
+            "aiida.chk",
+        ),
+        (
+            parent_folder.computer.uuid,
+            Path(parent_folder.get_remote_path(), "aiida.bvec").as_posix(),
+            "aiida.bvec",
+        ),
+        (
+            parent_folder.computer.uuid,
+            Path(parent_folder.get_remote_path(), "aiida.mmn").as_posix(),
+            "aiida.wannier90.mmn",
+        ),
+    }
+
+    assert expected.issubset(set(calc_info.remote_symlink_list))
+    assert not expected.intersection(set(calc_info.remote_copy_list))
+
+
+def test_epw_stages_epw_restart_files_without_copying_epmatwp(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that EPW restart staging links the large `epmatwp` file and copies metadata files."""
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
+    inputs = generate_inputs_epw(
+        parameters={"INPUTEPW": {"epwread": True, "elph": True}},
+        parent_folder_epw=parent_folder,
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert (
+        parent_folder.computer.uuid,
+        Path(
+            parent_folder.get_remote_path(),
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.epmatwp",
+        ).as_posix(),
+        Path(
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.epmatwp"
+        ).as_posix(),
+    ) in calc_info.remote_symlink_list
+
+    expected_copied = {
+        "crystal.fmt",
+        "epwdata.fmt",
+        "vmedata.fmt",
+        "dmedata.fmt",
+        "aiida.kgmap",
+        "aiida.kmap",
+        "aiida.ukk",
+        "aiida.mmn",
+        "aiida.bvec",
+    }
+    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    assert expected_copied.issubset(copied_targets)
