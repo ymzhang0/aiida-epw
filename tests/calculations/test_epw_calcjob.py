@@ -70,6 +70,9 @@ def test_epw_default_mesh_inputs(fixture_sandbox, generate_calc_job, generate_in
     assert "nkf3 = 4" in input_contents
     assert "nqf2 = 4" in input_contents
     assert calc_info.retrieve_list == ["aiida.out"]
+    assert calc_info.retrieve_temporary_list == []
+    assert calc_info.retrieve_singlefile_list == []
+    assert calc_info.codes_info[0].stdout_name == "aiida.out"
 
 
 def test_epw_writes_explicit_fine_point_files(

@@ -389,9 +389,9 @@ class EpwCalculation(NamelistsCalculation):
 
         return namelists_toprint
 
-    def get_retrieve_list(self, parameters):
-        """Return the retrieve list implied by the EPW input parameters."""
-        retrieve_list = [self.metadata.options.output_filename]
+    def get_additional_retrieve_list(self, parameters):
+        """Return additional files that should be retrieved for the configured EPW run."""
+        retrieve_list = []
 
         if parameters["INPUTEPW"].get("band_plot"):
             retrieve_list += [self._output_elbands_file, self._output_phbands_file]
@@ -668,6 +668,52 @@ class EpwCalculation(NamelistsCalculation):
 
         return cmdline_params_result
 
+    def create_codeinfo(self, settings):
+        """Create the `CodeInfo` for this EPW calculation."""
+        codeinfo = datastructures.CodeInfo()
+        codeinfo.cmdline_params = self._add_parallelization_flags_to_cmdline_params(
+            list(settings.pop("CMDLINE", []))
+        ) + ["-in", self.metadata.options.input_filename]
+        codeinfo.stdout_name = self.metadata.options.output_filename
+        codeinfo.code_uuid = self.inputs.code.uuid
+
+        return codeinfo
+
+    def create_calcinfo(
+        self,
+        settings,
+        codeinfo,
+        local_copy_list,
+        remote_copy_list,
+        remote_symlink_list,
+        retrieve_list,
+    ):
+        """Create the `CalcInfo` for this EPW calculation."""
+        calcinfo = datastructures.CalcInfo()
+        calcinfo.uuid = str(self.uuid)
+        calcinfo.codes_info = [codeinfo]
+        calcinfo.local_copy_list = local_copy_list
+        calcinfo.remote_copy_list = remote_copy_list
+        calcinfo.remote_symlink_list = remote_symlink_list
+        calcinfo.retrieve_list = [self.metadata.options.output_filename]
+        calcinfo.retrieve_list += retrieve_list
+        calcinfo.retrieve_list += settings.pop("ADDITIONAL_RETRIEVE_LIST", [])
+        calcinfo.retrieve_list += self._internal_retrieve_list
+        calcinfo.retrieve_temporary_list = self._retrieve_temporary_list
+        calcinfo.retrieve_singlefile_list = self._retrieve_singlefile_list
+
+        return calcinfo
+
+    def validate_remaining_settings(self, settings):
+        """Remove parser options and fail on any remaining unknown settings."""
+        _pop_parser_options(self, settings)
+
+        if settings:
+            unknown_keys = ", ".join(list(settings.keys()))
+            raise exceptions.InputValidationError(
+                f"`settings` contained unexpected keys: {unknown_keys}"
+            )
+
     def prepare_for_submission(self, folder):
         """Prepare the calculation job for submission by transforming input nodes into input files.
 
@@ -756,7 +802,7 @@ class EpwCalculation(NamelistsCalculation):
             "Cannot get the fine k-point grid",
         )
 
-        retrieve_list = self.get_retrieve_list(parameters)
+        retrieve_list = self.get_additional_retrieve_list(parameters)
         namelists_toprint = self.get_namelists_to_print(settings)
 
         file_content = self.generate_input_file(
@@ -765,31 +811,15 @@ class EpwCalculation(NamelistsCalculation):
         with folder.open(self.metadata.options.input_filename, "w") as infile:
             infile.write(file_content)
 
-        codeinfo = datastructures.CodeInfo()
-        codeinfo.cmdline_params = self._add_parallelization_flags_to_cmdline_params(
-            list(settings.pop("CMDLINE", []))
-        ) + ["-in", self.metadata.options.input_filename]
-        codeinfo.stdout_name = self.metadata.options.output_filename
-        codeinfo.code_uuid = self.inputs.code.uuid
-
-        calcinfo = datastructures.CalcInfo()
-        calcinfo.uuid = str(self.uuid)
-        calcinfo.codes_info = [codeinfo]
-        calcinfo.local_copy_list = local_copy_list
-        calcinfo.remote_copy_list = remote_copy_list
-        calcinfo.remote_symlink_list = remote_symlink_list
-
-        calcinfo.retrieve_list = retrieve_list
-        calcinfo.retrieve_list += settings.pop("ADDITIONAL_RETRIEVE_LIST", [])
-        calcinfo.retrieve_temporary_list = self._retrieve_temporary_list
-        calcinfo.retrieve_singlefile_list = self._retrieve_singlefile_list
-
-        _pop_parser_options(self, settings)
-
-        if settings:
-            unknown_keys = ", ".join(list(settings.keys()))
-            raise exceptions.InputValidationError(
-                f"`settings` contained unexpected keys: {unknown_keys}"
-            )
+        codeinfo = self.create_codeinfo(settings)
+        calcinfo = self.create_calcinfo(
+            settings,
+            codeinfo,
+            local_copy_list,
+            remote_copy_list,
+            remote_symlink_list,
+            retrieve_list,
+        )
+        self.validate_remaining_settings(settings)
 
         return calcinfo
