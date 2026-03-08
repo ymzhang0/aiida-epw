@@ -4,6 +4,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from aiida import orm
+from aiida.common import AttributeDict, LinkType
+from aiida.common.datastructures import StashMode
+from aiida.engine import WorkChain
+from aiida.plugins.entry_point import format_entry_point_string
 
 from aiida_epw.workflows.prep import (
     EpwPrepWorkChain,
@@ -11,6 +15,46 @@ from aiida_epw.workflows.prep import (
     should_run_bands_interpolation,
     validate_inputs,
 )
+
+
+def create_calcjob_descendant(computer, remote_path=None):
+    """Create a calcjob descendant with an optional `remote_folder` output."""
+    node = orm.CalcJobNode(
+        computer=computer,
+        process_type=format_entry_point_string("aiida.calculations", "epw.epw"),
+    )
+    node.set_option("resources", {"num_machines": 1, "num_mpiprocs_per_machine": 1})
+    node.store()
+
+    if remote_path is not None:
+        remote_folder = orm.RemoteData(computer=computer, remote_path=remote_path)
+        remote_folder.base.links.add_incoming(
+            node,
+            link_type=LinkType.CREATE,
+            link_label="remote_folder",
+        )
+        remote_folder.store()
+
+    return node
+
+
+def make_cleanup_process(workchain_cls, clean_workdir, descendants, monkeypatch):
+    """Create a lightweight workchain instance for testing `on_terminated`."""
+    monkeypatch.setattr(WorkChain, "on_terminated", lambda self: None)
+    monkeypatch.setattr(
+        workchain_cls,
+        "inputs",
+        property(lambda self: self._inputs),
+        raising=False,
+    )
+
+    process = object.__new__(workchain_cls)
+    process._inputs = AttributeDict({"clean_workdir": orm.Bool(clean_workdir)})
+    process._node = SimpleNamespace(called_descendants=descendants)
+    reports = []
+    process.report = reports.append
+
+    return process, reports
 
 
 def test_validate_inputs_requires_w90_bands():
@@ -156,3 +200,89 @@ def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
     assert "projwfc" not in builder.w90_bands
     assert "open_grid" not in builder.w90_bands
     assert "structure" not in builder.w90_bands
+
+
+def test_results_exposes_transformation_outputs():
+    """The results step should forward the main EPW outputs."""
+    retrieved = orm.FolderData()
+    stash = orm.RemoteStashFolderData(
+        stash_mode=StashMode.COPY,
+        target_basepath="/stash/epw",
+        source_list=["save"],
+    )
+    captured = {}
+    process = SimpleNamespace(
+        ctx=SimpleNamespace(
+            workchain_epw=SimpleNamespace(
+                outputs=SimpleNamespace(retrieved=retrieved, remote_stash=stash)
+            )
+        ),
+        out=lambda label, value: captured.setdefault(label, value),
+    )
+
+    EpwPrepWorkChain.results(process)
+
+    assert captured == {"retrieved": retrieved, "epw_folder": stash}
+
+
+def test_on_terminated_skips_cleanup_when_disabled(
+    fixture_localhost,
+    monkeypatch,
+):
+    """Disabling cleanup should leave descendant folders untouched."""
+    cleaned_paths = []
+    descendant = create_calcjob_descendant(fixture_localhost, "/remote/keep")
+
+    monkeypatch.setattr(
+        orm.RemoteData,
+        "_clean",
+        lambda self: cleaned_paths.append(self.get_remote_path()),
+    )
+
+    process, reports = make_cleanup_process(
+        EpwPrepWorkChain,
+        False,
+        [descendant],
+        monkeypatch,
+    )
+
+    process.on_terminated()
+
+    assert cleaned_paths == []
+    assert reports == ["remote folders will not be cleaned"]
+
+
+def test_on_terminated_cleans_calcjob_remote_folders(
+    fixture_localhost,
+    monkeypatch,
+):
+    """Cleanup should touch only calcjob descendants with removable remote folders."""
+    cleaned_paths = []
+    clean_descendant = create_calcjob_descendant(fixture_localhost, "/remote/clean")
+    failing_descendant = create_calcjob_descendant(fixture_localhost, "/remote/fail")
+    missing_remote = create_calcjob_descendant(fixture_localhost)
+    ignored_workchain = orm.WorkChainNode(
+        process_type=format_entry_point_string("aiida.workflows", "epw.base")
+    )
+    ignored_workchain.store()
+
+    def fake_clean(self):
+        if self.get_remote_path() == "/remote/fail":
+            raise OSError("synthetic failure")
+        cleaned_paths.append(self.get_remote_path())
+
+    monkeypatch.setattr(orm.RemoteData, "_clean", fake_clean)
+
+    process, reports = make_cleanup_process(
+        EpwPrepWorkChain,
+        True,
+        [clean_descendant, failing_descendant, missing_remote, ignored_workchain],
+        monkeypatch,
+    )
+
+    process.on_terminated()
+
+    assert cleaned_paths == ["/remote/clean"]
+    assert reports == [
+        f"cleaned remote folders of calculations: {clean_descendant.pk}"
+    ]

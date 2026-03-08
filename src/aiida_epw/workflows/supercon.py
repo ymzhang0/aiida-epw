@@ -1,7 +1,7 @@
 """Work chain for computing the critical temperature based on an `EpwWorkChain`."""
 
 from aiida import orm
-from aiida.common import AttributeDict
+from aiida.common import AttributeDict, exceptions
 from aiida.engine import (
     WorkChain,
     append_,
@@ -511,7 +511,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 try:
                     called_descendant.outputs.remote_folder._clean()  # pylint: disable=protected-access
                     cleaned_calcs.append(called_descendant.pk)
-                except (OSError, KeyError):
+                except (OSError, exceptions.NotExistentAttributeError):
                     pass
 
         if cleaned_calcs:

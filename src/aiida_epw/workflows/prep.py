@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from aiida import orm
-from aiida.common import AttributeDict
+from aiida.common import AttributeDict, exceptions
 from aiida.engine import ToContext, WorkChain, if_
 from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import (
     create_kpoints_from_distance,
@@ -590,7 +590,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 try:
                     called_descendant.outputs.remote_folder._clean()  # pylint: disable=protected-access
                     cleaned_calcs.append(called_descendant.pk)
-                except (OSError, KeyError):
+                except (OSError, exceptions.NotExistentAttributeError):
                     pass
 
         if cleaned_calcs:
