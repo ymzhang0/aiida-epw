@@ -1,5 +1,6 @@
 """Plugin to create a Quantum Espresso epw.x input file."""
 
+import numbers
 from pathlib import Path
 
 from aiida import orm
@@ -63,6 +64,22 @@ class EpwCalculation(CalcJob):
 
     # Not using symlink in pw to allow multiple nscf to run on top of the same scf
     _default_symlink_usage = False
+    _ENABLED_PARALLELIZATION_FLAGS = (
+        "nimage",
+        "npool",
+        "nband",
+        "ntg",
+        "ndiag",
+        "nhw",
+    )
+    _PARALLELIZATION_FLAG_ALIASES = {
+        "nimage": ("ni", "nimages", "npot"),
+        "npool": ("nk", "npools"),
+        "nband": ("nb", "nbgrp", "nband_group"),
+        "ntg": ("nt", "ntask_groups", "nyfft"),
+        "ndiag": ("northo", "nd", "nproc_diag", "nproc_ortho"),
+        "nhw": ("nh", "n_howmany", "howmany"),
+    }
 
     @classmethod
     def define(cls, spec):
@@ -89,6 +106,13 @@ class EpwCalculation(CalcJob):
             help="",
         )
         spec.input("settings", valid_type=orm.Dict, required=False, help="")
+        spec.input(
+            "parallelization",
+            valid_type=orm.Dict,
+            required=False,
+            validator=cls.validate_parallelization,
+            help="Optional command-line parallelization flags for `epw.x`.",
+        )
         spec.input(
             "parent_folder_nscf",
             required=False,
@@ -258,6 +282,33 @@ class EpwCalculation(CalcJob):
                         "`parameters.INPUTEPW.wannierize` is true."
                     )
 
+    @classmethod
+    def validate_parallelization(cls, value, _):
+        """Validate the optional `parallelization` input."""
+        if not value:
+            return None
+
+        value_dict = value.get_dict()
+        unknown_flags = set(value_dict) - set(cls._ENABLED_PARALLELIZATION_FLAGS)
+        if unknown_flags:
+            return (
+                f"Unknown flags in `parallelization`: {unknown_flags}, allowed flags "
+                f"are {cls._ENABLED_PARALLELIZATION_FLAGS}."
+            )
+
+        invalid_values = [
+            flag_value
+            for flag_value in value_dict.values()
+            if isinstance(flag_value, bool)
+            or not isinstance(flag_value, numbers.Integral)
+            or flag_value < 1
+        ]
+        if invalid_values:
+            return (
+                "Parallelization values must be positive integers; "
+                f"got invalid values {invalid_values}."
+            )
+
     @staticmethod
     def filter_namelists(parameters, namelists_toprint):
         """Filter the normalized parameter dictionary to the namelists to be written."""
@@ -287,6 +338,48 @@ class EpwCalculation(CalcJob):
             file_lines.append("/")
 
         return "\n".join(file_lines) + "\n"
+
+    def add_parallelization_to_cmdline_params(self, cmdline_params):
+        """Return cmdline parameters with validated parallelization flags appended."""
+        cmdline_params_result = list(cmdline_params)
+        cmdline_params_normalized = []
+
+        for param in cmdline_params:
+            cmdline_params_normalized.extend(param.split())
+
+        parallelization_dict = (
+            self.inputs.parallelization.get_dict()
+            if "parallelization" in self.inputs
+            else {}
+        )
+
+        for flag_name in self._ENABLED_PARALLELIZATION_FLAGS:
+            aliases = list(self._PARALLELIZATION_FLAG_ALIASES[flag_name]) + [flag_name]
+            aliases_in_cmdline = [
+                alias for alias in aliases if f"-{alias}" in cmdline_params_normalized
+            ]
+
+            if aliases_in_cmdline:
+                if len(aliases_in_cmdline) > 1:
+                    raise exceptions.InputValidationError(
+                        "Conflicting parallelization flags "
+                        f"{aliases_in_cmdline} in settings['CMDLINE']"
+                    )
+                if flag_name in parallelization_dict:
+                    raise exceptions.InputValidationError(
+                        "Parallelization flag "
+                        f"'{aliases_in_cmdline[0]}' specified in settings['CMDLINE'] "
+                        f"conflicts with '{flag_name}' in the `parallelization` input."
+                    )
+                continue
+
+            if flag_name in parallelization_dict:
+                cmdline_params_result += [
+                    f"-{flag_name}",
+                    str(parallelization_dict[flag_name]),
+                ]
+
+        return cmdline_params_result
 
     def prepare_for_submission(self, folder):
         """Prepare the calculation job for submission by transforming input nodes into input files.
@@ -675,10 +768,9 @@ class EpwCalculation(CalcJob):
             infile.write(file_content)
 
         codeinfo = datastructures.CodeInfo()
-        codeinfo.cmdline_params = list(settings.pop("CMDLINE", [])) + [
-            "-in",
-            self.metadata.options.input_filename,
-        ]
+        codeinfo.cmdline_params = self.add_parallelization_to_cmdline_params(
+            list(settings.pop("CMDLINE", []))
+        ) + ["-in", self.metadata.options.input_filename]
         codeinfo.stdout_name = self.metadata.options.output_filename
         codeinfo.code_uuid = self.inputs.code.uuid
 

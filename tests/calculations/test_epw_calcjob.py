@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from aiida import orm
+from aiida.common import exceptions
 
 
 def generate_kpoints_mesh(mesh):
@@ -116,6 +117,47 @@ def test_epw_allows_user_amass_parameter(
 
     input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
     assert "amass" in input_contents
+
+
+def test_epw_parallelization_flags_are_added_to_cmdline(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that the explicit `parallelization` input is translated to cmdline flags."""
+    inputs = generate_inputs_epw(parallelization=orm.Dict({"npool": 2, "ndiag": 4}))
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert calc_info.codes_info[0].cmdline_params == [
+        "-npool",
+        "2",
+        "-ndiag",
+        "4",
+        "-in",
+        "aiida.in",
+    ]
+
+
+def test_epw_rejects_invalid_parallelization_flag(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that unknown parallelization flags are rejected at validation time."""
+    inputs = generate_inputs_epw(parallelization=orm.Dict({"unknown": 2}))
+
+    with pytest.raises(ValueError, match="Unknown flags in `parallelization`"):
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+
+def test_epw_rejects_parallelization_conflict_with_cmdline(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that `parallelization` and raw cmdline flags cannot specify the same option twice."""
+    inputs = generate_inputs_epw(
+        parallelization=orm.Dict({"npool": 2}),
+        settings=orm.Dict({"CMDLINE": ["-nk", "2"]}),
+    )
+
+    with pytest.raises(exceptions.InputValidationError, match="conflicts"):
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
 
 
 def test_epw_rejects_wannierize_with_restart_parent(
