@@ -137,6 +137,19 @@ def test_epw_parallelization_flags_are_added_to_cmdline(
     ]
 
 
+def test_epw_accepts_parser_options_setting(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that parser settings are ignored instead of failing submission validation."""
+    inputs = generate_inputs_epw(
+        settings=orm.Dict({"parser_options": {"include_xml": False}})
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert calc_info.retrieve_list == ["aiida.out"]
+
+
 def test_epw_rejects_invalid_parallelization_flag(
     fixture_sandbox, generate_calc_job, generate_inputs_epw
 ):

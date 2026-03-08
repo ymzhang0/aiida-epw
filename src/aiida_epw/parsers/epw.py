@@ -21,6 +21,11 @@ class EpwParser(BaseParser):
         "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
     }
 
+    @staticmethod
+    def get_parser_settings_key():
+        """Return the settings key reserved for parser-specific options."""
+        return "parser_options"
+
     def get_retrieved_content(self, *filenames):
         """Return the content of the first retrieved file that exists."""
         for filename in filenames:

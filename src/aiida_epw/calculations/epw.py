@@ -6,7 +6,11 @@ from pathlib import Path
 from aiida import orm
 from aiida.common import datastructures, exceptions
 from aiida.engine import CalcJob
-from aiida_quantumespresso.calculations import _lowercase_dict, _uppercase_dict
+from aiida_quantumespresso.calculations import (
+    _lowercase_dict,
+    _pop_parser_options,
+    _uppercase_dict,
+)
 from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
@@ -783,6 +787,10 @@ class EpwCalculation(CalcJob):
 
         calcinfo.retrieve_list = retrieve_list
         calcinfo.retrieve_list += settings.pop("ADDITIONAL_RETRIEVE_LIST", [])
+        calcinfo.retrieve_temporary_list = []
+        calcinfo.retrieve_singlefile_list = []
+
+        _pop_parser_options(self, settings)
 
         if settings:
             unknown_keys = ", ".join(list(settings.keys()))
