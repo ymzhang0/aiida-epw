@@ -17,7 +17,10 @@ from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance i
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida_epw.tools.kpoints import check_kpoints_qpoints_compatibility
-from aiida_epw.tools.workchain import find_related_calculation
+from aiida_epw.tools.workchain import (
+    find_related_calculation,
+    get_parent_folder_calculation,
+)
 
 EpwCalculation = CalculationFactory("epw.epw")
 
@@ -337,7 +340,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             if "qpoints" in self.inputs:
                 qpoints = self.inputs.qpoints
             elif "parent_folder_ph" in self.inputs:
-                qpoints = self.inputs.parent_folder_ph.creator.inputs.qpoints
+                qpoints = get_parent_folder_calculation(
+                    self.inputs.parent_folder_ph
+                ).inputs.qpoints
             else:
                 self.report(
                     "Could not determine the coarse q-points from the inputs or the parent folder of the ph calculation."

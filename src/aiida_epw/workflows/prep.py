@@ -22,6 +22,7 @@ from aiida_wannier90_workflows.workflows.bands import (
     validate_inputs as validate_inputs_bands,
 )
 
+from aiida_epw.tools.workchain import get_parent_folder_calculation
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
 
@@ -425,12 +426,18 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(PhBaseWorkChain, namespace="ph_base")
         )
 
+        parent_folder_ph_calculation = None
         if (
             "parent_folder_ph" in self.inputs
-            and self.inputs.parent_folder_ph.creator.process_label == "PhCalculation"
+            and (
+                parent_folder_ph_calculation := get_parent_folder_calculation(
+                    self.inputs.parent_folder_ph
+                )
+            ).process_label
+            == "PhCalculation"
         ):
             inputs.ph.parent_folder = self.inputs.parent_folder_ph
-            inputs.ph.qpoints = self.inputs.parent_folder_ph.creator.inputs.qpoints
+            inputs.ph.qpoints = parent_folder_ph_calculation.inputs.qpoints
         else:
             scf_base_wc = (
                 self.ctx.workchain_w90_bands.base.links.get_outgoing(
