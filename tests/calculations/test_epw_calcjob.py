@@ -233,19 +233,19 @@ def test_epw_rejects_duplicate_parallelization_aliases_in_cmdline(
         generate_calc_job(fixture_sandbox, "epw.epw", inputs)
 
 
+@pytest.mark.parametrize("input_name", ["parent_folder_chk", "parent_folder_epw"])
 def test_epw_rejects_wannierize_with_restart_parent(
     fixture_sandbox,
     fixture_localhost,
     generate_calc_job,
     generate_inputs_epw,
     generate_remote_data,
+    input_name,
 ):
     """Test that wannierization cannot be mixed with restart parents."""
-    inputs = generate_inputs_epw(
-        parameters={"INPUTEPW": {"wannierize": True}},
-        parent_folder_chk=generate_remote_data(
-            fixture_localhost, fixture_sandbox.abspath
-        ),
+    inputs = generate_inputs_epw(parameters={"INPUTEPW": {"wannierize": True}})
+    inputs[input_name] = generate_remote_data(
+        fixture_localhost, fixture_sandbox.abspath
     )
 
     with pytest.raises(ValueError, match="wannierize"):

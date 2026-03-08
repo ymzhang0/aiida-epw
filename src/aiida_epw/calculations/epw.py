@@ -256,21 +256,34 @@ class EpwCalculation(NamelistsCalculation):
 
         parameters = cls.normalize_parameters(value["parameters"].get_dict())
 
-        if "INPUTEPW" not in parameters:
-            return "Required namelist `INPUTEPW` not in `parameters` input."
-
         try:
-            cls.validate_blocked_keywords(parameters)
+            cls.validate_parameters_inputs(parameters, value)
         except exceptions.InputValidationError as exception:
             return str(exception)
 
-        if parameters["INPUTEPW"].get("wannierize", False):
-            for input_name in ("parent_folder_epw", "parent_folder_chk"):
-                if input_name in value:
-                    return (
-                        f"`{input_name}` cannot be specified when "
-                        "`parameters.INPUTEPW.wannierize` is true."
-                    )
+    @classmethod
+    def validate_restart_inputs(cls, parameters, inputs):
+        """Validate restart-related input combinations against the EPW parameters."""
+        if not parameters["INPUTEPW"].get("wannierize", False):
+            return
+
+        for input_name in ("parent_folder_epw", "parent_folder_chk"):
+            if input_name in inputs:
+                raise exceptions.InputValidationError(
+                    f"`{input_name}` cannot be specified when "
+                    "`parameters.INPUTEPW.wannierize` is true."
+                )
+
+    @classmethod
+    def validate_parameters_inputs(cls, parameters, inputs):
+        """Validate normalized EPW parameters against the provided inputs."""
+        if "INPUTEPW" not in parameters:
+            raise exceptions.InputValidationError(
+                "Required namelist `INPUTEPW` not in `parameters` input."
+            )
+
+        cls.set_blocked_keywords(parameters)
+        cls.validate_restart_inputs(parameters, inputs)
 
     @classmethod
     def set_blocked_keywords(cls, parameters):
@@ -410,9 +423,66 @@ class EpwCalculation(NamelistsCalculation):
     def get_parameters(self):
         """Return normalized calculation parameters."""
         if "parameters" in self.inputs:
-            return self.normalize_parameters(self.inputs.parameters.get_dict())
+            parameters = self.normalize_parameters(self.inputs.parameters.get_dict())
+        else:
+            parameters = {}
 
-        return {}
+        self.validate_parameters_inputs(parameters, self.inputs)
+
+        return parameters
+
+    def cap_nstemp(self, inputepw_parameters):
+        """Clamp `nstemp` to the maximum value supported by this plugin."""
+        nstemp = inputepw_parameters.get("nstemp")
+
+        if nstemp and nstemp > self._MAX_NSTEMP:
+            self.report(
+                f"nstemp too large, reset it to maximum allowed: {self._MAX_NSTEMP}"
+            )
+            inputepw_parameters["nstemp"] = self._MAX_NSTEMP
+
+    def prepare_input_parameters(self, folder, parameters):
+        """Populate plugin-managed EPW parameters before writing the input file."""
+        inputepw_parameters = parameters["INPUTEPW"]
+
+        self.cap_nstemp(inputepw_parameters)
+
+        inputepw_parameters["outdir"] = self._OUTPUT_SUBFOLDER
+        inputepw_parameters["dvscf_dir"] = self._FOLDER_SAVE
+        inputepw_parameters["prefix"] = self._PREFIX
+
+        self.set_coarse_mesh_parameters(
+            parameters,
+            "qpoints",
+            ("nq1", "nq2", "nq3"),
+            "Cannot get the coarse q-point grid",
+        )
+        self.set_coarse_mesh_parameters(
+            parameters,
+            "kpoints",
+            ("nk1", "nk2", "nk3"),
+            "Cannot get the coarse k-point grid",
+        )
+        self.set_fine_mesh_parameters(
+            folder,
+            parameters,
+            "qfpoints",
+            ("nqf1", "nqf2", "nqf3"),
+            "filqf",
+            self._qfpoints_input_file,
+            "Cannot get the fine q-point grid",
+        )
+        self.set_fine_mesh_parameters(
+            folder,
+            parameters,
+            "kfpoints",
+            ("nkf1", "nkf2", "nkf3"),
+            "filkf",
+            self._kfpoints_input_file,
+            "Cannot get the fine k-point grid",
+        )
+
+        return parameters
 
     def get_additional_retrieve_list(self, parameters):
         """Return additional files that should be retrieved for the configured EPW run."""
@@ -764,71 +834,11 @@ class EpwCalculation(NamelistsCalculation):
         remote_copy_list = []
         remote_symlink_list = []
 
-        parameters = self.get_parameters()
-
-        if "INPUTEPW" not in parameters:
-            raise exceptions.InputValidationError(
-                "required namelist INPUTEPW not specified"
-            )
-
-        parameters = self.set_blocked_keywords(parameters)
-
         settings = self.get_settings()
+        parameters = self.prepare_input_parameters(folder, self.get_parameters())
 
         self.stage_parent_folders(
             folder, parameters, settings, remote_copy_list, remote_symlink_list
-        )
-        # check if wannierize is True and if parent_folder_epw or parent_folder_chk is provided
-        wannierize = parameters["INPUTEPW"].get("wannierize", False)
-
-        if wannierize and any(
-            _ in self.inputs for _ in ["parent_folder_epw", "parent_folder_chk"]
-        ):
-            raise exceptions.InputValidationError(
-                "Should not have a parent folder of epw or chk if wannierize is True"
-            )
-
-        # check if nstemp is too large
-        nstemp = parameters["INPUTEPW"].get("nstemp", None)
-        if nstemp and nstemp > self._MAX_NSTEMP:
-            self.report(
-                f"nstemp too large, reset it to maximum allowed: {self._MAX_NSTEMP}"
-            )
-            parameters["INPUTEPW"]["nstemp"] = self._MAX_NSTEMP
-
-        parameters["INPUTEPW"]["outdir"] = self._OUTPUT_SUBFOLDER
-        parameters["INPUTEPW"]["dvscf_dir"] = self._FOLDER_SAVE
-        parameters["INPUTEPW"]["prefix"] = self._PREFIX
-
-        self.set_coarse_mesh_parameters(
-            parameters,
-            "qpoints",
-            ("nq1", "nq2", "nq3"),
-            "Cannot get the coarse q-point grid",
-        )
-        self.set_coarse_mesh_parameters(
-            parameters,
-            "kpoints",
-            ("nk1", "nk2", "nk3"),
-            "Cannot get the coarse k-point grid",
-        )
-        self.set_fine_mesh_parameters(
-            folder,
-            parameters,
-            "qfpoints",
-            ("nqf1", "nqf2", "nqf3"),
-            "filqf",
-            self._qfpoints_input_file,
-            "Cannot get the fine q-point grid",
-        )
-        self.set_fine_mesh_parameters(
-            folder,
-            parameters,
-            "kfpoints",
-            ("nkf1", "nkf2", "nkf3"),
-            "filkf",
-            self._kfpoints_input_file,
-            "Cannot get the fine k-point grid",
         )
 
         retrieve_list = self.get_additional_retrieve_list(parameters)
