@@ -47,6 +47,24 @@ def fixture_code(aiida_code_installed):
 
 
 @pytest.fixture
+def generate_workchain():
+    """Instantiate a work chain for direct method testing."""
+
+    def _generate_workchain(entry_point_name, inputs=None):
+        from aiida.engine.utils import instantiate_process
+        from aiida.manage.manager import get_manager
+        from aiida.plugins import WorkflowFactory
+
+        manager = get_manager()
+        runner = manager.get_runner()
+
+        process_class = WorkflowFactory(entry_point_name)
+        return instantiate_process(runner, process_class, **(inputs or {}))
+
+    return _generate_workchain
+
+
+@pytest.fixture
 def generate_calc_job():
     """Instantiate a calcjob and call `prepare_for_submission`."""
 
@@ -64,6 +82,66 @@ def generate_calc_job():
         return process.prepare_for_submission(folder)
 
     return _generate_calc_job
+
+
+@pytest.fixture
+def serialize_builder():
+    """Serialize a process builder into plain Python types for protocol tests."""
+
+    def serialize_data(data):
+        from aiida.orm import (
+            AbstractCode,
+            BaseType,
+            Data,
+            Dict,
+            KpointsData,
+            List,
+            RemoteData,
+            SinglefileData,
+        )
+        from aiida.plugins import DataFactory
+
+        StructureData = DataFactory("core.structure")
+
+        if isinstance(data, dict):
+            return {key: serialize_data(value) for key, value in data.items()}
+
+        if isinstance(data, BaseType):
+            return data.value
+
+        if isinstance(data, AbstractCode):
+            return data.full_label
+
+        if isinstance(data, Dict):
+            return data.get_dict()
+
+        if isinstance(data, List):
+            return data.get_list()
+
+        if isinstance(data, StructureData):
+            return data.get_formula()
+
+        if isinstance(data, RemoteData):
+            return data.base.repository.hash()
+
+        if isinstance(data, KpointsData):
+            try:
+                return data.get_kpoints()
+            except AttributeError:
+                return data.get_kpoints_mesh()
+
+        if isinstance(data, SinglefileData):
+            return data.get_content()
+
+        if isinstance(data, Data):
+            return data.base.caching._get_hash()
+
+        return data
+
+    def _serialize_builder(builder):
+        return serialize_data(builder._inputs(prune=True))
+
+    return _serialize_builder
 
 
 @pytest.fixture
@@ -94,6 +172,37 @@ def generate_remote_data():
         return remote
 
     return _generate_remote_data
+
+
+@pytest.fixture
+def generate_structure():
+    """Return a minimal silicon structure for workflow tests."""
+
+    def _generate_structure():
+        structure = orm.StructureData(
+            cell=[
+                [0.0, 2.715, 2.715],
+                [2.715, 0.0, 2.715],
+                [2.715, 2.715, 0.0],
+            ]
+        )
+        structure.append_atom(position=(0.0, 0.0, 0.0), symbols="Si")
+        structure.append_atom(position=(1.3575, 1.3575, 1.3575), symbols="Si")
+        return structure
+
+    return _generate_structure
+
+
+@pytest.fixture
+def generate_kpoints_mesh():
+    """Return a `KpointsData` node with the provided mesh."""
+
+    def _generate_kpoints_mesh(mesh):
+        kpoints = orm.KpointsData()
+        kpoints.set_kpoints_mesh(mesh)
+        return kpoints
+
+    return _generate_kpoints_mesh
 
 
 @pytest.fixture
