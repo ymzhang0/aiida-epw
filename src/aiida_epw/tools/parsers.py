@@ -1,19 +1,52 @@
 """Manual parsing functions for post-processing."""
 
-import numpy
-import re
 import io
+import re
+
+import numpy
 
 Ry2eV = 13.605662285137
+
+
+def parse_epw_bands(file_content):
+    """Parse the contents of a `band.eig`-style EPW bands file."""
+    nbnd, _ = (
+        int(value)
+        for value in re.search(
+            r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", file_content
+        ).groups()
+    )
+    kpt_pattern = re.compile(r"^\s*([-\d\.]+)\s+([-\d\.]+)\s+([-\d\.]+)\s*$")
+    band_pattern = re.compile(r"\s+([-\d\.]+)" * nbnd)
+
+    parsed_data = {"kpoints": [], "bands": []}
+
+    for line in file_content.splitlines():
+        match_kpt = re.search(kpt_pattern, line)
+        if match_kpt:
+            parsed_data["kpoints"].append(match_kpt.groups())
+            continue
+
+        match_band = re.search(band_pattern, line)
+        if match_band:
+            parsed_data["bands"].append(match_band.groups())
+
+    parsed_data["kpoints"] = numpy.array(parsed_data["kpoints"], dtype=float)
+    parsed_data["bands"] = numpy.array(parsed_data["bands"], dtype=float)
+
+    return parsed_data
 
 
 def parse_epw_a2f(file_content):
     """Parse the contents of the `.a2f` file."""
     parsed_data = {}
 
-    a2f, footer = file_content.split("\n Integrated el-ph coupling")
+    a2f, footer = file_content.split("\n Integrated el-ph coupling", maxsplit=1)
 
-    a2f_array = numpy.array([line.split() for line in a2f.split("\n")], dtype=float)
+    a2f_array = numpy.array(
+        [line.split() for line in a2f.splitlines()[1:] if line.strip()],
+        dtype=float,
+    )
     parsed_data["frequency"] = a2f_array[:, 0]
     parsed_data["a2f"] = a2f_array[:, 1:]
 
@@ -29,9 +62,9 @@ def parse_epw_a2f(file_content):
         "Summed el-ph coupling": "summed_elph_coupling",
     }
     for line in footer:
-        for key, property in key_property_dict.items():
+        for key, property_name in key_property_dict.items():
             if key in line:
-                parsed_data[property] = float(line.split()[-1])
+                parsed_data[property_name] = float(line.split()[-1])
 
     return parsed_data
 
@@ -50,14 +83,31 @@ def parse_epw_max_eigenvalue(file_content):
     return parsed_data
 
 
+def parse_epw_eldos(file_content):
+    """Parse the contents of the electronic DOS file produced by EPW."""
+    dos = numpy.loadtxt(io.StringIO(file_content), dtype=float, comments="#")
+    return {
+        "energy": dos[:, 0],
+        "edos": dos[:, 1],
+        "integrated_dos": dos[:, 2],
+    }
+
+
+def parse_epw_phdos(file_content):
+    """Parse the contents of the phonon DOS file produced by EPW."""
+    phdos = numpy.loadtxt(io.StringIO(file_content), dtype=float, skiprows=1)
+    return {
+        "frequency": phdos[:, 0],
+        "phdos": phdos[:, 1:],
+    }
+
+
 def parse_epw_imag_iso(file_contents, prefix="aiida"):
     """Parse the isotropic gap functions from EPW isotropic Eliashberg equation calculation.
-    parameters:
-        folder: the folder containing the `imag_iso` files. When serving as a helper function, it can take a `Retrieved` folder from aiida .
-        When used independently, it can take a local folder.
-        prefix: the prefix of the `imag_iso` files.
-    returns:
-        parsed_data: a dictionary containing the isotropic gap functions of numpy array type and the corresponding temperatures as keys.
+
+    :param file_contents: mapping of file names to file contents.
+    :param prefix: the prefix of the `imag_iso` files.
+    :returns: dictionary containing the isotropic gap functions keyed by temperature.
     """
     parsed_data = {}
     pattern_iso = re.compile(rf"^{prefix}\.imag_iso_(\d{{3}}\.\d{{2}})$")
@@ -65,21 +115,20 @@ def parse_epw_imag_iso(file_contents, prefix="aiida"):
     for filename, file_content in file_contents.items():
         match = pattern_iso.match(filename)
         if match:
-            T = float(match.group(1))
+            temperature = float(match.group(1))
             gap_function = numpy.loadtxt(
                 io.StringIO(file_content), dtype=float, comments="#", skiprows=1
             )
-            parsed_data[T] = gap_function
+            parsed_data[temperature] = gap_function
     return parsed_data
 
 
 def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
     """Parse the anisotropic gap functions from EPW anisotropic Eliashberg equation calculation.
-    parameters:
-        file_contents: a dictionary containing the file contents with filename as keys.
-        prefix: the prefix of the `imag_aniso_gap0` files.
-    returns:
-        parsed_data: a sorted dictionary containing the anisotropic gap functions of numpy array type and the corresponding temperatures as keys.
+
+    :param file_contents: mapping of file names to file contents.
+    :param prefix: the prefix of the `imag_aniso_gap0` files.
+    :returns: dictionary containing the anisotropic gap functions keyed by temperature.
     """
     parsed_data = {}
     pattern_aniso_gap0 = re.compile(rf"^{prefix}\.imag_aniso_gap0_(\d{{3}}\.\d{{2}})$")
@@ -87,9 +136,9 @@ def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
     for filename, file_content in file_contents.items():
         match = pattern_aniso_gap0.match(filename)
         if match:
-            T = float(match.group(1))
+            temperature = float(match.group(1))
             gap_function = numpy.loadtxt(
                 io.StringIO(file_content), dtype=float, comments="#", skiprows=1
             )
-            parsed_data[T] = gap_function
+            parsed_data[temperature] = gap_function
     return parsed_data

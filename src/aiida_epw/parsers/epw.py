@@ -485,7 +485,7 @@ class EpwParser(BaseParser):
         phdos_xydata = orm.XyData()
         phdos = numpy.loadtxt(io.StringIO(content), dtype=float, skiprows=1)
         phdos_xydata.set_array("Frequency", phdos[:, 0])
-        phdos_xydata.set_array("PHDOS", phdos[:, 1])
+        phdos_xydata.set_array("PHDOS", phdos[:, 1:])
 
         return phdos_xydata
 

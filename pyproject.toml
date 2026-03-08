@@ -27,6 +27,22 @@ dependencies = [
     "numpy",
 ]
 
+[project.optional-dependencies]
+plot = [
+    "matplotlib",
+    "scipy",
+]
+
+[dependency-groups]
+test = [
+    "pytest",
+    "pytest-regressions",
+]
+dev = [
+    "pre-commit",
+    {include-group = "test"},
+]
+
 [project.urls]
 Source = "https://github.com/aiidaplugins/aiida-epw"
 

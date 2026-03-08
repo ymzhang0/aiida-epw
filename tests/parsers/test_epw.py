@@ -143,6 +143,22 @@ def test_parse_phdos_proj_preserves_all_projection_columns():
     ]
 
 
+def test_parse_phdos_preserves_all_smearing_columns():
+    """Test that the total phonon DOS keeps every smearing series."""
+    content = """w[meV] phdos[states/meV] for   3 smearing values
+   0.1000000   1.0000000   2.0000000   3.0000000
+   0.2000000   4.0000000   5.0000000   6.0000000
+"""
+
+    phdos = EpwParser.parse_phdos(content)
+
+    assert phdos.get_array("Frequency").tolist() == [0.1, 0.2]
+    assert phdos.get_array("PHDOS").tolist() == [
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+    ]
+
+
 def test_epw_calculation_registers_memory_exit_code():
     """Test that parser-side memory errors map to a defined calculation exit code."""
     assert EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT.status == 313
