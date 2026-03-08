@@ -317,6 +317,307 @@ class EpwCalculation(NamelistsCalculation):
 
         return "\n".join(file_lines) + "\n"
 
+    @staticmethod
+    def test_mesh_offset(offset):
+        """Validate that a mesh does not use an offset, which EPW cannot handle here."""
+        if any(value != 0.0 for value in offset):
+            raise NotImplementedError(
+                "Computation of electron-phonon on a mesh with non zero offset is not implemented, "
+                "at the level of epw.x"
+            )
+
+    @staticmethod
+    def write_kpoints_list_file(folder, filename, kpoints):
+        """Write an explicit k-point list to the EPW auxiliary file format."""
+        with folder.open(filename, "w") as handle:
+            handle.write(f"{len(kpoints)} crystal\n")
+            for kpoint in kpoints:
+                handle.write(
+                    " ".join(f"{coordinate:.12}" for coordinate in kpoint) + "   1.0\n"
+                )
+
+    def set_coarse_mesh_parameters(
+        self, parameters, input_name, mesh_parameter_names, error_message
+    ):
+        """Populate coarse mesh parameters from a required mesh input."""
+        try:
+            mesh, offset = self.inputs[input_name].get_kpoints_mesh()
+            self.test_mesh_offset(offset)
+        except NotImplementedError as exception:
+            raise exceptions.InputValidationError(error_message) from exception
+
+        for parameter_name, value in zip(mesh_parameter_names, mesh):
+            parameters["INPUTEPW"][parameter_name] = value
+
+    def set_fine_mesh_parameters(
+        self,
+        folder,
+        parameters,
+        input_name,
+        mesh_parameter_names,
+        filename_parameter_name,
+        filename,
+        error_message,
+    ):
+        """Populate fine-grid parameters from a mesh or explicit point list."""
+        try:
+            mesh, offset = self.inputs[input_name].get_kpoints_mesh()
+            self.test_mesh_offset(offset)
+            for parameter_name, value in zip(mesh_parameter_names, mesh):
+                parameters["INPUTEPW"][parameter_name] = value
+        except AttributeError:
+            kpoints = self.inputs[input_name].get_kpoints()
+            self.write_kpoints_list_file(folder, filename, kpoints)
+            parameters["INPUTEPW"][filename_parameter_name] = filename
+        except NotImplementedError as exception:
+            raise exceptions.InputValidationError(error_message) from exception
+
+    def get_namelists_to_print(self, settings):
+        """Return the namelists that should be written to the EPW input file."""
+        try:
+            namelists_toprint = settings.pop("NAMELISTS")
+            if not isinstance(namelists_toprint, list):
+                raise exceptions.InputValidationError(
+                    "The 'NAMELISTS' value, if specified in the settings input "
+                    "node, must be a list of strings"
+                )
+        except KeyError:
+            namelists_toprint = self._default_namelists
+
+        return namelists_toprint
+
+    def get_retrieve_list(self, parameters):
+        """Return the retrieve list implied by the EPW input parameters."""
+        retrieve_list = [self.metadata.options.output_filename]
+
+        if parameters["INPUTEPW"].get("band_plot"):
+            retrieve_list += [self._output_elbands_file, self._output_phbands_file]
+
+        if parameters["INPUTEPW"].get("eliashberg", False):
+            retrieve_list.append(self._OUTPUT_A2F_FILE)
+            if not parameters["INPUTEPW"].get("restart", False):
+                retrieve_list.append(self._OUTPUT_A2F_PROJ_FILE)
+                retrieve_list.append(self._OUTPUT_PHDOS_FILE)
+                retrieve_list.append(self._OUTPUT_PHDOS_PROJ_FILE)
+                retrieve_list.append(
+                    Path(self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE).as_posix()
+                )
+
+        if parameters["INPUTEPW"].get("liso", False) and not parameters["INPUTEPW"].get(
+            "tc_linear", False
+        ):
+            retrieve_list.append("aiida.imag_iso_*")
+
+        if parameters["INPUTEPW"].get("laniso", False):
+            retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
+            retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
+            retrieve_list.append("aiida.imag_aniso_gap*")
+
+        return retrieve_list
+
+    def get_parent_ph_qpoint_count(self, settings):
+        """Return the number of irreducible q-points that need to be staged from `ph.x`."""
+        if "NUMBER_OF_QPOINTS" in settings:
+            return settings.pop("NUMBER_OF_QPOINTS")
+
+        qibz_ar = []
+        for key, value in sorted(
+            self.inputs.parent_folder_ph.creator.outputs.output_parameters.get_dict().items()
+        ):
+            if key.startswith("dynamical_matrix_"):
+                qibz_ar.append(value["q_point"])
+
+        return len(qibz_ar)
+
+    @staticmethod
+    def get_parent_epw_path(parent_folder_epw):
+        """Return the filesystem path that should be used for EPW restart staging."""
+        if isinstance(parent_folder_epw, orm.RemoteStashFolderData):
+            return Path(parent_folder_epw.target_basepath)
+
+        return Path(parent_folder_epw.get_remote_path())
+
+    def stage_nscf_parent(self, remote_copy_list):
+        """Stage the NSCF output directory into the EPW working directory."""
+        if "parent_folder_nscf" not in self.inputs:
+            return
+
+        parent_folder_nscf = self.inputs.parent_folder_nscf
+        remote_copy_list.append(
+            (
+                parent_folder_nscf.computer.uuid,
+                Path(
+                    parent_folder_nscf.get_remote_path(),
+                    PwCalculation._OUTPUT_SUBFOLDER,
+                ).as_posix(),
+                self._OUTPUT_SUBFOLDER,
+            )
+        )
+
+    def stage_chk_parent(self, remote_list):
+        """Stage Wannier checkpoint files required by EPW."""
+        if "parent_folder_chk" not in self.inputs:
+            return
+
+        parent_folder_chk = self.inputs.parent_folder_chk
+
+        for suffix in ["chk", "bvec"]:
+            remote_list.append(
+                (
+                    parent_folder_chk.computer.uuid,
+                    Path(
+                        parent_folder_chk.get_remote_path(),
+                        f"{self._PREFIX}.{suffix}",
+                    ).as_posix(),
+                    f"{self._PREFIX}.{suffix}",
+                )
+            )
+
+        remote_list.append(
+            (
+                parent_folder_chk.computer.uuid,
+                Path(parent_folder_chk.get_remote_path(), f"{self._PREFIX}.mmn").as_posix(),
+                f"{self._PREFIX}.wannier90.mmn",
+            )
+        )
+
+    def stage_ph_parent(self, folder, settings, remote_list):
+        """Stage `ph.x` data needed by EPW into the local `save` directory."""
+        if "parent_folder_ph" not in self.inputs:
+            return
+
+        parent_folder_ph = self.inputs.parent_folder_ph
+        folder.get_subfolder(self._FOLDER_SAVE, create=True)
+
+        nqpt = self.get_parent_ph_qpoint_count(settings)
+
+        prefix = self._PREFIX
+        outdir = PhCalculation._OUTPUT_SUBFOLDER
+        fildvscf = PhCalculation._DVSCF_PREFIX
+        fildyn = PhCalculation._OUTPUT_DYNAMICAL_MATRIX_PREFIX
+        ph_path = Path(parent_folder_ph.get_remote_path())
+
+        remote_list.append(
+            (
+                parent_folder_ph.computer.uuid,
+                Path(ph_path, outdir, "_ph0", f"{prefix}.phsave").as_posix(),
+                self._FOLDER_SAVE,
+            )
+        )
+
+        for iqpt in range(1, nqpt + 1):
+            remote_list.append(
+                (
+                    parent_folder_ph.computer.uuid,
+                    Path(
+                        ph_path,
+                        outdir,
+                        "_ph0",
+                        "" if iqpt == 1 else f"{prefix}.q_{iqpt}",
+                        f"{prefix}.{fildvscf}1",
+                    ).as_posix(),
+                    Path(self._FOLDER_SAVE, f"{prefix}.dvscf_q{iqpt}").as_posix(),
+                )
+            )
+            remote_list.append(
+                (
+                    parent_folder_ph.computer.uuid,
+                    Path(ph_path, f"{fildyn}{iqpt}").as_posix(),
+                    Path(self._FOLDER_SAVE, f"{prefix}.dyn_q{iqpt}").as_posix(),
+                )
+            )
+
+    def stage_epw_parent(self, parameters, remote_list, remote_symlink_list):
+        """Stage restart files from a previous EPW calculation."""
+        if "parent_folder_epw" not in self.inputs:
+            return
+
+        parent_folder_epw = self.inputs.parent_folder_epw
+        epw_path = self.get_parent_epw_path(parent_folder_epw)
+        file_list = []
+
+        if parameters["INPUTEPW"].get("epwread", False) and parameters["INPUTEPW"].get(
+            "elph", False
+        ):
+            file_list = [
+                "crystal.fmt",
+                "epwdata.fmt",
+                "vmedata.fmt",
+                "dmedata.fmt",
+                f"{self._PREFIX}.kgmap",
+                f"{self._PREFIX}.kmap",
+                f"{self._PREFIX}.ukk",
+                f"{self._PREFIX}.mmn",
+                f"{self._PREFIX}.bvec",
+            ]
+            remote_symlink_list.append(
+                (
+                    parent_folder_epw.computer.uuid,
+                    Path(
+                        epw_path,
+                        f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
+                    ).as_posix(),
+                    Path(
+                        f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
+                    ).as_posix(),
+                )
+            )
+
+        if parameters["INPUTEPW"].get("eliashberg", False):
+            if parameters["INPUTEPW"].get("ephwrite", True):
+                if parameters["INPUTEPW"].get("restart", False):
+                    file_list = ["crystal.fmt", "restart.fmt", "selecq.fmt"]
+                    remote_symlink_list.append(
+                        (
+                            parent_folder_epw.computer.uuid,
+                            Path(
+                                epw_path,
+                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
+                            ).as_posix(),
+                            Path(
+                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
+                            ).as_posix(),
+                        )
+                    )
+            else:
+                file_list = ["crystal.fmt", "selecq.fmt"]
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(
+                            epw_path,
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
+                        ).as_posix(),
+                        Path(
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
+                        ).as_posix(),
+                    )
+                )
+
+        for filename in file_list:
+            remote_list.append(
+                (
+                    parent_folder_epw.computer.uuid,
+                    Path(epw_path, filename).as_posix(),
+                    Path(filename).as_posix(),
+                )
+            )
+
+    def stage_parent_folders(
+        self, folder, parameters, settings, remote_copy_list, remote_symlink_list
+    ):
+        """Stage all supported parent-folder inputs for the EPW calculation."""
+        remote_list = (
+            remote_symlink_list
+            if settings.pop("PARENT_FOLDER_SYMLINK", self._default_symlink_usage)
+            else remote_copy_list
+        )
+
+        self.stage_nscf_parent(remote_copy_list)
+        self.stage_chk_parent(remote_list)
+        self.stage_ph_parent(folder, settings, remote_list)
+        self.stage_epw_parent(parameters, remote_list, remote_symlink_list)
+
     def add_parallelization_to_cmdline_params(self, cmdline_params):
         """Return cmdline parameters with validated parallelization flags appended."""
         cmdline_params_result = list(cmdline_params)
@@ -371,18 +672,9 @@ class EpwCalculation(NamelistsCalculation):
         """
         # pylint: disable=too-many-statements,too-many-branches, protected-access
 
-        def test_offset(offset):
-            """Check if the grid has an offset."""
-            if any(i != 0.0 for i in offset):
-                raise NotImplementedError(
-                    "Computation of electron-phonon on a mesh with non zero offset is not implemented, "
-                    "at the level of epw.x"
-                )
-
         local_copy_list = []
         remote_copy_list = []
         remote_symlink_list = []
-        retrieve_list = [self.metadata.options.output_filename]
 
         parameters = self.normalize_parameters(self.inputs.parameters.get_dict())
 
@@ -400,221 +692,9 @@ class EpwCalculation(NamelistsCalculation):
         else:
             settings = {}
 
-        remote_list = (
-            remote_symlink_list
-            if settings.pop("PARENT_FOLDER_SYMLINK", self._default_symlink_usage)
-            else remote_copy_list
+        self.stage_parent_folders(
+            folder, parameters, settings, remote_copy_list, remote_symlink_list
         )
-
-        # If parent_folder_nscf is provided, we need to copy the nscf outdir to the epw folder.
-        # We don't do symlink because epw will append new files into this folder
-
-        if "parent_folder_nscf" in self.inputs:
-            parent_folder_nscf = self.inputs.parent_folder_nscf
-
-            remote_copy_list.append(
-                (
-                    parent_folder_nscf.computer.uuid,
-                    Path(
-                        parent_folder_nscf.get_remote_path(),
-                        PwCalculation._OUTPUT_SUBFOLDER,
-                    ).as_posix(),
-                    self._OUTPUT_SUBFOLDER,
-                )
-            )
-
-        # If parent_folder_chk is provided, we need to copy the .chk, .bvec, and .mmn files to the epw folder.
-        # We can do symlink for .chk and .bvec. .mmn file is already a symlink as defined in wannier workflow.
-        # Not that we do some modification to the .mmn file in site so here we rename it to avoid overwriting.
-        if "parent_folder_chk" in self.inputs:
-            parent_folder_chk = self.inputs.parent_folder_chk
-
-            for suffix in ["chk", "bvec"]:
-                remote_list.append(
-                    (
-                        parent_folder_chk.computer.uuid,
-                        Path(
-                            parent_folder_chk.get_remote_path(),
-                            self._PREFIX + "." + suffix,
-                        ).as_posix(),
-                        self._PREFIX + "." + suffix,
-                    )
-                )
-            remote_list.append(
-                (
-                    parent_folder_chk.computer.uuid,
-                    Path(
-                        parent_folder_chk.get_remote_path(),
-                        self._PREFIX + ".mmn",
-                    ).as_posix(),
-                    self._PREFIX + ".wannier90.mmn",
-                )
-            )
-
-        # If parent_folder_ph is provided, we need to copy the dvscf files from _ph0 folder
-        # into the save subfolder. This can be a symlink as the save folder will only be read by epw.x
-
-        if "parent_folder_ph" in self.inputs:
-            parent_folder_ph = self.inputs.parent_folder_ph
-
-            # Create the save folder with dvscf and dyn files
-            folder.get_subfolder(self._FOLDER_SAVE, create=True)
-
-            if "NUMBER_OF_QPOINTS" in settings:
-                nqpt = settings.pop("NUMBER_OF_QPOINTS")
-            else:
-                # List of IBZ q-point to be added below EPW. To be removed when removed from EPW.
-                qibz_ar = []
-                for key, value in sorted(
-                    parent_folder_ph.creator.outputs.output_parameters.get_dict().items()
-                ):
-                    if key.startswith("dynamical_matrix_"):
-                        qibz_ar.append(value["q_point"])
-
-                nqpt = len(qibz_ar)
-
-            # Append the required contents of the `save` folder to the remove copy list, copied from the `ph.x`
-            # calculation
-
-            prefix = self._PREFIX
-            outdir = PhCalculation._OUTPUT_SUBFOLDER
-            fildvscf = PhCalculation._DVSCF_PREFIX
-            fildyn = PhCalculation._OUTPUT_DYNAMICAL_MATRIX_PREFIX
-
-            ph_path = Path(parent_folder_ph.get_remote_path())
-
-            remote_list.append(
-                (
-                    parent_folder_ph.computer.uuid,
-                    Path(ph_path, outdir, "_ph0", f"{prefix}.phsave").as_posix(),
-                    "save",
-                )
-            )
-
-            for iqpt in range(1, nqpt + 1):
-                remote_list.append(
-                    (
-                        parent_folder_ph.computer.uuid,
-                        Path(
-                            ph_path,
-                            outdir,
-                            "_ph0",
-                            "" if iqpt == 1 else f"{prefix}.q_{iqpt}",
-                            f"{prefix}.{fildvscf}1",
-                        ).as_posix(),
-                        Path("save", f"{prefix}.dvscf_q{iqpt}").as_posix(),
-                    )
-                )
-                # The following code was a first attempt to also deal with PAW pseudos. Currently not supported.
-                #
-                # remote_copy_list.append((
-                #     parent_folder_ph.computer.uuid,
-                #     Path(
-                #     ph_path, outdir, '_ph0', '' if iqpt == 1 else f'{prefix}.q_{iqpt}', f'{prefix}.{fildvscf}_paw1'
-                #     ).as_posix(),
-                #     Path('save', f"{prefix}.dvscf_paw_q{iqpt}").as_posix()
-                # ))
-                remote_list.append(
-                    (
-                        parent_folder_ph.computer.uuid,
-                        Path(ph_path, f"{fildyn}{iqpt}").as_posix(),
-                        Path("save", f"{prefix}.dyn_q{iqpt}").as_posix(),
-                    )
-                )
-
-        # If parent_folder_epw is provided, we need to copy the .epmatwp file to the epw folder.
-        # We can do symlink for .epmatwp file.
-
-        if "parent_folder_epw" in self.inputs:
-            parent_folder_epw = self.inputs.parent_folder_epw
-            if isinstance(parent_folder_epw, orm.RemoteStashFolderData):
-                epw_path = Path(parent_folder_epw.target_basepath)
-            else:
-                epw_path = Path(parent_folder_epw.get_remote_path())
-
-            file_list = []
-
-            # If epwread = .true., it must be that prefix.epmatwp file is saved.
-            # From EPW 5.9, vmedata.fmt and dmedata.fmt are always saved and used no matter vme = dipole or wannier.
-            # and prefix.mmn, prefix.bvec are also used.
-            if parameters["INPUTEPW"].get("epwread", False) and parameters[
-                "INPUTEPW"
-            ].get("elph", False):
-                file_list = [
-                    "crystal.fmt",
-                    "epwdata.fmt",
-                    "vmedata.fmt",
-                    "dmedata.fmt",
-                    f"{self._PREFIX}.kgmap",
-                    f"{self._PREFIX}.kmap",
-                    f"{self._PREFIX}.ukk",
-                    f"{self._PREFIX}.mmn",
-                    f"{self._PREFIX}.bvec",
-                ]
-                # We force the .epmatwp file to be a symlink because it's quite large.
-
-                remote_symlink_list.append(
-                    (
-                        parent_folder_epw.computer.uuid,
-                        Path(
-                            epw_path,
-                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
-                        ).as_posix(),
-                        Path(
-                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
-                        ).as_posix(),
-                    )
-                )
-
-            ## If eliashberg = .true., we are doing superconductivity calculations.
-            if parameters["INPUTEPW"].get("eliashberg", False):
-                # if it is still writing ephmat folder, no matter it starts from scratch or from interrupted calculation,
-                # We should always have these file copied.
-                if parameters["INPUTEPW"].get("ephwrite", True):
-                    # In case it's a restart function, we should link the ephmat sub folder.
-                    if parameters["INPUTEPW"].get("restart", False):
-                        file_list = [
-                            "crystal.fmt",
-                            "restart.fmt",
-                            "selecq.fmt",
-                        ]
-                        remote_symlink_list.append(
-                            (
-                                parent_folder_epw.computer.uuid,
-                                Path(
-                                    epw_path,
-                                    f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
-                                ).as_posix(),
-                                Path(
-                                    f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
-                                ).as_posix(),
-                            )
-                        )
-                # It is only when ephwrite = .false. is explicitly specified, we can only
-                # link the ephmat sub folder.
-                else:
-                    file_list = ["crystal.fmt", "selecq.fmt"]
-                    remote_symlink_list.append(
-                        (
-                            parent_folder_epw.computer.uuid,
-                            Path(
-                                epw_path,
-                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
-                            ).as_posix(),
-                            Path(
-                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
-                            ).as_posix(),
-                        )
-                    )
-
-            for filename in file_list:
-                remote_list.append(
-                    (
-                        parent_folder_epw.computer.uuid,
-                        Path(epw_path, filename).as_posix(),
-                        Path(filename).as_posix(),
-                    )
-                )
         # check if wannierize is True and if parent_folder_epw or parent_folder_chk is provided
         wannierize = parameters["INPUTEPW"].get("wannierize", False)
 
@@ -637,107 +717,39 @@ class EpwCalculation(NamelistsCalculation):
         parameters["INPUTEPW"]["dvscf_dir"] = self._FOLDER_SAVE
         parameters["INPUTEPW"]["prefix"] = self._PREFIX
 
-        try:
-            mesh, offset = self.inputs.qpoints.get_kpoints_mesh()
-            test_offset(offset)
-            parameters["INPUTEPW"]["nq1"] = mesh[0]
-            parameters["INPUTEPW"]["nq2"] = mesh[1]
-            parameters["INPUTEPW"]["nq3"] = mesh[2]
-        except NotImplementedError as exception:
-            raise exceptions.InputValidationError(
-                "Cannot get the coarse q-point grid"
-            ) from exception
+        self.set_coarse_mesh_parameters(
+            parameters,
+            "qpoints",
+            ("nq1", "nq2", "nq3"),
+            "Cannot get the coarse q-point grid",
+        )
+        self.set_coarse_mesh_parameters(
+            parameters,
+            "kpoints",
+            ("nk1", "nk2", "nk3"),
+            "Cannot get the coarse k-point grid",
+        )
+        self.set_fine_mesh_parameters(
+            folder,
+            parameters,
+            "qfpoints",
+            ("nqf1", "nqf2", "nqf3"),
+            "filqf",
+            self._qfpoints_input_file,
+            "Cannot get the fine q-point grid",
+        )
+        self.set_fine_mesh_parameters(
+            folder,
+            parameters,
+            "kfpoints",
+            ("nkf1", "nkf2", "nkf3"),
+            "filkf",
+            self._kfpoints_input_file,
+            "Cannot get the fine k-point grid",
+        )
 
-        try:
-            mesh, offset = self.inputs.kpoints.get_kpoints_mesh()
-            test_offset(offset)
-            parameters["INPUTEPW"]["nk1"] = mesh[0]
-            parameters["INPUTEPW"]["nk2"] = mesh[1]
-            parameters["INPUTEPW"]["nk3"] = mesh[2]
-        except NotImplementedError as exception:
-            raise exceptions.InputValidationError(
-                "Cannot get the coarse k-point grid"
-            ) from exception
-
-        try:
-            mesh, offset = self.inputs.qfpoints.get_kpoints_mesh()
-            test_offset(offset)
-            parameters["INPUTEPW"]["nqf1"] = mesh[0]
-            parameters["INPUTEPW"]["nqf2"] = mesh[1]
-            parameters["INPUTEPW"]["nqf3"] = mesh[2]
-        except AttributeError:
-            qfpoints = self.inputs.qfpoints.get_kpoints()
-            with folder.open(self._qfpoints_input_file, "w") as handle:
-                handle.write(f"{len(qfpoints)} crystal\n")
-                for kpt in qfpoints:
-                    handle.write(
-                        " ".join([f"{coord:.12}" for coord in kpt]) + "   1.0\n"
-                    )
-            parameters["INPUTEPW"]["filqf"] = self._qfpoints_input_file
-        except NotImplementedError as exception:
-            raise exceptions.InputValidationError(
-                "Cannot get the fine q-point grid"
-            ) from exception
-
-        try:
-            mesh, offset = self.inputs.kfpoints.get_kpoints_mesh()
-            test_offset(offset)
-            parameters["INPUTEPW"]["nkf1"] = mesh[0]
-            parameters["INPUTEPW"]["nkf2"] = mesh[1]
-            parameters["INPUTEPW"]["nkf3"] = mesh[2]
-        except AttributeError:
-            kfpoints = self.inputs.kfpoints.get_kpoints()
-            with folder.open(self._kfpoints_input_file, "w") as handle:
-                handle.write(f"{len(kfpoints)} crystal\n")
-                for kpt in kfpoints:
-                    handle.write(
-                        " ".join([f"{coord:.12}" for coord in kpt]) + "   1.0\n"
-                    )
-            parameters["INPUTEPW"]["filkf"] = self._kfpoints_input_file
-        except NotImplementedError as exception:
-            raise exceptions.InputValidationError(
-                "Cannot get the fine k-point grid"
-            ) from exception
-
-        # If band_plot = .true., we need to retrieve the interpolated electronic and phonon bands.
-        if parameters["INPUTEPW"].get("band_plot"):
-            retrieve_list += ["band.eig", "phband.freq"]
-
-        # If eliashberg = .true., we need to retrieve the spectral function,
-        if parameters["INPUTEPW"].get("eliashberg", False):
-            retrieve_list.append(self._OUTPUT_A2F_FILE)
-            # if it's a first time calculation, epw.x will also output dos files for electron and phonon.
-            if not parameters["INPUTEPW"].get("restart", False):
-                retrieve_list.append(self._OUTPUT_A2F_PROJ_FILE)
-                retrieve_list.append(self._OUTPUT_PHDOS_FILE)
-                retrieve_list.append(self._OUTPUT_PHDOS_PROJ_FILE)
-                retrieve_list.append(
-                    Path(self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE).as_posix()
-                )
-
-        # If liso = .true., and we are not using linearized Eliashberg equations, we need to retrieve the isotropic gap function.
-        if parameters["INPUTEPW"].get("liso", False) and not parameters["INPUTEPW"].get(
-            "tc_linear", False
-        ):
-            retrieve_list.append("aiida.imag_iso_*")
-        # If laniso = .true., and, we need to retrieve the anisotropic gap function.
-        if parameters["INPUTEPW"].get("laniso", False):
-            retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
-            retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
-            retrieve_list.append("aiida.imag_aniso_gap*")
-
-        # customized namelists, otherwise not present in the distributed epw code
-        try:
-            namelists_toprint = settings.pop("NAMELISTS")
-            if not isinstance(namelists_toprint, list):
-                raise exceptions.InputValidationError(
-                    "The 'NAMELISTS' value, if specified in the settings input "
-                    "node, must be a list of strings"
-                )
-        except (
-            KeyError
-        ):  # list of namelists not specified in the settings; do automatic detection
-            namelists_toprint = self._default_namelists
+        retrieve_list = self.get_retrieve_list(parameters)
+        namelists_toprint = self.get_namelists_to_print(settings)
 
         file_content = self.generate_input_file(
             self.filter_namelists(parameters, namelists_toprint)
