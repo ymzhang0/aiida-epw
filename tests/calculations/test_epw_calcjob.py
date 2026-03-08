@@ -5,6 +5,7 @@ import pytest
 from aiida import orm
 from aiida.common.datastructures import StashMode
 from aiida.common import exceptions
+from aiida.common.warnings import AiidaDeprecationWarning
 from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 
@@ -175,6 +176,39 @@ def test_epw_rejects_parallelization_conflict_with_cmdline(
     )
 
     with pytest.raises(exceptions.InputValidationError, match="conflicts"):
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+
+@pytest.mark.parametrize("flag_name", ["npool", "nk", "ndiag", "northo"])
+def test_epw_parallelization_cmdline_deprecation_warning(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw, flag_name
+):
+    """Test that manual parallelization flags in CMDLINE emit the QE-style deprecation warning."""
+    extra_cmdline_args = [f"-{flag_name}", "2"]
+    inputs = generate_inputs_epw(settings=orm.Dict({"CMDLINE": extra_cmdline_args}))
+
+    with pytest.warns(AiidaDeprecationWarning) as captured_warnings:
+        calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert calc_info.codes_info[0].cmdline_params == extra_cmdline_args + [
+        "-in",
+        "aiida.in",
+    ]
+    assert any(
+        "parallelization flags" in str(warning.message)
+        for warning in captured_warnings.list
+    )
+
+
+def test_epw_rejects_duplicate_parallelization_aliases_in_cmdline(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that duplicate aliases to the same parallelization flag are rejected."""
+    inputs = generate_inputs_epw(
+        settings=orm.Dict({"CMDLINE": ["-nk", "2", "-npools", "2"]})
+    )
+
+    with pytest.raises(exceptions.InputValidationError, match="Conflicting"):
         generate_calc_job(fixture_sandbox, "epw.epw", inputs)
 
 

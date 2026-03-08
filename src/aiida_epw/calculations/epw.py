@@ -1,11 +1,14 @@
 """Plugin to create a Quantum Espresso epw.x input file."""
 
 import numbers
+import warnings
 from pathlib import Path
 
 from aiida import orm
 from aiida.common import datastructures, exceptions
+from aiida.common.warnings import AiidaDeprecationWarning
 from aiida_quantumespresso.calculations import (
+    BasePwCpInputGenerator,
     _lowercase_dict,
     _pop_parser_options,
     _uppercase_dict,
@@ -69,6 +72,7 @@ class EpwCalculation(NamelistsCalculation):
 
     # Not using symlink in pw to allow multiple nscf to run on top of the same scf
     _default_symlink_usage = False
+    _PARALLELIZATION_FLAGS = BasePwCpInputGenerator._PARALLELIZATION_FLAGS
     _ENABLED_PARALLELIZATION_FLAGS = (
         "nimage",
         "npool",
@@ -77,14 +81,7 @@ class EpwCalculation(NamelistsCalculation):
         "ndiag",
         "nhw",
     )
-    _PARALLELIZATION_FLAG_ALIASES = {
-        "nimage": ("ni", "nimages", "npot"),
-        "npool": ("nk", "npools"),
-        "nband": ("nb", "nbgrp", "nband_group"),
-        "ntg": ("nt", "ntask_groups", "nyfft"),
-        "ndiag": ("northo", "nd", "nproc_diag", "nproc_ortho"),
-        "nhw": ("nh", "n_howmany", "howmany"),
-    }
+    _PARALLELIZATION_FLAG_ALIASES = BasePwCpInputGenerator._PARALLELIZATION_FLAG_ALIASES
 
     @classmethod
     def define(cls, spec):
@@ -99,7 +96,13 @@ class EpwCalculation(NamelistsCalculation):
             valid_type=orm.Dict,
             required=False,
             validator=cls.validate_parallelization,
-            help="Optional command-line parallelization flags for `epw.x`.",
+            help=(
+                "Parallelization options. The following flags are allowed:\n"
+                + "\n".join(
+                    f"{flag_name:<7}: {cls._PARALLELIZATION_FLAGS[flag_name]}"
+                    for flag_name in cls._ENABLED_PARALLELIZATION_FLAGS
+                )
+            ),
         )
         spec.input(
             "parent_folder_nscf",
@@ -618,7 +621,7 @@ class EpwCalculation(NamelistsCalculation):
         self.stage_ph_parent(folder, settings, remote_list)
         self.stage_epw_parent(parameters, remote_list, remote_symlink_list)
 
-    def add_parallelization_to_cmdline_params(self, cmdline_params):
+    def _add_parallelization_flags_to_cmdline_params(self, cmdline_params):
         """Return cmdline parameters with validated parallelization flags appended."""
         cmdline_params_result = list(cmdline_params)
         cmdline_params_normalized = []
@@ -650,6 +653,11 @@ class EpwCalculation(NamelistsCalculation):
                         f"'{aliases_in_cmdline[0]}' specified in settings['CMDLINE'] "
                         f"conflicts with '{flag_name}' in the `parallelization` input."
                     )
+                warnings.warn(
+                    "Specifying the parallelization flags through settings['CMDLINE'] is "
+                    "deprecated, use the `parallelization` input instead.",
+                    AiidaDeprecationWarning,
+                )
                 continue
 
             if flag_name in parallelization_dict:
@@ -758,7 +766,7 @@ class EpwCalculation(NamelistsCalculation):
             infile.write(file_content)
 
         codeinfo = datastructures.CodeInfo()
-        codeinfo.cmdline_params = self.add_parallelization_to_cmdline_params(
+        codeinfo.cmdline_params = self._add_parallelization_flags_to_cmdline_params(
             list(settings.pop("CMDLINE", []))
         ) + ["-in", self.metadata.options.input_filename]
         codeinfo.stdout_name = self.metadata.options.output_filename
