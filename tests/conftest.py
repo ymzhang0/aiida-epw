@@ -17,6 +17,86 @@ pytest_plugins = "aiida.tools.pytest_fixtures"
 
 
 @pytest.fixture
+def fixture_sandbox():
+    """Return a `SandboxFolder`."""
+    from aiida.common.folders import SandboxFolder
+
+    with SandboxFolder() as folder:
+        yield folder
+
+
+@pytest.fixture
+def fixture_localhost(aiida_localhost):
+    """Return a localhost `Computer` configured for tests."""
+    localhost = aiida_localhost
+    localhost.set_default_mpiprocs_per_machine(1)
+    return localhost
+
+
+@pytest.fixture
+def fixture_code(aiida_code_installed):
+    """Return an installed code for the requested calculation entry point."""
+
+    def _fixture_code(entry_point_name):
+        return aiida_code_installed(
+            label=f"test.{entry_point_name}",
+            default_calc_job_plugin=entry_point_name,
+        )
+
+    return _fixture_code
+
+
+@pytest.fixture
+def generate_calc_job():
+    """Instantiate a calcjob and call `prepare_for_submission`."""
+
+    def _generate_calc_job(folder, entry_point_name, inputs=None):
+        from aiida.engine.utils import instantiate_process
+        from aiida.manage.manager import get_manager
+        from aiida.plugins import CalculationFactory
+
+        manager = get_manager()
+        runner = manager.get_runner()
+
+        process_class = CalculationFactory(entry_point_name)
+        process = instantiate_process(runner, process_class, **inputs)
+
+        return process.prepare_for_submission(folder)
+
+    return _generate_calc_job
+
+
+@pytest.fixture
+def generate_remote_data():
+    """Return a `RemoteData` node."""
+
+    def _generate_remote_data(computer, remote_path, entry_point_name=None):
+        from aiida.plugins.entry_point import format_entry_point_string
+
+        remote = orm.RemoteData(remote_path=remote_path)
+        remote.computer = computer
+
+        if entry_point_name is not None:
+            creator = orm.CalcJobNode(
+                computer=computer,
+                process_type=format_entry_point_string(
+                    "aiida.calculations", entry_point_name
+                ),
+            )
+            creator.set_option(
+                "resources", {"num_machines": 1, "num_mpiprocs_per_machine": 1}
+            )
+            remote.base.links.add_incoming(
+                creator, link_type=LinkType.CREATE, link_label="remote_folder"
+            )
+            creator.store()
+
+        return remote
+
+    return _generate_remote_data
+
+
+@pytest.fixture
 def files_path():
     """Path to the data files used for the tests."""
     return Path(__file__).parent / "files"

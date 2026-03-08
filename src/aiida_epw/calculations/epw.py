@@ -17,16 +17,22 @@ class EpwCalculation(CalcJob):
     # Keywords that cannot be set by the user but will be set by the plugin
     _blocked_keywords = [
         ("INPUTEPW", "outdir"),
-        ("INPUTEPW", "verbosity"),
         ("INPUTEPW", "prefix"),
         ("INPUTEPW", "dvscf_dir"),
-        ("INPUTEPW", "amass"),
         ("INPUTEPW", "nq1"),
         ("INPUTEPW", "nq2"),
         ("INPUTEPW", "nq3"),
         ("INPUTEPW", "nk1"),
         ("INPUTEPW", "nk2"),
         ("INPUTEPW", "nk3"),
+        ("INPUTEPW", "nqf1"),
+        ("INPUTEPW", "nqf2"),
+        ("INPUTEPW", "nqf3"),
+        ("INPUTEPW", "nkf1"),
+        ("INPUTEPW", "nkf2"),
+        ("INPUTEPW", "nkf3"),
+        ("INPUTEPW", "filqf"),
+        ("INPUTEPW", "filkf"),
     ]
 
     _use_kpoints = True
@@ -77,7 +83,11 @@ class EpwCalculation(CalcJob):
         spec.input("qpoints", valid_type=orm.KpointsData, help="coarse qpoint mesh")
         spec.input("kfpoints", valid_type=orm.KpointsData, help="fine kpoint mesh")
         spec.input("qfpoints", valid_type=orm.KpointsData, help="fine qpoint mesh")
-        spec.input("parameters", valid_type=orm.Dict, help="")
+        spec.input(
+            "parameters",
+            valid_type=orm.Dict,
+            help="",
+        )
         spec.input("settings", valid_type=orm.Dict, required=False, help="")
         spec.input(
             "parent_folder_nscf",
@@ -105,6 +115,7 @@ class EpwCalculation(CalcJob):
         )
 
         spec.inputs["metadata"]["options"]["parser_name"].default = "epw.epw"
+        spec.inputs.validator = cls.validate_inputs
 
         spec.output(
             "output_parameters",
@@ -211,6 +222,72 @@ class EpwCalculation(CalcJob):
             message="The parameters are not valid.",
         )
 
+    @classmethod
+    def normalize_parameters(cls, parameters):
+        """Return a copy of the input parameters with normalized namelist keys."""
+        parameters = _uppercase_dict(parameters, dict_name="parameters")
+        return {k: _lowercase_dict(v, dict_name=k) for k, v in parameters.items()}
+
+    @classmethod
+    def validate_blocked_keywords(cls, parameters):
+        """Raise if users try to override keywords that are managed by the plugin."""
+        for namelist, key in cls._blocked_keywords:
+            if key in parameters.get(namelist, {}):
+                raise exceptions.InputValidationError(
+                    f"`parameters.{namelist}.{key}` is set automatically by the plugin."
+                )
+
+    @classmethod
+    def validate_inputs(cls, value, _):
+        """Validate the top-level inputs for the calculation."""
+        parameters = cls.normalize_parameters(value["parameters"].get_dict())
+
+        if "INPUTEPW" not in parameters:
+            return "Required namelist `INPUTEPW` not in `parameters` input."
+
+        try:
+            cls.validate_blocked_keywords(parameters)
+        except exceptions.InputValidationError as exception:
+            return str(exception)
+
+        if parameters["INPUTEPW"].get("wannierize", False):
+            for input_name in ("parent_folder_epw", "parent_folder_chk"):
+                if input_name in value:
+                    return (
+                        f"`{input_name}` cannot be specified when "
+                        "`parameters.INPUTEPW.wannierize` is true."
+                    )
+
+    @staticmethod
+    def filter_namelists(parameters, namelists_toprint):
+        """Filter the normalized parameter dictionary to the namelists to be written."""
+        filtered = {}
+        for namelist_name in namelists_toprint:
+            filtered[namelist_name] = parameters.pop(namelist_name, {})
+
+        if parameters:
+            raise exceptions.InputValidationError(
+                "The following namelists are specified in parameters, but are not valid namelists for the current type "
+                f"of calculation: {','.join(list(parameters.keys()))}"
+            )
+
+        return filtered
+
+    @staticmethod
+    def generate_input_file(parameters):
+        """Generate the EPW input file from normalized namelist parameters."""
+        file_lines = []
+        for namelist_name, namelist in parameters.items():
+            file_lines.append(f"&{namelist_name}")
+            for key, value in sorted(namelist.items()):
+                entry = convert_input_to_namelist_entry(key, value).rstrip()
+                if key == "temps":
+                    entry = entry.replace("'", "")
+                file_lines.append(entry)
+            file_lines.append("/")
+
+        return "\n".join(file_lines) + "\n"
+
     def prepare_for_submission(self, folder):
         """Prepare the calculation job for submission by transforming input nodes into input files.
 
@@ -236,15 +313,14 @@ class EpwCalculation(CalcJob):
         remote_symlink_list = []
         retrieve_list = [self.metadata.options.output_filename]
 
-        parameters = _uppercase_dict(
-            self.inputs.parameters.get_dict(), dict_name="parameters"
-        )
-        parameters = {k: _lowercase_dict(v, dict_name=k) for k, v in parameters.items()}
+        parameters = self.normalize_parameters(self.inputs.parameters.get_dict())
 
         if "INPUTEPW" not in parameters:
             raise exceptions.InputValidationError(
                 "required namelist INPUTEPW not specified"
             )
+
+        self.validate_blocked_keywords(parameters)
 
         if "settings" in self.inputs:
             settings = _uppercase_dict(
@@ -474,10 +550,9 @@ class EpwCalculation(CalcJob):
         if wannierize and any(
             _ in self.inputs for _ in ["parent_folder_epw", "parent_folder_chk"]
         ):
-            self.report(
+            raise exceptions.InputValidationError(
                 "Should not have a parent folder of epw or chk if wannierize is True"
             )
-            return self.exit_codes.ERROR_PARAMETERS_NOT_VALID
 
         # check if nstemp is too large
         nstemp = parameters["INPUTEPW"].get("nstemp", None)
@@ -593,23 +668,11 @@ class EpwCalculation(CalcJob):
         ):  # list of namelists not specified in the settings; do automatic detection
             namelists_toprint = self._compulsory_namelists
 
+        file_content = self.generate_input_file(
+            self.filter_namelists(parameters, namelists_toprint)
+        )
         with folder.open(self.metadata.options.input_filename, "w") as infile:
-            for namelist_name in namelists_toprint:
-                infile.write(f"&{namelist_name}\n")
-                # namelist content; set to {} if not present, so that we leave an empty namelist
-                namelist = parameters.pop(namelist_name, {})
-                for key, value in sorted(namelist.items()):
-                    inputs = convert_input_to_namelist_entry(key, value)
-                    if key == "temps":
-                        inputs = inputs.replace("'", "")
-                    infile.write(inputs)
-                infile.write("/\n")
-
-        if parameters:
-            raise exceptions.InputValidationError(
-                "The following namelists are specified in parameters, but are not valid namelists for the current type "
-                f"of calculation: {','.join(list(parameters.keys()))}"
-            )
+            infile.write(file_content)
 
         codeinfo = datastructures.CodeInfo()
         codeinfo.cmdline_params = list(settings.pop("CMDLINE", [])) + [
@@ -620,6 +683,7 @@ class EpwCalculation(CalcJob):
         codeinfo.code_uuid = self.inputs.code.uuid
 
         calcinfo = datastructures.CalcInfo()
+        calcinfo.uuid = str(self.uuid)
         calcinfo.codes_info = [codeinfo]
         calcinfo.local_copy_list = local_copy_list
         calcinfo.remote_copy_list = remote_copy_list
