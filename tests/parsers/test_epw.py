@@ -1,6 +1,12 @@
 """Tests for the `EpwParser`."""
 
 import pytest
+from aiida import orm
+from aiida.common import LinkType
+from aiida.plugins.entry_point import (
+    format_entry_point_string,
+    get_entry_point_string_from_class,
+)
 
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.parsers.epw import EpwParser
@@ -63,3 +69,80 @@ def test_epw_failed_broyden_factor(parse_from_files, data_regression):
             "output_parameters": results["output_parameters"].get_dict(),
         }
     )
+
+
+def test_epw_reads_dos_from_output_subfolder(aiida_localhost, files_path):
+    """Test that DOS data is parsed even when retrieved inside the EPW output folder."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.store()
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_tree(
+        (files_path / "parsers" / "epw" / "default").as_posix()
+    )
+    retrieved.base.repository.put_object_from_file(
+        (files_path / "tools" / "parsers" / "a2f" / "aiida.dos").as_posix(),
+        "out/aiida.dos",
+    )
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    results, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished_ok, calcfunction.exit_message
+    assert "dos" in results
+    assert results["dos"].get_array("EDOS").shape == (160,)
+    assert "IDOS" in results["dos"].get_arraynames()
+
+
+def test_parse_a2f_supports_non_default_grid_lengths():
+    """Test that `.a2f` parsing does not assume a fixed number of spectral rows."""
+    content = """w[meV] a2f and integrated 2*a2f/w for   2 smearing values
+   0.1000000   1.0000000   2.0000000
+   0.2000000   3.0000000   4.0000000
+ Integrated el-ph coupling
+  #            0.1000000   0.2000000
+ Phonon smearing (meV)
+  #            0.5000000   0.6000000
+Electron smearing (eV)   0.0500000
+Fermi window (eV)   0.8000000
+"""
+
+    a2f, parsed = EpwParser.parse_a2f(content)
+
+    assert a2f.get_array("frequency").tolist() == [0.1, 0.2]
+    assert a2f.get_array("a2f").tolist() == [[1.0, 2.0], [3.0, 4.0]]
+    assert a2f.get_array("lambda").tolist() == [0.1, 0.2]
+    assert a2f.get_array("degaussq").tolist() == [0.5, 0.6]
+    assert parsed == {"degaussw": 0.05, "fsthick": 0.8}
+
+
+def test_parse_phdos_proj_preserves_all_projection_columns():
+    """Test that the projected phonon DOS keeps every projected series."""
+    content = """w[meV] phdos[states/meV] phdos_modeproj[states/meV]
+   0.1000000   1.0000000   2.0000000   3.0000000
+   0.2000000   4.0000000   5.0000000   6.0000000
+"""
+
+    phdos_proj = EpwParser.parse_phdos_proj(content)
+
+    assert phdos_proj.get_array("Frequency").tolist() == [0.1, 0.2]
+    assert phdos_proj.get_array("PHDOS_proj").tolist() == [
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+    ]
+
+
+def test_epw_calculation_registers_memory_exit_code():
+    """Test that parser-side memory errors map to a defined calculation exit code."""
+    assert EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT.status == 313

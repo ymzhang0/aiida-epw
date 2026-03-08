@@ -1,6 +1,7 @@
 """Parser for the EPW calculations."""
 
 import re
+from pathlib import Path
 
 import numpy
 from aiida import orm
@@ -20,6 +21,16 @@ class EpwParser(BaseParser):
         "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
     }
 
+    def get_retrieved_content(self, *filenames):
+        """Return the content of the first retrieved file that exists."""
+        for filename in filenames:
+            try:
+                return self.retrieved.base.repository.get_object_content(filename)
+            except FileNotFoundError:
+                continue
+
+        return None
+
     def parse(self, **kwargs):
         """Parse the retrieved files of a completed ``EpwCalculation`` into output nodes."""
         logs = get_logging_container()
@@ -35,93 +46,63 @@ class EpwParser(BaseParser):
         )
         parsed_data.update(parsed_epw)
 
-        if (
-            EpwCalculation._output_elbands_file
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            elbands_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._output_elbands_file
-            )
+        elbands_contents = self.get_retrieved_content(EpwCalculation._output_elbands_file)
+        if elbands_contents is not None:
             self.out(
                 "el_band_structure",
-                self.parse_bands(elbands_contents, self.node.inputs.kfpoints, "eV"),
+                self.parse_bands(
+                    elbands_contents, getattr(self.node.inputs, "kfpoints", None), "eV"
+                ),
             )
 
-        if (
-            EpwCalculation._output_phbands_file
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            phbands_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._output_phbands_file
-            )
+        phbands_contents = self.get_retrieved_content(EpwCalculation._output_phbands_file)
+        if phbands_contents is not None:
             self.out(
                 "ph_band_structure",
-                self.parse_bands(phbands_contents, self.node.inputs.qfpoints, "meV"),
+                self.parse_bands(
+                    phbands_contents, getattr(self.node.inputs, "qfpoints", None), "meV"
+                ),
             )
 
-        if (
-            EpwCalculation._OUTPUT_A2F_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            a2f_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_A2F_FILE
-            )
+        a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
+        if a2f_contents is not None:
             a2f_xydata, parsed_a2f = self.parse_a2f(a2f_contents)
             self.out("a2f", a2f_xydata)
             parsed_data.update(parsed_a2f)
 
-        if (
-            EpwCalculation._OUTPUT_DOS_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            dos_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_DOS_FILE
-            )
+        dos_contents = self.get_retrieved_content(
+            EpwCalculation._OUTPUT_DOS_FILE,
+            Path(EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE).as_posix(),
+        )
+        if dos_contents is not None:
             self.out("dos", self.parse_dos(dos_contents))
 
-        if (
-            EpwCalculation._OUTPUT_PHDOS_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            phdos_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_PHDOS_FILE
-            )
+        phdos_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_PHDOS_FILE)
+        if phdos_contents is not None:
             self.out("phdos", self.parse_phdos(phdos_contents))
 
-        if (
+        phdos_proj_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            phdos_proj_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
-            )
-            self.out("phdos_proj", self.parse_phdos(phdos_proj_contents))
+        )
+        if phdos_proj_contents is not None:
+            self.out("phdos_proj", self.parse_phdos_proj(phdos_proj_contents))
 
-        if (
+        a2f_proj_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_A2F_PROJ_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            a2f_proj_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_A2F_PROJ_FILE
-            )
+        )
+        if a2f_proj_contents is not None:
             self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
 
-        if (
+        lambda_FS_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_LAMBDA_FS_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            lambda_FS_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_LAMBDA_FS_FILE
-            )
+        )
+        if lambda_FS_contents is not None:
             self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
 
-        if (
+        lambda_k_pairs_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            lambda_k_pairs_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
-            )
+        )
+        if lambda_k_pairs_contents is not None:
             self.out(
                 "lambda_k_pairs",
                 self.parse_lambda_k_pairs(lambda_k_pairs_contents),
@@ -172,6 +153,9 @@ class EpwParser(BaseParser):
 
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
+
+        if "Allen_Dynes_Tc" in parsed_data:
+            parsed_data.setdefault("allen_dynes", parsed_data["Allen_Dynes_Tc"])
 
         self.out("output_parameters", orm.Dict(parsed_data))
 
@@ -376,8 +360,10 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_a2f(content):
         """Parse the contents of the `.a2f` file."""
+        a2f_block, _ = content.split("\n Integrated el-ph coupling", maxsplit=1)
         a2f_array = numpy.array(
-            [line.split() for line in content.splitlines()[1:501]], dtype=float
+            [line.split() for line in a2f_block.splitlines()[1:] if line.strip()],
+            dtype=float,
         )
 
         a2f_xydata = orm.XyData()
@@ -443,23 +429,30 @@ class EpwParser(BaseParser):
             int(v)
             for v in re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content).groups()
         )
-        # kpt_pattern = re.compile(r'\s([\s-][\d\.]+)' * 3)
+        kpt_pattern = re.compile(r"^\s*([-\d\.]+)\s+([-\d\.]+)\s+([-\d\.]+)\s*$")
         band_pattern = re.compile(r"\s+([-\d\.]+)" * nbnd)
 
-        # kpts = []
+        kpts = []
         bands = []
 
         for number, line in enumerate(content.splitlines()):
-            #     match_kpt = re.search(kpt_pattern, line)
-            #     if match_kpt and number % 2 == 1:
-            #         kpts.append(list(match_kpt.groups()))
+            match_kpt = re.search(kpt_pattern, line)
+            if match_kpt and number % 2 == 1:
+                kpts.append(list(match_kpt.groups()))
 
             match_band = re.search(band_pattern, line)
             if match_band and number % 2 == 0:
                 bands.append(list(match_band.groups()))
 
-        # kpoints_data = orm.KpointsData()
-        # kpoints_data.set_kpoints(numpy.array(kpts, dtype=float))
+        if kpoints_data is None:
+            if len(kpts) != nks:
+                raise ValueError(
+                    "Could not reconstruct the band k-points from the retrieved EPW file."
+                )
+
+            kpoints_data = orm.KpointsData()
+            kpoints_data.set_kpoints(numpy.array(kpts, dtype=float))
+
         bands = numpy.array(bands, dtype=float)
 
         bands_data = orm.BandsData()
@@ -479,6 +472,8 @@ class EpwParser(BaseParser):
 
         dos_xydata.set_array("Energy", dos[:, 0])
         dos_xydata.set_array("EDOS", dos[:, 1])
+        if dos.shape[1] > 2:
+            dos_xydata.set_array("IDOS", dos[:, 2])
 
         return dos_xydata
 
@@ -493,6 +488,18 @@ class EpwParser(BaseParser):
         phdos_xydata.set_array("PHDOS", phdos[:, 1])
 
         return phdos_xydata
+
+    @staticmethod
+    def parse_phdos_proj(content):
+        """Parse the contents of the `.phdos_proj` file."""
+        import io
+
+        phdos_proj_xydata = orm.XyData()
+        phdos_proj = numpy.loadtxt(io.StringIO(content), dtype=float, skiprows=1)
+        phdos_proj_xydata.set_array("Frequency", phdos_proj[:, 0])
+        phdos_proj_xydata.set_array("PHDOS_proj", phdos_proj[:, 1:])
+
+        return phdos_proj_xydata
 
     @staticmethod
     def parse_lambda_FS(content):

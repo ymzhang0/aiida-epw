@@ -199,6 +199,11 @@ class EpwCalculation(CalcJob):
             "ERROR_OUTPUT_STDOUT_INCOMPLETE",
             message="The stdout output file was incomplete probably because the calculation got interrupted.",
         )
+        spec.exit_code(
+            313,
+            "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
+            message="The required memory exceeds the EPW `max_memlt` setting.",
+        )
         # yapf: enable
         spec.exit_code(
             314,
