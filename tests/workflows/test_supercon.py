@@ -5,12 +5,74 @@ from types import SimpleNamespace
 import pytest
 
 from aiida import orm
+from aiida.common import AttributeDict, LinkType
+from aiida.engine import WorkChain
+from aiida.plugins.entry_point import format_entry_point_string
 
 from aiida_epw.workflows.base import EpwBaseWorkChain
 from aiida_epw.workflows.supercon import (
     SuperConWorkChain,
     get_restart_parent_folder,
 )
+
+
+def create_calcjob_descendant(computer, remote_path=None):
+    """Create a calcjob descendant with an optional `remote_folder` output."""
+    node = orm.CalcJobNode(
+        computer=computer,
+        process_type=format_entry_point_string("aiida.calculations", "epw.epw"),
+    )
+    node.set_option("resources", {"num_machines": 1, "num_mpiprocs_per_machine": 1})
+    node.store()
+
+    if remote_path is not None:
+        remote_folder = orm.RemoteData(computer=computer, remote_path=remote_path)
+        remote_folder.base.links.add_incoming(
+            node,
+            link_type=LinkType.CREATE,
+            link_label="remote_folder",
+        )
+        remote_folder.store()
+
+    return node
+
+
+def create_workchain_node_with_outputs(output_values):
+    """Create an `epw.base` workchain node exposing the given outputs."""
+    node = orm.WorkChainNode(
+        process_type=format_entry_point_string("aiida.workflows", "epw.base")
+    )
+    node.store()
+
+    for label, value in output_values.items():
+        if not value.is_stored:
+            value.store()
+        value.base.links.add_incoming(
+            node,
+            link_type=LinkType.RETURN,
+            link_label=label,
+        )
+
+    return node
+
+
+def make_cleanup_process(workchain_cls, clean_workdir, descendants, monkeypatch):
+    """Create a lightweight workchain instance for testing `on_terminated`."""
+    monkeypatch.setattr(WorkChain, "on_terminated", lambda self: None)
+    monkeypatch.setattr(
+        workchain_cls,
+        "inputs",
+        property(lambda self: self._inputs),
+        raising=False,
+    )
+
+    process = object.__new__(workchain_cls)
+    process._inputs = AttributeDict({"clean_workdir": orm.Bool(clean_workdir)})
+    process._node = SimpleNamespace(called_descendants=descendants)
+    reports = []
+    process.report = reports.append
+
+    return process, reports
 
 
 def make_process_labelled_outputs(process_label, **outputs):
@@ -296,3 +358,123 @@ def test_run_final_epw_iso_reuses_restart_meshes(
     assert submitted_inputs["qfpoints"].get_kpoints_mesh()[0] == [4, 4, 4]
     assert submitted_inputs["metadata"]["call_link_label"] == "epw_final_iso"
     assert submitted_inputs["parameters"].get_dict()["INPUTEPW"]["degaussq"] == 0.04
+
+
+def test_results_exposes_interpolation_outputs_without_final_steps(
+    generate_workchain, generate_inputs_supercon
+):
+    """Without final runs, the workchain should still expose the converged interpolation outputs."""
+    process = generate_workchain("epw.supercon", generate_inputs_supercon())
+    process.setup()
+    process.ctx.epw_interp = [
+        create_workchain_node_with_outputs(
+            {"output_parameters": orm.Dict({"Allen_Dynes_Tc": 10.0})}
+        )
+    ]
+
+    process.results()
+    process.update_outputs()
+
+    assert process.node.outputs.epw_final_a2f.output_parameters.get_dict() == {
+        "Allen_Dynes_Tc": 10.0
+    }
+    assert sorted(process.node.base.links.get_outgoing().all_link_labels()) == [
+        "epw_final_a2f__output_parameters"
+    ]
+
+
+def test_results_exposes_final_iso_and_aniso_outputs(
+    generate_workchain, generate_inputs_supercon
+):
+    """Final isotropic and anisotropic outputs should be exposed under their namespaces."""
+    process = generate_workchain("epw.supercon", generate_inputs_supercon())
+    process.setup()
+    process.ctx.epw_interp = [
+        create_workchain_node_with_outputs(
+            {"output_parameters": orm.Dict({"Allen_Dynes_Tc": 10.0})}
+        )
+    ]
+    process.ctx.final_epw_iso = create_workchain_node_with_outputs(
+        {"output_parameters": orm.Dict({"Tc": 9.5})}
+    )
+    process.ctx.final_epw_aniso = create_workchain_node_with_outputs(
+        {"output_parameters": orm.Dict({"Tc": 9.2})}
+    )
+
+    process.results()
+    process.update_outputs()
+
+    assert process.node.outputs.epw_final_iso.output_parameters.get_dict() == {
+        "Tc": 9.5
+    }
+    assert process.node.outputs.epw_final_aniso.output_parameters.get_dict() == {
+        "Tc": 9.2
+    }
+    assert sorted(process.node.base.links.get_outgoing().all_link_labels()) == [
+        "epw_final_a2f__output_parameters",
+        "epw_final_aniso__output_parameters",
+        "epw_final_iso__output_parameters",
+    ]
+
+
+def test_on_terminated_skips_cleanup_when_disabled(
+    fixture_localhost,
+    monkeypatch,
+):
+    """Disabling cleanup should leave descendant folders untouched."""
+    cleaned_paths = []
+    descendant = create_calcjob_descendant(fixture_localhost, "/remote/keep")
+
+    monkeypatch.setattr(
+        orm.RemoteData,
+        "_clean",
+        lambda self: cleaned_paths.append(self.get_remote_path()),
+    )
+
+    process, reports = make_cleanup_process(
+        SuperConWorkChain,
+        False,
+        [descendant],
+        monkeypatch,
+    )
+
+    process.on_terminated()
+
+    assert cleaned_paths == []
+    assert reports == ["remote folders will not be cleaned"]
+
+
+def test_on_terminated_cleans_calcjob_remote_folders(
+    fixture_localhost,
+    monkeypatch,
+):
+    """Cleanup should touch only calcjob descendants with removable remote folders."""
+    cleaned_paths = []
+    clean_descendant = create_calcjob_descendant(fixture_localhost, "/remote/clean")
+    failing_descendant = create_calcjob_descendant(fixture_localhost, "/remote/fail")
+    missing_remote = create_calcjob_descendant(fixture_localhost)
+    ignored_workchain = orm.WorkChainNode(
+        process_type=format_entry_point_string("aiida.workflows", "epw.base")
+    )
+    ignored_workchain.store()
+
+    def fake_clean(self):
+        if self.get_remote_path() == "/remote/fail":
+            raise OSError("synthetic failure")
+        cleaned_paths.append(self.get_remote_path())
+
+    monkeypatch.setattr(orm.RemoteData, "_clean", fake_clean)
+
+    process, reports = make_cleanup_process(
+        SuperConWorkChain,
+        True,
+        [clean_descendant, failing_descendant, missing_remote, ignored_workchain],
+        monkeypatch,
+    )
+
+    process.on_terminated()
+
+    assert cleaned_paths == ["/remote/clean"]
+    assert reports == [
+        f"cleaned remote folders of calculations: {clean_descendant.pk}"
+    ]
