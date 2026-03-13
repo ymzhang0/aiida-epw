@@ -102,6 +102,49 @@ def parse_epw_phdos(file_content):
     }
 
 
+def parse_epw_a2f_proj(file_content):
+    """Parse the contents of the projected `.a2f_proj` file."""
+    parsed = _parse_epw_projected_spectrum(file_content)
+    return {
+        "frequency": parsed["grid"],
+        "a2f_proj": parsed["series"],
+        "total_label": parsed["total_label"],
+        "projected_label": parsed["projected_label"],
+    }
+
+
+def parse_epw_phdos_proj(file_content):
+    """Parse the contents of the projected `.phdos_proj` file."""
+    parsed = _parse_epw_projected_spectrum(file_content)
+    return {
+        "frequency": parsed["grid"],
+        "phdos_proj": parsed["series"],
+        "total_label": parsed["total_label"],
+        "projected_label": parsed["projected_label"],
+    }
+
+
+def parse_epw_lambda_fs(file_content):
+    """Parse the contents of the `.lambda_FS` file."""
+    lambda_fs = _load_numeric_table(file_content, comments="#")
+    return {
+        "kpoints": lambda_fs[:, :3],
+        "band": lambda_fs[:, 3],
+        "energy": lambda_fs[:, 4],
+        "lambda": lambda_fs[:, 5],
+        "energy_units": "eV",
+    }
+
+
+def parse_epw_lambda_k_pairs(file_content):
+    """Parse the contents of the `.lambda_k_pairs` file."""
+    lambda_k_pairs = _load_numeric_table(file_content, comments="#")
+    return {
+        "lambda_nk": lambda_k_pairs[:, 0],
+        "rho": lambda_k_pairs[:, 1],
+    }
+
+
 def parse_epw_imag_iso(file_contents, prefix="aiida"):
     """Parse the isotropic gap functions from EPW isotropic Eliashberg equation calculation.
 
@@ -142,3 +185,37 @@ def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
             )
             parsed_data[temperature] = gap_function
     return parsed_data
+
+
+def _parse_epw_projected_spectrum(file_content):
+    """Parse a projected spectrum with one grid column and multiple series columns."""
+    lines = [line for line in file_content.splitlines() if line.strip()]
+    header_tokens = lines[0].split()
+    data_lines = [line for line in lines[1:] if _is_numeric_table_row(line)]
+    table = _load_numeric_table("\n".join(data_lines))
+
+    return {
+        "grid": table[:, 0],
+        "series": table[:, 1:],
+        "total_label": header_tokens[1] if len(header_tokens) > 1 else None,
+        "projected_label": " ".join(header_tokens[2:]) or None,
+    }
+
+
+def _load_numeric_table(file_content, **kwargs):
+    """Load a numeric table from in-memory text and preserve 2D shape for single-row tables."""
+    table = numpy.loadtxt(io.StringIO(file_content), dtype=float, **kwargs)
+    if table.ndim == 1:
+        table = table[numpy.newaxis, :]
+
+    return table
+
+
+def _is_numeric_table_row(line):
+    """Return whether a line begins with numeric tabular data."""
+    try:
+        float(line.split()[0])
+    except (IndexError, ValueError):
+        return False
+
+    return True

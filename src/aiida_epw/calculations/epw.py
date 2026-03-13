@@ -22,6 +22,7 @@ from aiida_epw.data import (
     A2fData,
     GapFunctionData,
     LambdaFSData,
+    LambdaKPairsData,
     ProjectedSpectrumData,
 )
 
@@ -187,7 +188,7 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "lambda_k_pairs",
-            valid_type=orm.XyData,
+            valid_type=LambdaKPairsData,
             required=False,
             help="The density of the electron-phonon coupling on the k-points.",
         )

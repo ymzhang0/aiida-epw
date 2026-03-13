@@ -13,6 +13,7 @@ from aiida_epw.data import (
     A2fData,
     GapFunctionData,
     LambdaFSData,
+    LambdaKPairsData,
     ProjectedSpectrumData,
 )
 from aiida_epw.parsers.epw import EpwParser
@@ -220,6 +221,22 @@ def test_parse_lambda_fs_returns_typed_data():
     assert lambda_fs.get_energies().tolist() == [0.3, 0.4]
     assert lambda_fs.get_lambda().tolist() == [0.9, 1.1]
     assert lambda_fs.get_array("Enk").tolist() == [0.3, 0.4]
+
+
+def test_parse_lambda_k_pairs_returns_typed_data():
+    """Test that `lambda_k_pairs` is parsed into `LambdaKPairsData`."""
+    content = """# lambda_nk rho
+ 0.1000 1.5000
+ 0.2000 2.5000
+"""
+
+    lambda_k_pairs = EpwParser.parse_lambda_k_pairs(content)
+
+    assert isinstance(lambda_k_pairs, LambdaKPairsData)
+    assert lambda_k_pairs.get_lambda_nk().tolist() == [0.1, 0.2]
+    assert lambda_k_pairs.get_rho().tolist() == [1.5, 2.5]
+    assert lambda_k_pairs.get_array("lambda_nk").tolist() == [0.1, 0.2]
+    assert lambda_k_pairs.get_array("rho").tolist() == [1.5, 2.5]
 
 
 def test_epw_calculation_registers_memory_exit_code():
