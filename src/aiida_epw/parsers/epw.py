@@ -10,7 +10,12 @@ from aiida_quantumespresso.utils.mapping import get_logging_container
 from packaging.version import Version
 
 from aiida_epw.calculations.epw import EpwCalculation
-from aiida_epw.data import A2fData, GapFunctionData
+from aiida_epw.data import (
+    A2fData,
+    GapFunctionData,
+    LambdaFSData,
+    ProjectedSpectrumData,
+)
 from aiida_epw.tools.parsers import (
     parse_epw_a2f,
     parse_epw_imag_aniso_gap0,
@@ -394,15 +399,14 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_a2f_proj(content):
         """Parse the contents of the `.a2f_proj` file."""
-        a2f_proj_xydata = orm.XyData()
-        a2f_proj_array = numpy.array(
-            [line.split() for line in content.splitlines()[1:-1]], dtype=float
+        return EpwParser.parse_projected_spectrum(
+            content,
+            kind="a2f_proj",
+            grid_name="frequency",
+            series_name="a2f_proj",
+            legacy_grid_name="frequency",
+            legacy_series_name="a2f_proj",
         )
-
-        a2f_proj_xydata.set_array("frequency", a2f_proj_array[:, 0])
-        a2f_proj_xydata.set_array("a2f_proj", a2f_proj_array[:, 1:])
-
-        return a2f_proj_xydata
 
     @staticmethod
     def parse_bands(content, kpoints_data, units):
@@ -474,29 +478,29 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_phdos_proj(content):
         """Parse the contents of the `.phdos_proj` file."""
-        import io
-
-        phdos_proj_xydata = orm.XyData()
-        phdos_proj = numpy.loadtxt(io.StringIO(content), dtype=float, skiprows=1)
-        phdos_proj_xydata.set_array("Frequency", phdos_proj[:, 0])
-        phdos_proj_xydata.set_array("PHDOS_proj", phdos_proj[:, 1:])
-
-        return phdos_proj_xydata
+        return EpwParser.parse_projected_spectrum(
+            content,
+            kind="phdos_proj",
+            grid_name="frequency",
+            series_name="phdos_proj",
+            legacy_grid_name="Frequency",
+            legacy_series_name="PHDOS_proj",
+        )
 
     @staticmethod
     def parse_lambda_FS(content):
         """Parse the contents of the `.lambda_FS` file."""
         import io
 
-        lambda_FS_arraydata = orm.ArrayData()
         lambda_FS = numpy.loadtxt(io.StringIO(content), dtype=float, comments="#")
-
-        lambda_FS_arraydata.set_array("kpoints", lambda_FS[:, :3])
-        lambda_FS_arraydata.set_array("band", lambda_FS[:, 3])
-        lambda_FS_arraydata.set_array("Enk", lambda_FS[:, 4])
-        lambda_FS_arraydata.set_array("lambda", lambda_FS[:, 5])
-
-        return lambda_FS_arraydata
+        lambda_fs_data = LambdaFSData()
+        lambda_fs_data.set_lambda_fs(
+            kpoints=lambda_FS[:, :3],
+            bands=lambda_FS[:, 3],
+            energies=lambda_FS[:, 4],
+            couplings=lambda_FS[:, 5],
+        )
+        return lambda_fs_data
 
     @staticmethod
     def parse_lambda_k_pairs(content):
@@ -520,3 +524,49 @@ class EpwParser(BaseParser):
         )
 
         return gap_function
+
+    @staticmethod
+    def parse_projected_spectrum(
+        content,
+        *,
+        kind,
+        grid_name,
+        series_name,
+        legacy_grid_name,
+        legacy_series_name,
+    ):
+        """Parse a projected spectrum with one grid column and multiple series columns."""
+        import io
+
+        lines = [line for line in content.splitlines() if line.strip()]
+        header_tokens = lines[0].split()
+        data_lines = [
+            line for line in lines[1:] if EpwParser._is_numeric_table_row(line)
+        ]
+        table = numpy.loadtxt(io.StringIO("\n".join(data_lines)), dtype=float)
+        if table.ndim == 1:
+            table = table[numpy.newaxis, :]
+
+        projected_spectrum = ProjectedSpectrumData()
+        projected_spectrum.set_projected_spectrum(
+            grid=table[:, 0],
+            series=table[:, 1:],
+            kind=kind,
+            grid_name=grid_name,
+            series_name=series_name,
+            total_label=header_tokens[1] if len(header_tokens) > 1 else None,
+            projected_label=" ".join(header_tokens[2:]) or None,
+            legacy_grid_name=legacy_grid_name,
+            legacy_series_name=legacy_series_name,
+        )
+        return projected_spectrum
+
+    @staticmethod
+    def _is_numeric_table_row(line):
+        """Return whether a line begins with numeric tabular data."""
+        try:
+            float(line.split()[0])
+        except (IndexError, ValueError):
+            return False
+
+        return True

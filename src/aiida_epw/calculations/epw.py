@@ -18,7 +18,12 @@ from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
-from aiida_epw.data import A2fData, GapFunctionData
+from aiida_epw.data import (
+    A2fData,
+    GapFunctionData,
+    LambdaFSData,
+    ProjectedSpectrumData,
+)
 
 
 class EpwCalculation(NamelistsCalculation):
@@ -152,7 +157,7 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "phdos_proj",
-            valid_type=orm.XyData,
+            valid_type=ProjectedSpectrumData,
             required=False,
             help="The phonon density of states projected on the atomic orbitals.",
         )
@@ -170,13 +175,13 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "a2f_proj",
-            valid_type=orm.XyData,
+            valid_type=ProjectedSpectrumData,
             required=False,
             help="The contents of the `.a2f_proj` file.",
         )
         spec.output(
             "lambda_FS",
-            valid_type=orm.ArrayData,
+            valid_type=LambdaFSData,
             required=False,
             help="The electron-phonon coupling on the Fermi surface.",
         )

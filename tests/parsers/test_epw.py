@@ -9,7 +9,12 @@ from aiida.plugins.entry_point import (
 )
 
 from aiida_epw.calculations.epw import EpwCalculation
-from aiida_epw.data import A2fData, GapFunctionData
+from aiida_epw.data import (
+    A2fData,
+    GapFunctionData,
+    LambdaFSData,
+    ProjectedSpectrumData,
+)
 from aiida_epw.parsers.epw import EpwParser
 
 
@@ -134,6 +139,26 @@ Fermi window (eV)   0.8000000
     assert parsed == {"degaussw": 0.05, "fsthick": 0.8}
 
 
+def test_parse_a2f_proj_returns_typed_data(files_path):
+    """Test the projected a2F parser returns `ProjectedSpectrumData`."""
+    content = (files_path / "tools" / "parsers" / "a2f" / "aiida.a2f_proj").read_text()
+
+    a2f_proj = EpwParser.parse_a2f_proj(content)
+
+    assert isinstance(a2f_proj, ProjectedSpectrumData)
+    assert a2f_proj.kind == "a2f_proj"
+    assert a2f_proj.grid_name == "frequency"
+    assert a2f_proj.series_name == "a2f_proj"
+    assert a2f_proj.total_label == "a2f"
+    assert a2f_proj.projected_label == "a2f_modeproj"
+    assert a2f_proj.get_grid().shape[0] == 500
+    assert a2f_proj.get_series().shape == (500, 4)
+    assert a2f_proj.get_total().shape == (500,)
+    assert a2f_proj.get_projected().shape == (500, 3)
+    assert a2f_proj.get_array("frequency").shape == (500,)
+    assert a2f_proj.get_array("a2f_proj").shape == (500, 4)
+
+
 def test_parse_phdos_proj_preserves_all_projection_columns():
     """Test that the projected phonon DOS keeps every projected series."""
     content = """w[meV] phdos[states/meV] phdos_modeproj[states/meV]
@@ -143,6 +168,16 @@ def test_parse_phdos_proj_preserves_all_projection_columns():
 
     phdos_proj = EpwParser.parse_phdos_proj(content)
 
+    assert isinstance(phdos_proj, ProjectedSpectrumData)
+    assert phdos_proj.total_label == "phdos[states/meV]"
+    assert phdos_proj.projected_label == "phdos_modeproj[states/meV]"
+    assert phdos_proj.get_grid().tolist() == [0.1, 0.2]
+    assert phdos_proj.get_series().tolist() == [
+        [1.0, 2.0, 3.0],
+        [4.0, 5.0, 6.0],
+    ]
+    assert phdos_proj.get_total().tolist() == [1.0, 4.0]
+    assert phdos_proj.get_projected().tolist() == [[2.0, 3.0], [5.0, 6.0]]
     assert phdos_proj.get_array("Frequency").tolist() == [0.1, 0.2]
     assert phdos_proj.get_array("PHDOS_proj").tolist() == [
         [1.0, 2.0, 3.0],
@@ -164,6 +199,27 @@ def test_parse_phdos_preserves_all_smearing_columns():
         [1.0, 2.0, 3.0],
         [4.0, 5.0, 6.0],
     ]
+
+
+def test_parse_lambda_fs_returns_typed_data():
+    """Test that `lambda_FS` is parsed into `LambdaFSData`."""
+    content = """# kx ky kz band Enk lambda
+ 0.0000 0.1000 0.2000 1 0.3000 0.9000
+ 0.5000 0.6000 0.7000 2 0.4000 1.1000
+"""
+
+    lambda_fs = EpwParser.parse_lambda_FS(content)
+
+    assert isinstance(lambda_fs, LambdaFSData)
+    assert lambda_fs.energy_units == "eV"
+    assert lambda_fs.get_kpoints().tolist() == [
+        [0.0, 0.1, 0.2],
+        [0.5, 0.6, 0.7],
+    ]
+    assert lambda_fs.get_bands().tolist() == [1.0, 2.0]
+    assert lambda_fs.get_energies().tolist() == [0.3, 0.4]
+    assert lambda_fs.get_lambda().tolist() == [0.9, 1.1]
+    assert lambda_fs.get_array("Enk").tolist() == [0.3, 0.4]
 
 
 def test_epw_calculation_registers_memory_exit_code():
