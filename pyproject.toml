@@ -54,6 +54,7 @@ Source = "https://github.com/aiidaplugins/aiida-epw"
 
 [project.entry-points.'aiida.data']
 'epw.a2f' = 'aiida_epw.data.a2f:A2fData'
+'epw.gap_function' = 'aiida_epw.data.gap_function:GapFunctionData'
 
 [project.entry-points.'aiida.workflows']
 'epw.base' = 'aiida_epw.workflows.base:EpwBaseWorkChain'
