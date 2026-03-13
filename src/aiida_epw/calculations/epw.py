@@ -223,6 +223,11 @@ class EpwCalculation(NamelistsCalculation):
             message="The retrieved folder data node could not be accessed.",
         )
         spec.exit_code(
+            400,
+            "ERROR_OUT_OF_WALLTIME",
+            message="The calculation stopped prematurely because it ran out of walltime.",
+        )
+        spec.exit_code(
             313,
             "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
             message="The required memory exceeds the EPW `max_memlt` setting.",

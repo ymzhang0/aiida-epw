@@ -66,6 +66,10 @@ class EpwParser(BaseParser):
 
         stdout, parsed_data, logs = self.parse_stdout_from_retrieved(logs)
 
+        # Preserve scheduler walltime failures instead of overriding them with parser-side stdout errors.
+        if self.node.exit_status == self.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status:
+            return self.exit(logs=logs)
+
         base_exit_code = self.check_base_errors(logs)
         if base_exit_code:
             return self.exit(base_exit_code, logs)

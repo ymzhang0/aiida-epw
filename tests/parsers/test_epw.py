@@ -1,5 +1,7 @@
 """Tests for the `EpwParser`."""
 
+import textwrap
+
 import pytest
 from aiida import orm
 from aiida.common import LinkType
@@ -242,6 +244,87 @@ def test_parse_lambda_k_pairs_returns_typed_data():
 def test_epw_calculation_registers_memory_exit_code():
     """Test that parser-side memory errors map to a defined calculation exit code."""
     assert EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT.status == 313
+
+
+def test_epw_calculation_registers_walltime_exit_code():
+    """Test that parser-side walltime errors map to a defined calculation exit code."""
+    assert EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME.status == 400
+
+
+def test_epw_out_of_walltime(aiida_localhost, tmp_path):
+    """Test that internal EPW walltime errors map to `ERROR_OUT_OF_WALLTIME`."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.store()
+
+    stdout_path = tmp_path / "aiida.out"
+    stdout_path.write_text(
+        textwrap.dedent(
+            """\
+            Program EPW v.5.7 starts on 15May2023 at  3: 7:50
+            Maximum CPU time exceeded
+            """
+        )
+    )
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_file(stdout_path.as_posix(), "aiida.out")
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    results, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished
+    assert calcfunction.is_failed
+    assert calcfunction.exit_status == EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME.status
+    assert "output_parameters" in results
+
+
+def test_epw_preserves_scheduler_out_of_walltime(aiida_localhost, tmp_path):
+    """Test that scheduler walltime failures are not overridden by parser errors."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.set_exit_status(EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status)
+    node.store()
+
+    stdout_path = tmp_path / "aiida.out"
+    stdout_path.write_text(
+        textwrap.dedent(
+            """\
+            Program EPW v.5.7 starts on 15May2023 at  3: 7:50
+            """
+        )
+    )
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_file(stdout_path.as_posix(), "aiida.out")
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    _, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished
+    assert calcfunction.is_failed
+    assert (
+        calcfunction.exit_status
+        == EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status
+    )
 
 
 def test_parse_iso_gap_functions_returns_typed_data(files_path):
