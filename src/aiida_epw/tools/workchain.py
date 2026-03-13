@@ -20,3 +20,15 @@ def find_related_calculation(parent_folder_epw):
         )
 
     return calculation
+
+
+def format_subprocess_failure(node, process_label=None):
+    """Return a readable failure message for a subprocess node."""
+    label = process_label or getattr(node, "process_label", node.__class__.__name__)
+    message = f"{label}<{node.pk}> failed with exit status {node.exit_status}"
+    exit_message = getattr(node, "exit_message", None)
+
+    if exit_message:
+        message = f"{message}: {exit_message}"
+
+    return message

@@ -312,6 +312,57 @@ def test_inspect_conv_uses_a2f_frequency_to_seed_degaussq(
     assert process.ctx.degaussq == pytest.approx(0.04)
 
 
+def test_inspect_conv_reports_child_exit_message(
+    generate_workchain, generate_inputs_supercon
+):
+    """Failed interpolation runs should surface the child exit message."""
+    process = generate_workchain("epw.supercon", generate_inputs_supercon())
+    process.setup()
+    reports = []
+    process.report = reports.append
+    process.ctx.epw_interp = [
+        SimpleNamespace(
+            pk=456,
+            is_finished_ok=False,
+            exit_status=400,
+            exit_message="The calculation stopped prematurely because it ran out of walltime.",
+        )
+    ]
+
+    process.inspect_conv()
+
+    assert process.ctx.epw_interp == []
+    assert reports == [
+        "EpwBaseWorkChain<456> failed with exit status 400: "
+        "The calculation stopped prematurely because it ran out of walltime."
+    ]
+
+
+def test_inspect_final_epw_iso_reports_child_exit_message():
+    """Failed final isotropic runs should report the child exit message."""
+    reports = []
+    process = SimpleNamespace(
+        ctx=SimpleNamespace(
+            final_epw_iso=SimpleNamespace(
+                pk=654,
+                is_finished_ok=False,
+                exit_status=310,
+                exit_message="The calculation failed with a known unrecoverable error.",
+            )
+        ),
+        report=reports.append,
+        exit_codes=SimpleNamespace(ERROR_SUB_PROCESS_EPW_ISO="sentinel"),
+    )
+
+    result = SuperConWorkChain.inspect_final_epw_iso(process)
+
+    assert result == "sentinel"
+    assert reports == [
+        "EpwBaseWorkChain<654> failed with exit status 310: "
+        "The calculation failed with a known unrecoverable error."
+    ]
+
+
 def test_run_conv_passes_restart_inputs(
     generate_workchain,
     generate_inputs_supercon,

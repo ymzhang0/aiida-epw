@@ -225,6 +225,31 @@ def test_results_exposes_transformation_outputs():
     assert captured == {"retrieved": retrieved, "epw_folder": stash}
 
 
+def test_inspect_wannier90_reports_child_exit_message():
+    """Failed Wannier90 steps should report the underlying exit message."""
+    reports = []
+    process = SimpleNamespace(
+        ctx=SimpleNamespace(
+            w90_class_name="Wannier90BandsWorkChain",
+            workchain_w90_bands=SimpleNamespace(
+                pk=321,
+                is_finished_ok=False,
+                exit_status=401,
+                exit_message="no convergence reached",
+            ),
+        ),
+        report=reports.append,
+        exit_codes=SimpleNamespace(ERROR_SUB_PROCESS_FAILED_WANNIER90="sentinel"),
+    )
+
+    result = EpwPrepWorkChain.inspect_wannier90(process)
+
+    assert result == "sentinel"
+    assert reports == [
+        "Wannier90BandsWorkChain<321> failed with exit status 401: no convergence reached"
+    ]
+
+
 def test_on_terminated_skips_cleanup_when_disabled(
     fixture_localhost,
     monkeypatch,

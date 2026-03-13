@@ -22,7 +22,10 @@ from aiida_wannier90_workflows.workflows.bands import (
     validate_inputs as validate_inputs_bands,
 )
 
-from aiida_epw.tools.workchain import get_parent_folder_calculation
+from aiida_epw.tools.workchain import (
+    format_subprocess_failure,
+    get_parent_folder_calculation,
+)
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
 
@@ -415,9 +418,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.workchain_w90_bands
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"{self.ctx.w90_class_name}<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, self.ctx.w90_class_name))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_WANNIER90
 
     def run_ph(self):
@@ -461,9 +462,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.workchain_ph
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"PhBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "PhBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_PHONON
 
     def run_epw(self):
@@ -520,9 +519,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.workchain_epw
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_EPW
 
     def should_run_epw_bands(self):
@@ -565,9 +562,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         """Verify that the `EpwBaseWorkChain` in bands interpolation mode finished successfully."""
         workchain = self.ctx.workchain_epw_bands
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_EPW_BANDS
 
     def results(self):

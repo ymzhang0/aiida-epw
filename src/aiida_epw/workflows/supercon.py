@@ -11,7 +11,10 @@ from aiida.engine import (
 )
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
-from aiida_epw.tools.workchain import find_related_calculation
+from aiida_epw.tools.workchain import (
+    find_related_calculation,
+    format_subprocess_failure,
+)
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
 
@@ -371,9 +374,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.epw_interp[-1]
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             self.ctx.epw_interp.pop()
         else:
             # self.ctx.final_interp = workchain.inputs.qfpoints_distance
@@ -434,9 +435,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.final_epw_iso
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_ISO
 
     def run_final_epw_aniso(self):
@@ -465,9 +464,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         workchain = self.ctx.final_epw_aniso
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_ANISO
 
     def results(self):
