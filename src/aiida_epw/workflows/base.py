@@ -392,13 +392,44 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.ctx.inputs.qfpoints = qfpoints
         self.ctx.inputs.kfpoints = kfpoints
 
+    def set_restart_from_calculation(self, calculation):
+        """Update the next EPW submission to restart from a previous calculation."""
+        remote_folder = getattr(getattr(calculation, "outputs", None), "remote_folder", None)
+        if remote_folder is None:
+            return False
+
+        parameters = self.ctx.inputs.parameters.get_dict()
+        inputepw = parameters.setdefault("INPUTEPW", {})
+
+        self.ctx.inputs.parent_folder_epw = remote_folder
+
+        if inputepw.get("elph", False):
+            inputepw["epwread"] = True
+
+        if inputepw.get("eliashberg", False) and inputepw.get("ephwrite", True):
+            inputepw["restart"] = True
+
+        self.ctx.inputs.parameters = orm.Dict(parameters)
+        return True
+
     def prepare_process(self):
         """Prepare inputs for the next calculation.
 
-        Currently, no modifications to `self.ctx.inputs` are needed before
-        submission. We rely on the parent `run_process` to create the builder.
+        If a previous calculation was marked as a clean EPW restart point, update
+        the inputs so the next iteration restarts from its remote folder.
         """
-        pass
+        restart_calc = getattr(self.ctx, "restart_calc", None)
+        if restart_calc is None:
+            return None
+
+        if not self.set_restart_from_calculation(restart_calc):
+            self.report(
+                f"Could not determine a remote folder for {restart_calc.process_label}<{restart_calc.pk}>."
+            )
+            return self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+
+        self.ctx.restart_calc = None
+        return None
 
     def report_error_handled(self, calculation, action):
         """Report an action taken for a calculation that has failed.
@@ -417,7 +448,44 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report("{}<{}> failed with exit status {}: {}".format(*arguments))
         self.report(f"Action taken: {action}")
 
-    @process_handler(priority=600)
+    @process_handler(
+        priority=610,
+        exit_codes=EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
+    )
+    def handle_scheduler_out_of_walltime(self, calculation):
+        """Abort scheduler walltime failures explicitly.
+
+        Unlike `ERROR_OUT_OF_WALLTIME`, a scheduler-enforced stop does not guarantee
+        that EPW wrote a restartable state, so avoid automatically reusing its folder.
+        """
+        action = (
+            "scheduler walltime detected before a clean EPW shutdown; "
+            "aborting instead of attempting an unsafe restart."
+        )
+        self.report_error_handled(calculation, action)
+        return ProcessHandlerReport(
+            True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+        )
+
+    @process_handler(
+        priority=605,
+        exit_codes=EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME,
+    )
+    def handle_out_of_walltime(self, calculation):
+        """Restart clean walltime exits from the latest EPW remote folder."""
+        if not self.set_restart_from_calculation(calculation):
+            action = "clean walltime exit detected but no remote folder is available, aborting..."
+            self.report_error_handled(calculation, action)
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        self.ctx.restart_calc = calculation
+        action = "clean walltime exit detected, restarting from the latest EPW remote folder."
+        self.report_error_handled(calculation, action)
+        return ProcessHandlerReport(True)
+
+    @process_handler(priority=500)
     def handle_unrecoverable_failure(self, calculation):
         """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""
         if calculation.is_failed and calculation.exit_status < 400:

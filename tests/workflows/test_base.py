@@ -5,8 +5,11 @@ import pytest
 from aiida import orm
 from aiida.common import LinkType
 from aiida.engine import ProcessHandlerReport
+from aiida.plugins import CalculationFactory
 
 from aiida_epw.workflows.base import EpwBaseWorkChain, validate_inputs
+
+EpwCalculation = CalculationFactory("epw.epw")
 
 
 def create_remote_data_with_creator(
@@ -36,6 +39,25 @@ def create_remote_data_with_creator(
     remote_data.store()
 
     return remote_data
+
+
+def create_failed_epw_calculation(exit_code, remote_folder=None):
+    """Return a minimal failed calculation-like object for handler tests."""
+    outputs = SimpleNamespace()
+    if remote_folder is not None:
+        outputs.remote_folder = remote_folder
+
+    return SimpleNamespace(
+        is_failed=True,
+        is_finished_ok=False,
+        is_excepted=False,
+        is_killed=False,
+        exit_status=exit_code.status,
+        exit_message=exit_code.message,
+        process_label="EpwCalculation",
+        pk=1,
+        outputs=outputs,
+    )
 
 
 @pytest.fixture
@@ -324,3 +346,94 @@ def test_handle_unrecoverable_failure(
     assert isinstance(result, ProcessHandlerReport)
     assert result.do_break is True
     assert result.exit_code == process.exit_codes.ERROR_UNRECOVERABLE_FAILURE
+
+
+def test_handle_out_of_walltime_prepares_epw_restart(
+    fixture_localhost,
+    generate_remote_data,
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Clean EPW walltime exits should restart from the latest remote folder."""
+    remote_folder = generate_remote_data(fixture_localhost, "/remote/restart")
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            parameters=orm.Dict({"INPUTEPW": {"elph": True}})
+        ),
+    )
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME, remote_folder=remote_folder
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result.status == 0
+
+    process.prepare_process()
+    parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
+
+    assert process.ctx.inputs.parent_folder_epw == remote_folder
+    assert parameters["epwread"] is True
+    assert getattr(process.ctx, "restart_calc", None) is None
+
+
+def test_handle_out_of_walltime_enables_eliashberg_restart(
+    fixture_localhost,
+    generate_remote_data,
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Eliashberg runs should switch on `restart` after a clean walltime exit."""
+    remote_folder = generate_remote_data(fixture_localhost, "/remote/eliashberg")
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            parameters=orm.Dict(
+                {"INPUTEPW": {"elph": True, "eliashberg": True, "ephwrite": True}}
+            )
+        ),
+    )
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME, remote_folder=remote_folder
+    )
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result.status == 0
+
+    process.prepare_process()
+    parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
+
+    assert process.ctx.inputs.parent_folder_epw == remote_folder
+    assert parameters["epwread"] is True
+    assert parameters["restart"] is True
+
+
+def test_handle_scheduler_out_of_walltime_aborts_explicitly(
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Scheduler walltime exits should not be retried blindly."""
+    process = generate_workchain("epw.base", generate_inputs_epw_base())
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
