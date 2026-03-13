@@ -437,3 +437,23 @@ def test_handle_scheduler_out_of_walltime_aborts_explicitly(
     result = process.inspect_process()
 
     assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+
+
+def test_handle_known_unrecoverable_failure_uses_dedicated_exit_code(
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Known unrecoverable EPW failures should use the dedicated workchain exit code."""
+    process = generate_workchain("epw.base", generate_inputs_epw_base())
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE

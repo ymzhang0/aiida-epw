@@ -449,6 +449,18 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report(f"Action taken: {action}")
 
     @process_handler(
+        priority=600,
+        exit_codes=[EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT],
+    )
+    def handle_known_unrecoverable_failure(self, calculation):
+        """Abort failures that are known to be unrecoverable."""
+        action = "known unrecoverable failure detected, aborting..."
+        self.report_error_handled(calculation, action)
+        return ProcessHandlerReport(
+            True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+        )
+
+    @process_handler(
         priority=610,
         exit_codes=EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
     )
