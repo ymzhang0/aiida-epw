@@ -11,7 +11,18 @@ import numpy as np
 from aiida import orm
 from scipy.optimize import curve_fit
 
+from aiida_epw.data import GapFunctionData
 from aiida_epw.tools.calculators import bcs_gap_function
+
+
+def _iter_gap_functions(gap_functions):
+    """Yield `(temperature, table)` pairs from typed or legacy gap-function data."""
+    if isinstance(gap_functions, GapFunctionData):
+        yield from gap_functions.get_itergap_functions()
+        return
+
+    for arrayname, array in gap_functions.get_iterarrays():
+        yield float(arrayname.replace("_", ".")), array
 
 #### Isotropic gap (Imaginary, real and ) vs. temeprature
 
@@ -29,12 +40,12 @@ def gap_iso_imag_temp(
     imag_delta = []
     imag_temp = []
 
-    for arrayname, array in iso_gap_function.get_iterarrays():
+    for temperature, array in _iter_gap_functions(iso_gap_function):
         gap = array[0, -1] * 1000
         if np.isnan(gap):
             continue
         imag_delta.append(gap)  # Convert to meV
-        imag_temp.append(float(arrayname.replace("_", ".")))
+        imag_temp.append(temperature)
 
     ##Plot
     fig = plt.figure(figsize=(4.5, 3.5))
@@ -87,10 +98,7 @@ def gap_aniso_temp(
     fig = plt.figure(figsize=(4.5, 2.8))
     ax1 = fig.add_subplot(111)
 
-    dict_files = {
-        float(arrayname.replace("_", ".")): array
-        for arrayname, array in aniso_gap_functions.get_iterarrays()
-    }
+    dict_files = dict(_iter_gap_functions(aniso_gap_functions))
     # Determine the maximum y-limit value from the first file's data
     max_y_value = max(dict_files[list(dict_files.keys())[0]][:, 1]) if dict_files else 1
     Ts = []

@@ -10,8 +10,12 @@ from aiida_quantumespresso.utils.mapping import get_logging_container
 from packaging.version import Version
 
 from aiida_epw.calculations.epw import EpwCalculation
-from aiida_epw.data import A2fData
-from aiida_epw.tools.parsers import parse_epw_a2f
+from aiida_epw.data import A2fData, GapFunctionData
+from aiida_epw.tools.parsers import (
+    parse_epw_a2f,
+    parse_epw_imag_aniso_gap0,
+    parse_epw_imag_iso,
+)
 
 
 class EpwParser(BaseParser):
@@ -37,6 +41,14 @@ class EpwParser(BaseParser):
                 continue
 
         return None
+
+    def get_retrieved_contents_matching(self, pattern):
+        """Return retrieved file contents whose names match a compiled regex pattern."""
+        return {
+            filename: self.retrieved.base.repository.get_object_content(filename)
+            for filename in self.retrieved.base.repository.list_object_names()
+            if pattern.match(filename)
+        }
 
     def parse(self, **kwargs):
         """Parse the retrieved files of a completed ``EpwCalculation`` into output nodes."""
@@ -115,48 +127,23 @@ class EpwParser(BaseParser):
                 self.parse_lambda_k_pairs(lambda_k_pairs_contents),
             )
 
-        pattern_iso = re.compile(r"aiida\.imag_iso_(\d+)\.(\d+)$")
-
-        imag_iso_filecontents = [
-            (
-                str(float(f"{match.group(1)}.{match.group(2)}")),
-                self.retrieved.base.repository.get_object_content(filename),
+        iso_gap_filecontents = self.get_retrieved_contents_matching(
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
+        )
+        if iso_gap_filecontents:
+            self.out(
+                "iso_gap_functions",
+                self.parse_iso_gap_functions(iso_gap_filecontents),
             )
-            for filename in self.retrieved.base.repository.list_object_names()
-            if (match := pattern_iso.match(filename))
-        ]
 
-        if imag_iso_filecontents != []:
-            iso_gap_functions_arraydata = orm.ArrayData()
-            for T, imag_iso_filecontent in imag_iso_filecontents:
-                iso_gap_function = self.parse_gap_function(
-                    imag_iso_filecontent, skiprows=1
-                )
-                iso_gap_functions_arraydata.set_array(
-                    T.replace(".", "_"), iso_gap_function
-                )
-            self.out("iso_gap_functions", iso_gap_functions_arraydata)
-
-        pattern_aniso = re.compile(r"aiida\.imag_aniso_gap\d+_(\d+)\.(\d+)$")
-
-        imag_aniso_filecontents = [
-            (
-                str(float(f"{match.group(1)}.{match.group(2)}")),
-                self.retrieved.base.repository.get_object_content(filename),
+        aniso_gap_filecontents = self.get_retrieved_contents_matching(
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_aniso_gap0_\d+\.\d+$")
+        )
+        if aniso_gap_filecontents:
+            self.out(
+                "aniso_gap_functions",
+                self.parse_aniso_gap_functions(aniso_gap_filecontents),
             )
-            for filename in self.retrieved.base.repository.list_object_names()
-            if (match := pattern_aniso.match(filename))
-        ]
-
-        if imag_aniso_filecontents != []:
-            aniso_gap_functions_arraydata = orm.ArrayData()
-            for T, imag_aniso_filecontent in imag_aniso_filecontents:
-                aniso_gap_function = self.parse_gap_function(imag_aniso_filecontent)
-                aniso_gap_functions_arraydata.set_array(
-                    T.replace(".", "_"), aniso_gap_function
-                )
-
-            self.out("aniso_gap_functions", aniso_gap_functions_arraydata)
 
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
@@ -385,6 +372,24 @@ class EpwParser(BaseParser):
             "fsthick": parsed_a2f["fermi_window"],
         }
         return a2f_data, parsed_data
+
+    @staticmethod
+    def parse_iso_gap_functions(file_contents):
+        """Parse isotropic gap-function files into a typed datatype."""
+        gap_functions = parse_epw_imag_iso(file_contents, prefix=EpwCalculation._PREFIX)
+        gap_function_data = GapFunctionData()
+        gap_function_data.set_gap_functions(gap_functions, kind="iso")
+        return gap_function_data
+
+    @staticmethod
+    def parse_aniso_gap_functions(file_contents):
+        """Parse anisotropic gap-function files into a typed datatype."""
+        gap_functions = parse_epw_imag_aniso_gap0(
+            file_contents, prefix=EpwCalculation._PREFIX
+        )
+        gap_function_data = GapFunctionData()
+        gap_function_data.set_gap_functions(gap_functions, kind="aniso")
+        return gap_function_data
 
     @staticmethod
     def parse_a2f_proj(content):

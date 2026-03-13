@@ -18,7 +18,7 @@ from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
-from aiida_epw.data import A2fData
+from aiida_epw.data import A2fData, GapFunctionData
 
 
 class EpwCalculation(NamelistsCalculation):
@@ -200,13 +200,13 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "iso_gap_functions",
-            valid_type=orm.ArrayData,
+            valid_type=GapFunctionData,
             required=False,
             help="The interpolated isotropic gap function.",
         )
         spec.output(
             "aniso_gap_functions",
-            valid_type=orm.ArrayData,
+            valid_type=GapFunctionData,
             required=False,
             help="The interpolated anisotropic gap function.",
         )
