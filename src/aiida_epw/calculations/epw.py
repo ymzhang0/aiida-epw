@@ -9,9 +9,8 @@ from aiida.common import datastructures, exceptions
 from aiida.common.warnings import AiidaDeprecationWarning
 from aiida_quantumespresso.calculations import (
     BasePwCpInputGenerator,
-    _lowercase_dict,
     _pop_parser_options,
-    _uppercase_dict,
+    _case_transform_dict,
 )
 from aiida_quantumespresso.calculations.namelists import NamelistsCalculation
 from aiida_quantumespresso.calculations.ph import PhCalculation
@@ -25,6 +24,12 @@ from aiida_epw.data import (
     LambdaKPairsData,
     ProjectedSpectrumData,
 )
+
+def _lowercase_dict(dictionary, dict_name):
+    return _case_transform_dict(dictionary, dict_name, '_lowercase_dict', str.lower)
+
+def _uppercase_dict(dictionary, dict_name):
+    return _case_transform_dict(dictionary, dict_name, '_uppercase_dict', str.upper)
 
 
 class EpwCalculation(NamelistsCalculation):

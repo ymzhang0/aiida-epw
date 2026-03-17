@@ -33,13 +33,22 @@ def get_target_basepath(computer):
     """Set the target basepath for the stash folder."""
     if computer.transport_type == "core.local":
         target_basepath = Path(computer.get_workdir(), "stash").as_posix()
-    elif computer.transport_type == "core.ssh":
-        target_basepath = Path(
-            computer.get_workdir().format(
-                username=computer.get_configuration()["username"]
-            ),
-            "stash",
-        ).as_posix()
+    elif computer.transport_type.startswith("core.ssh"):
+        workdir = computer.get_workdir()
+        if "{username}" in workdir:
+            username = computer.get_configuration().get("username")
+            if not username:
+                try:
+                    from aiida.orm import User
+                    auth_info = computer.get_authinfo(User.objects.get_default())
+                    username = auth_info.get_auth_params().get("username")
+                except Exception:
+                    pass
+            if not username:
+                raise ValueError(f"Could not determine username to format workdir for computer '{computer.label}'")
+            target_basepath = Path(workdir.format(username=username), "stash").as_posix()
+        else:
+            target_basepath = Path(workdir, "stash").as_posix()
     else:
         raise ValueError(f"Unsupported transport type: {computer.transport_type}")
     return target_basepath
