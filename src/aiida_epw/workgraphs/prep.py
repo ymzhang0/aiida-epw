@@ -295,15 +295,15 @@ def prep(
     should_run_w90 = should_run_wannier90(w90_parameters=w90_bands.get("wannier90", {}).get("wannier90", {}).get("parameters"))
     with If(should_run_w90.result):
         w90_inputs = recursive_merge(w90_bands, {"structure": structure})
-        w90_inputs.setdefault("scf", {})["kpoints"] = reciprocal_points.outputs.kpoints_scf
-        w90_inputs.setdefault("nscf", {})["kpoints"] = reciprocal_points.outputs.kpoints_nscf
-        w90_inputs.setdefault("wannier90", {}).setdefault("wannier90", {})["kpoints"] = reciprocal_points.outputs.kpoints_nscf
+        w90_inputs.setdefault("scf", {})["kpoints"] = reciprocal_points.kpoints_scf
+        w90_inputs.setdefault("nscf", {})["kpoints"] = reciprocal_points.kpoints_nscf
+        w90_inputs.setdefault("wannier90", {}).setdefault("wannier90", {})["kpoints"] = reciprocal_points.kpoints_nscf
         
         updated_parameters = update_wannier90_parameters(
             parameters=w90_bands["wannier90"]["wannier90"]["parameters"],
-            kpoints_nscf=reciprocal_points.outputs.kpoints_nscf,
+            kpoints_nscf=reciprocal_points.kpoints_nscf,
         )
-        w90_inputs["wannier90"]["wannier90"]["parameters"] = updated_parameters.outputs.parameters
+        w90_inputs["wannier90"]["wannier90"]["parameters"] = updated_parameters.parameters
 
         if "reference_bands" in w90_bands:
             wannier90_run = Wannier90OptimizeTask(**w90_inputs)
@@ -311,7 +311,7 @@ def prep(
             wannier90_run = Wannier90BandsTask(**w90_inputs)
 
     phonons_inputs = recursive_merge(ph_base, {
-        "qpoints": reciprocal_points.outputs.qpoints,
+        "qpoints": reciprocal_points.qpoints,
         "ph": {"parent_folder": wannier90_run.outputs["scf.remote_folder"]},
     })
     phonons_run = PhBaseTask(**phonons_inputs)
@@ -319,12 +319,12 @@ def prep(
     kfpoints = create_kpoints_gamma()
     epw_inputs = recursive_merge(epw_base, {
         "structure": structure,
-        "parent_folder_ph": phonons_run.outputs.remote_folder,
+        "parent_folder_ph": phonons_run.remote_folder,
         "parent_folder_nscf": wannier90_run.outputs["nscf.remote_folder"],
-        "kpoints": reciprocal_points.outputs.kpoints_nscf,
-        "kfpoints": kfpoints.outputs.result,
-        "qpoints": reciprocal_points.outputs.qpoints,
-        "qfpoints": kfpoints.outputs.result,
+        "kpoints": reciprocal_points.kpoints_nscf,
+        "kfpoints": kfpoints.result,
+        "qpoints": reciprocal_points.qpoints,
+        "qfpoints": kfpoints.result,
     })
     
     if "reference_bands" in w90_bands and w90_bands.get("optimize_disproj"):
@@ -341,9 +341,9 @@ def prep(
     with If(should_run_bands.result):
         epw_bands_inputs = recursive_merge(epw_bands, {
             "structure": structure,
-            "parent_folder_epw": epw_run.outputs.remote_stash,
-            "kpoints": reciprocal_points.outputs.kpoints_nscf,
-            "qpoints": reciprocal_points.outputs.qpoints,
+            "parent_folder_epw": epw_run.remote_stash,
+            "kpoints": reciprocal_points.kpoints_nscf,
+            "qpoints": reciprocal_points.qpoints,
         })
         
         if "bands_kpoints" in w90_bands:
@@ -356,8 +356,8 @@ def prep(
              else:
                  band_structure = wannier90_run.outputs["wannier90.band_structure"]
              bands_kpoints_task = prepare_epw_bands_kpoints(band_structure)
-             epw_bands_inputs["qfpoints"] = bands_kpoints_task.outputs.bands_kpoints
-             epw_bands_inputs["kfpoints"] = bands_kpoints_task.outputs.bands_kpoints
+             epw_bands_inputs["qfpoints"] = bands_kpoints_task.bands_kpoints
+             epw_bands_inputs["kfpoints"] = bands_kpoints_task.bands_kpoints
              
         epw_bands_run = EpwBaseTask(**epw_bands_inputs)
 
