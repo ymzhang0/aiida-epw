@@ -8,6 +8,8 @@ from typing import Any
 from aiida import orm
 from aiida.engine import ProcessBuilder
 from aiida_workgraph import If, spec, task
+from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import create_kpoints_from_distance
+from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 from aiida_quantumespresso.workflows.ph.base import PhBaseWorkChain
 from aiida_wannier90_workflows.utils.kpoints import get_explicit_kpoints
 from aiida_wannier90_workflows.workflows import (
@@ -16,40 +18,52 @@ from aiida_wannier90_workflows.workflows import (
 )
 from aiida_wannier90_workflows.common.types import WannierProjectionType
 
-from aiida_epw.tools.workchain import get_parent_folder_calculation
+from aiida_epw.tools.workchain import get_parent_folder_calculation, get_target_basepath
 from aiida_epw.workflows.base import EpwBaseWorkChain
 from aiida_epw.workflows.prep import should_run_bands_interpolation, validate_inputs
 
 Wannier90BandsTask = task(Wannier90BandsWorkChain)
 Wannier90OptimizeTask = task(Wannier90OptimizeWorkChain)
 PhBaseTask = task(PhBaseWorkChain)
-from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import create_kpoints_from_distance
-from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 EpwBaseTask = task(EpwBaseWorkChain)
 
 __all__ = (
     "prep",
 )
 
-
-
 @task.calcfunction(
     outputs=spec.namespace(
-        kpoints_nscf_mesh=Any,
-        kpoints_nscf_explicit=Any,
+        kpoints_scf=Any,
+        qpoints=Any,
+        kpoints_nscf=Any,
     )
 )
-def generate_nscf_kpoints(qpoints, kpoints_factor_nscf):
-    """Generate the NSCF k-point meshes for the EPW parameters."""
+def generate_reciprocal_points(structure, force_parity, kpoints_distance_scf, qpoints_distance, kpoints_factor_nscf):
+    """Generate the SCF k-point mesh, Q-point mesh, and NSCF k-point mesh for the EPW parameters."""
+    inputs_scf = {
+        "structure": structure,
+        "distance": kpoints_distance_scf,
+        "force_parity": force_parity,
+        "metadata": {"call_link_label": "create_kpoints_from_distance"},
+    }
+    inputs_q = {
+        "structure": structure,
+        "distance": qpoints_distance,
+        "force_parity": force_parity,
+        "metadata": {"call_link_label": "create_qpoints_from_distance"},
+    }
+    kpoints_scf = create_kpoints_from_distance(**inputs_scf)
+    qpoints = create_kpoints_from_distance(**inputs_q)
     qpoints_mesh = qpoints.get_kpoints_mesh()[0]
-    kpoints_nscf_mesh = orm.KpointsData()
-    kpoints_nscf_mesh.set_kpoints_mesh(
+    kpoints_nscf = orm.KpointsData()
+    kpoints_nscf.set_kpoints_mesh(
         [value * kpoints_factor_nscf.value for value in qpoints_mesh]
     )
 
     return {
-        "kpoints_nscf_mesh": kpoints_nscf_mesh,
-        "kpoints_nscf_explicit": get_explicit_kpoints(kpoints_nscf_mesh),
+        "kpoints_scf": kpoints_scf,
+        "qpoints": qpoints,
+        "kpoints_nscf": kpoints_nscf,
     }
 
 
@@ -60,10 +74,10 @@ def should_run_wannier90(w90_bands) -> bool:
 
 
 @task.calcfunction(outputs=spec.namespace(parameters=Any))
-def update_wannier90_parameters(parameters, kpoints_mesh):
+def update_wannier90_parameters(parameters, kpoints_nscf):
     """Update the Wannier90 ``mp_grid`` to match the NSCF mesh."""
     updated = parameters.get_dict()
-    updated["mp_grid"] = kpoints_mesh.get_kpoints_mesh()[0]
+    updated["mp_grid"] = kpoints_nscf.get_kpoints_mesh()[0]
     return {"parameters": orm.Dict(updated)}
 
 
@@ -79,13 +93,12 @@ def run_wannier90(
     structure,
     w90_bands,
     kpoints_scf,
-    kpoints_nscf_mesh,
-    kpoints_nscf_explicit,
+    kpoints_nscf,
 ):
     """Run the Wannier workflow step of the EPW preparation graph."""
     updated_parameters = update_wannier90_parameters(
         w90_bands["wannier90"]["wannier90"]["parameters"],
-        kpoints_nscf_mesh,
+        kpoints_nscf,
     ).parameters
 
     w90_inputs = recursive_merge(
@@ -93,10 +106,10 @@ def run_wannier90(
         {
             "structure": structure,
             "scf": {"kpoints": kpoints_scf},
-            "nscf": {"kpoints": kpoints_nscf_explicit},
+            "nscf": {"kpoints": kpoints_nscf},
             "wannier90": {
                 "wannier90": {
-                    "kpoints": kpoints_nscf_explicit,
+                    "kpoints": kpoints_nscf,
                     "parameters": updated_parameters,
                 }
             },
@@ -113,12 +126,33 @@ def run_wannier90(
     else:
         chk_folder = w90.wannier90.remote_folder
 
+    inspected = inspect_wannier90(
+        scf_remote=w90.scf.remote_folder,
+        nscf_remote=w90.nscf.remote_folder,
+        chk_folder=chk_folder,
+        band_structure=w90.band_structure,
+    )
     return {
-        "scf_remote": w90.scf.remote_folder,
-        "nscf_remote": w90.nscf.remote_folder,
-        "chk_folder": chk_folder,
-        "band_structure": w90.band_structure,
+        "scf_remote": inspected.scf_remote,
+        "nscf_remote": inspected.nscf_remote,
+        "chk_folder": inspected.chk_folder,
+        "band_structure": inspected.band_structure,
     }
+
+
+def find_parent_workchain(node, label):
+    """Find the parent workchain by traversing up `caller` links."""
+    from aiida.common.links import LinkType
+    # Get creating node
+    links = node.get_incoming(link_type=LinkType.CREATE).all()
+    if not links:
+        return None
+    current = links[0].node
+    while current is not None:
+        if getattr(current, "process_label", "") == label:
+            return current
+        current = current.caller
+    return None
 
 
 @task.calcfunction(
@@ -130,7 +164,15 @@ def run_wannier90(
     )
 )
 def inspect_wannier90(scf_remote, nscf_remote, chk_folder, band_structure):
-    """Preserve the outline inspection stage after the Wannier90 branch."""
+    """Verify that the wannier90 workflow finished successfully."""
+    from aiida.engine import ExitCode
+    
+    workchain = find_parent_workchain(scf_remote, "Wannier90BandsWorkChain") or \
+                find_parent_workchain(scf_remote, "Wannier90OptimizeWorkChain")
+                
+    if workchain and not workchain.is_finished_ok:
+         return ExitCode(404, message=f"The `Wannier90BandsWorkChain` sub process failed with exit_status {workchain.exit_status}")
+
     return {
         "scf_remote": scf_remote,
         "nscf_remote": nscf_remote,
@@ -150,42 +192,38 @@ def extract_parent_ph_qpoints(parent_folder_ph):
 
 
 @task.graph(outputs=spec.namespace(remote_folder=Any))
-def run_ph(parent_folder_ph, ph_base, qpoints, scf_remote):
+def run_ph(ph_base, qpoints, scf_remote):
     """Run the phonon workflow step of the EPW preparation graph."""
     ph_inputs = recursive_merge(ph_base, {"qpoints": qpoints})
 
-    if parent_folder_ph is not None:
-        ph_inputs = recursive_merge(
-            ph_inputs,
-            {
-                "ph": {
-                    "parent_folder": parent_folder_ph,
-                    "qpoints": extract_parent_ph_qpoints(parent_folder_ph).result,
-                }
-            },
-        )
-    else:
-        ph_inputs = recursive_merge(
-            ph_inputs,
-            {"ph": {"parent_folder": scf_remote}},
-        )
+    ph_inputs = recursive_merge(
+        ph_inputs,
+        {"ph": {"parent_folder": scf_remote}},
+    )
 
     ph = PhBaseTask(**ph_inputs)
-    return {"remote_folder": ph.remote_folder}
+    inspected = inspect_ph(remote_folder=ph.remote_folder)
+    return {"remote_folder": inspected.remote_folder}
 
 
 @task.calcfunction(outputs=spec.namespace(remote_folder=Any))
 def inspect_ph(remote_folder):
-    """Preserve the outline inspection stage after the phonon branch."""
+    """Verify that the `PhBaseWorkChain` finished successfully."""
+    from aiida.engine import ExitCode
+    
+    workchain = find_parent_workchain(remote_folder, "PhBaseWorkChain")
+    if workchain and not workchain.is_finished_ok:
+         return ExitCode(403, message=f"The `PhBaseWorkChain` sub process failed with exit_status {workchain.exit_status}")
+
     return {"remote_folder": remote_folder}
 
 
 @task.calcfunction()
-def create_gamma_mesh():
+def create_kpoints_gamma():
     """Create the gamma-only mesh used by the transformation EPW run."""
-    gamma_mesh = orm.KpointsData()
-    gamma_mesh.set_kpoints_mesh([1, 1, 1])
-    return gamma_mesh
+    gamma = orm.KpointsData()
+    gamma.set_kpoints_mesh([1, 1, 1])
+    return gamma
 
 
 @task.graph(
@@ -199,13 +237,13 @@ def run_epw(
     structure,
     epw_base,
     qpoints,
-    kpoints_nscf_mesh,
+    kpoints_nscf,
     ph_remote,
     nscf_remote,
     chk_folder,
 ):
     """Run the transformation EPW step of the EPW preparation graph."""
-    gamma_mesh = create_gamma_mesh().result
+    kfpoints = create_kpoints_gamma().result
 
     epw_inputs = recursive_merge(
         epw_base,
@@ -214,18 +252,24 @@ def run_epw(
             "parent_folder_ph": ph_remote,
             "parent_folder_nscf": nscf_remote,
             "parent_folder_chk": chk_folder,
-            "kpoints": kpoints_nscf_mesh,
-            "kfpoints": gamma_mesh,
+            "kpoints": kpoints_nscf,
+            "kfpoints": kfpoints,
             "qpoints": qpoints,
-            "qfpoints": gamma_mesh,
+            "qfpoints": kfpoints,
         },
     )
 
     epw = EpwBaseTask(**epw_inputs)
+    epw = EpwBaseTask(**epw_inputs)
+    inspected = inspect_epw(
+        retrieved=epw.retrieved,
+        epw_folder=epw.remote_stash,
+        epw_parent=epw.remote_stash,
+    )
     return {
-        "retrieved": epw.retrieved,
-        "epw_folder": epw.remote_stash,
-        "epw_parent": epw.remote_stash,
+        "retrieved": inspected.retrieved,
+        "epw_folder": inspected.epw_folder,
+        "epw_parent": inspected.epw_parent,
     }
 
 
@@ -237,7 +281,13 @@ def run_epw(
     )
 )
 def inspect_epw(retrieved, epw_folder, epw_parent):
-    """Preserve the outline inspection stage after the transformation EPW run."""
+    """Verify that the `EpwBaseWorkChain` finished successfully."""
+    from aiida.engine import ExitCode
+    
+    workchain = find_parent_workchain(epw_folder, "EpwBaseWorkChain")
+    if workchain and not workchain.is_finished_ok:
+         return ExitCode(405, message=f"The `EpwBaseWorkChain` sub process failed with exit_status {workchain.exit_status}")
+
     return {
         "retrieved": retrieved,
         "epw_folder": epw_folder,
@@ -257,7 +307,7 @@ def should_run_epw_bands(do_bands_interpolation=None, epw_bands=None) -> bool:
 
 
 @task.calcfunction()
-def extract_kpoints_from_bands(band_structure):
+def extract_kpoints_path(band_structure):
     """Convert a ``BandsData`` output into a standalone ``KpointsData`` node."""
     kpoints = orm.KpointsData()
     kpoints.set_cell(band_structure.cell, band_structure.pbc)
@@ -275,7 +325,7 @@ def prepare_epw_bands_kpoints(w90_bands, band_structure):
     if "bands_kpoints" in w90_bands:
         return {"bands_kpoints": w90_bands["bands_kpoints"]}
 
-    return {"bands_kpoints": extract_kpoints_from_bands(band_structure).result}
+    return {"bands_kpoints": extract_kpoints_path(band_structure).result}
 
 
 @task.graph(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
@@ -283,7 +333,7 @@ def run_epw_bands(
     structure,
     w90_bands,
     epw_bands,
-    kpoints_nscf_mesh,
+    kpoints_nscf,
     qpoints,
     band_structure,
     epw_parent,
@@ -299,7 +349,7 @@ def run_epw_bands(
         {
             "structure": structure,
             "parent_folder_epw": epw_parent,
-            "kpoints": kpoints_nscf_mesh,
+            "kpoints": kpoints_nscf,
             "qpoints": qpoints,
             "qfpoints": bands_kpoints,
             "kfpoints": bands_kpoints,
@@ -307,15 +357,26 @@ def run_epw_bands(
     )
 
     epw_bands_task = EpwBaseTask(**epw_bands_inputs)
+    epw_bands_task = EpwBaseTask(**epw_bands_inputs)
+    inspected = inspect_epw_bands(
+        retrieved=epw_bands_task.retrieved,
+        epw_folder=epw_bands_task.remote_stash,
+    )
     return {
-        "retrieved": epw_bands_task.retrieved,
-        "epw_folder": epw_bands_task.remote_stash,
+        "retrieved": inspected.retrieved,
+        "epw_folder": inspected.epw_folder,
     }
 
 
 @task.calcfunction(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
 def inspect_epw_bands(retrieved, epw_folder):
-    """Preserve the outline inspection stage after the EPW bands branch."""
+    """Verify that the `EpwBandsWorkChain` finished successfully."""
+    from aiida.engine import ExitCode
+    
+    workchain = find_parent_workchain(epw_folder, "EpwBandsWorkChain")
+    if workchain and not workchain.is_finished_ok:
+         return ExitCode(406, message=f"The `EpwBandsWorkChain` sub process failed with exit_status {workchain.exit_status}")
+
     return {
         "retrieved": retrieved,
         "epw_folder": epw_folder,
@@ -340,7 +401,6 @@ def prep(
     wannier_projection_type=None,
     reference_bands: orm.BandsData | None = None,
     bands_kpoints: orm.KpointsData | None = None,
-    parent_folder_ph: Any | None = None,
     **kwargs,
 ):
     """Compose the EPW preparation outline as a WorkGraph."""
@@ -352,7 +412,6 @@ def prep(
     inputs = get_protocol_inputs(protocol, overrides)
     pseudo_family = inputs.pop("pseudo_family", None)
 
-    from aiida_wannier90_workflows.common.types import WannierProjectionType
     if wannier_projection_type is None:
         wannier_projection_type = WannierProjectionType.ATOMIC_PROJECTORS_QE
 
@@ -386,7 +445,6 @@ def prep(
 
     # ph_base
     ph_base_inputs = inputs.get("ph_base", {})
-    from aiida_epw.workflows.prep import get_target_basepath
     ph_code = codes.get("ph")
     if ph_code and "target_base" not in ph_base_inputs.get("ph", {}).get("metadata", {}).get("options", {}).get("stash", {}):
         ph_stash = ph_base_inputs.setdefault("ph", {}).setdefault("metadata", {}).setdefault("options", {}).setdefault("stash", {})
@@ -445,23 +503,11 @@ def prep(
 
     force_parity = kpoints_force_parity
 
-    GenerateQpoints = task(identifier="generate_qpoints")(create_kpoints_from_distance)
-    GenerateKpointsScf = task(identifier="generate_kpoints_scf")(create_kpoints_from_distance)
 
-    qpoints = GenerateQpoints(
+    reciprocal_points = generate_reciprocal_points(
         structure=structure,
-        distance=qpoints_distance,
-        force_parity=force_parity,
-    )
-
-    kpoints_scf = GenerateKpointsScf(
-        structure=structure,
-        distance=kpoints_distance_scf,
-        force_parity=force_parity,
-    )
-
-    reciprocal_points = generate_nscf_kpoints(
-        qpoints=qpoints.result,
+        kpoints_distance_scf=kpoints_distance_scf,
+        qpoints_distance=qpoints_distance,
         kpoints_factor_nscf=kpoints_factor_nscf,
     )
 
@@ -470,38 +516,26 @@ def prep(
         wannier90_run = run_wannier90(
             structure=structure,
             w90_bands=w90_bands,
-            kpoints_scf=kpoints_scf.result,
+            kpoints_scf=reciprocal_points.kpoints_scf,
             kpoints_nscf_mesh=reciprocal_points.kpoints_nscf_mesh,
             kpoints_nscf_explicit=reciprocal_points.kpoints_nscf_explicit,
         )
-        wannier90_checked = inspect_wannier90(
-            scf_remote=wannier90_run.scf_remote,
-            nscf_remote=wannier90_run.nscf_remote,
-            chk_folder=wannier90_run.chk_folder,
-            band_structure=wannier90_run.band_structure,
-        )
+        pass
 
     phonons_run = run_ph(
-        parent_folder_ph=parent_folder_ph,
         ph_base=ph_base,
-        qpoints=qpoints.result,
-        scf_remote=wannier90_checked.scf_remote,
+        qpoints=reciprocal_points.qpoints,
+        scf_remote=wannier90_run.scf_remote,
     )
-    phonons_checked = inspect_ph(remote_folder=phonons_run.remote_folder)
 
     epw_run = run_epw(
         structure=structure,
         epw_base=epw_base,
-        qpoints=qpoints.result,
+        qpoints=reciprocal_points.qpoints,
         kpoints_nscf_mesh=reciprocal_points.kpoints_nscf_mesh,
-        ph_remote=phonons_checked.remote_folder,
-        nscf_remote=wannier90_checked.nscf_remote,
-        chk_folder=wannier90_checked.chk_folder,
-    )
-    epw_checked = inspect_epw(
-        retrieved=epw_run.retrieved,
-        epw_folder=epw_run.epw_folder,
-        epw_parent=epw_run.epw_parent,
+        ph_remote=phonons_run.remote_folder,
+        nscf_remote=wannier90_run.nscf_remote,
+        chk_folder=wannier90_run.chk_folder,
     )
 
     should_run_bands = should_run_epw_bands(
@@ -514,18 +548,14 @@ def prep(
             w90_bands=w90_bands,
             epw_bands=epw_bands,
             kpoints_nscf_mesh=reciprocal_points.kpoints_nscf_mesh,
-            qpoints=qpoints.result,
-            band_structure=wannier90_checked.band_structure,
-            epw_parent=epw_checked.epw_parent,
-        )
-        inspect_epw_bands(
-            retrieved=epw_bands_run.retrieved,
-            epw_folder=epw_bands_run.epw_folder,
+            qpoints=reciprocal_points.qpoints,
+            band_structure=wannier90_run.band_structure,
+            epw_parent=epw_run.epw_parent,
         )
 
     return results(
-        retrieved=epw_checked.retrieved,
-        epw_folder=epw_checked.epw_folder,
+        retrieved=epw_run.retrieved,
+        epw_folder=epw_run.epw_folder,
     )
 
 

@@ -20,7 +20,6 @@ __all__ = (
 )
 
 
-
 def get_protocol_inputs(
     protocol: str | None = None,
     overrides: dict | None = None,
@@ -39,8 +38,6 @@ def get_protocol_inputs(
     })
 
     return AdHocProtocol.get_protocol_inputs(protocol, overrides)
-
-
 
 
 def _namespace_to_dict(namespace: BuilderNamespace) -> dict[str, Any]:
