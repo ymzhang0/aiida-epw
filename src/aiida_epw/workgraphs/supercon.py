@@ -8,6 +8,7 @@ from aiida import orm
 from aiida.engine import ProcessBuilder
 from aiida.engine.processes.builder import ProcessBuilderNamespace
 from aiida_workgraph import If, WorkGraph, spec, task
+from aiida_workgraph.utils import get_dict_from_builder
 
 from aiida_epw.tools.workchain import find_related_calculation
 from aiida_epw.workflows.base import EpwBaseWorkChain
@@ -42,7 +43,7 @@ def get_protocol_inputs(
 
 def _namespace_to_dict(namespace: BuilderNamespace) -> dict[str, Any]:
     """Convert a builder namespace into a plain nested mapping."""
-    return namespace._inputs(prune=True)
+    return get_dict_from_builder(namespace)
 
 
 def _sorted_interpolation_distances(
@@ -169,7 +170,7 @@ def supercon(
         if "settings" in epw_inputs:
             epw_builder.settings = orm.Dict(epw_inputs["settings"])
             
-        sub_inputs[epw_namespace] = epw_builder._inputs(prune=False)
+        sub_inputs[epw_namespace] = get_dict_from_builder(epw_builder)
 
     interp_inputs = sub_inputs["epw_interp"]
     final_iso_inputs = sub_inputs["epw_final_iso"]

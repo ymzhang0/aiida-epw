@@ -12,6 +12,7 @@ from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance i
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 from aiida_quantumespresso.workflows.ph.base import PhBaseWorkChain
 from aiida_wannier90_workflows.utils.kpoints import get_explicit_kpoints
+from aiida_workgraph.utils import get_dict_from_builder
 from aiida_wannier90_workflows.workflows import (
     Wannier90BandsWorkChain,
     Wannier90OptimizeWorkChain,
@@ -217,7 +218,7 @@ def prep(
             bands_kpoints=bands_kpoints,
         )
 
-    w90_bands = w90_builder._inputs(prune=False)
+    w90_bands = get_dict_from_builder(w90_builder)
     if wannier_projection_type == WannierProjectionType.ATOMIC_PROJECTORS_QE:
         w90_bands.pop("projwfc", None)
 
@@ -235,7 +236,7 @@ def prep(
     ph_base_builder = PhBaseWorkChain.get_builder_from_protocol(
         codes["ph"], None, protocol, overrides=ph_base_inputs, **kwargs
     )
-    ph_base = ph_base_builder._inputs(prune=False)
+    ph_base = get_dict_from_builder(ph_base_builder)
     ph_base.pop("clean_workdir", None)
     ph_base.pop("qpoints_distance", None)
 
@@ -268,9 +269,9 @@ def prep(
             epw_builder.parallelization = orm.Dict(epw_inputs["parallelization"])
 
         if namespace == "epw_base":
-            epw_base = epw_builder._inputs(prune=False)
+            epw_base = get_dict_from_builder(epw_builder)
         else:
-            epw_bands = epw_builder._inputs(prune=False)
+            epw_bands = get_dict_from_builder(epw_builder)
 
     qpoints_distance = orm.Float(inputs["qpoints_distance"])
     kpoints_distance_scf = orm.Float(inputs["kpoints_distance_scf"])
