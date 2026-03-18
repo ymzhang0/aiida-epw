@@ -66,8 +66,8 @@ Source = "https://github.com/aiidaplugins/aiida-epw"
 'epw.supercon' = 'aiida_epw.workflows.supercon:SuperConWorkChain'
 
 [project.entry-points.'aiida_workgraph.task']
-'epw.wg_prep' = 'aiida_epw.workgraphs.prep:prep'
-'epw.wg_supercon' = 'aiida_epw.workgraphs.supercon:supercon'
+'epw.prep' = 'aiida_epw.workgraphs.prep:prep'
+'epw.supercon' = 'aiida_epw.workgraphs.supercon:supercon'
 
 [tool.hatch.version]
 path = "src/aiida_epw/__about__.py"
