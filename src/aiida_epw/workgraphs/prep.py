@@ -356,9 +356,9 @@ def prep(
              epw_bands_inputs["kfpoints"] = bands_kpoints_source
         else:
              if "reference_bands" in w90_bands and w90_bands.get("optimize_disproj"):
-                 band_structure = wannier90_run.outputs["wannier90_optimal.band_structure"]
+                 band_structure = wannier90_run.wannier90_optimal.band_structure
              else:
-                 band_structure = wannier90_run.outputs["wannier90.band_structure"]
+                 band_structure = wannier90_run.wannier90.band_structure
              bands_kpoints_task = prepare_epw_bands_kpoints(band_structure)
              epw_bands_inputs["qfpoints"] = bands_kpoints_task.bands_kpoints
              epw_bands_inputs["kfpoints"] = bands_kpoints_task.bands_kpoints
