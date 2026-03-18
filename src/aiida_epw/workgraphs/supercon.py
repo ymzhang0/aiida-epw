@@ -117,6 +117,117 @@ def results(converged, output_parameters, a2f):
     }
 
 
+@task.graph(outputs=spec.namespace(
+    converged=Any, 
+    remote_folder=Any, 
+    output_parameters=Any, 
+    a2f=Any,
+    degaussq=Any
+))
+def run_convergence(interp_inputs, interpolation_distances, convergence_threshold_node, structure, parent_folder_epw, kfpoints_factor):
+    """Run the interpolation EpwBaseWorkChain convergence loop."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    
+    interpolation_tasks = []
+    allen_dynes_tasks = []
+    updated_interp_parameters = None
+    degaussq_task_node = None
+    previous_task = None
+
+    for index, distance in enumerate(interpolation_distances, start=1):
+         EpwInterpTask = task(identifier=f"epw_interp_{index:02d}")(EpwBaseWorkChain)
+         
+         inputs = dict(interp_inputs)
+         inputs.update({
+             "structure": structure,
+             "parent_folder_epw": parent_folder_epw,
+             "kfpoints_factor": kfpoints_factor,
+             "qfpoints_distance": distance,
+         })
+         if updated_interp_parameters is not None:
+              inputs["parameters"] = updated_interp_parameters.result
+              
+         t = EpwInterpTask(**inputs)
+         interpolation_tasks.append(t)
+         
+         if previous_task:
+              t.waiting_on.add(previous_task)
+         previous_task = t
+
+         tc_t = extract_allen_dynes_tc(output_parameters=t.outputs.output_parameters)
+         allen_dynes_tasks.append(tc_t)
+
+         if index == 1:
+              degaussq_task_node = derive_degaussq_from_a2f(a2f=t.outputs.a2f)
+              updated_interp_parameters = update_inputepw_degaussq(
+                  parameters=interp_inputs["parameters"], 
+                  degaussq=degaussq_task_node.result
+              )
+
+    if convergence_threshold_node is not None and len(allen_dynes_tasks) >= 2:
+         converged = has_converged(
+             previous_tc=allen_dynes_tasks[-2].result, 
+             current_tc=allen_dynes_tasks[-1].result, 
+             threshold=convergence_threshold_node, 
+             total_runs=orm.Int(len(interpolation_tasks))
+         ).result
+    elif convergence_threshold_node is not None:
+         converged = orm.Bool(False)
+    else:
+         converged = orm.Bool(True)
+
+    last_t = interpolation_tasks[-1]
+    return {
+        "converged": converged,
+        "remote_folder": last_t.outputs.remote_folder,
+        "output_parameters": last_t.outputs.output_parameters,
+        "a2f": last_t.outputs.a2f,
+        "degaussq": degaussq_task_node.result if degaussq_task_node else None,
+    }
+
+
+@task.graph(outputs=spec.namespace(epw_folder=Any))
+def run_final_epw_iso(final_iso_inputs, structure, parent_folder_epw, kfpoints, qfpoints, degaussq):
+    """Run final isotropic EPW task graph."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    EpwFinalIsoTask = task(identifier="epw_final_iso")(EpwBaseWorkChain)
+    
+    inputs = dict(final_iso_inputs)
+    inputs.update({
+         "structure": structure,
+         "parent_folder_epw": parent_folder_epw,
+         "kfpoints": kfpoints,
+         "qfpoints": qfpoints,
+    })
+    
+    updated = update_inputepw_degaussq(
+         parameters=final_iso_inputs["parameters"], 
+         degaussq=degaussq
+    )
+    inputs["parameters"] = updated.result
+         
+    final_iso = EpwFinalIsoTask(**inputs)
+    return {"epw_folder": final_iso.outputs.remote_folder}
+
+
+@task.graph(outputs=spec.namespace(epw_folder=Any))
+def run_final_epw_aniso(final_aniso_inputs, structure, parent_folder_epw, kfpoints, qfpoints, final_iso_folder):
+    """Run final anisotropic EPW task graph."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    EpwFinalAnisoTask = task(identifier="epw_final_aniso")(EpwBaseWorkChain)
+    
+    inputs = dict(final_aniso_inputs)
+    inputs.update({
+         "structure": structure,
+         "parent_folder_epw": parent_folder_epw,
+         "kfpoints": kfpoints,
+         "qfpoints": qfpoints,
+    })
+    final_aniso = EpwFinalAnisoTask(**inputs)
+    final_aniso.waiting_on.add(final_iso_folder)
+    return {"epw_folder": final_aniso.outputs.remote_folder}
+
+
 @task.graph(outputs=["converged", "epw_final_a2f_output_parameters", "epw_final_a2f_a2f"])
 def supercon(
     epw_code,
@@ -128,11 +239,6 @@ def supercon(
     **kwargs,
 ):
     """Superconductivity WorkGraph."""
-    if hasattr(codes, "items"):
-        codes = dict(codes.items())
-    if overrides and hasattr(overrides, "items"):
-        overrides = dict(overrides.items())
-        
     inputs = get_protocol_inputs(protocol, overrides)
 
     if parent_epw.process_label == "EpwPrepWorkChain":
@@ -151,11 +257,8 @@ def supercon(
         parent_folder_epw = get_restart_parent_folder(parent_epw)
 
     sub_inputs = {}
-    for epw_namespace in (
-        "epw_interp",
-        "epw_final_iso",
-        "epw_final_aniso",
-    ):
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    for epw_namespace in ("epw_interp", "epw_final_iso", "epw_final_aniso"):
         epw_inputs = inputs.get(epw_namespace, {})
         epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
             code=scon_epw_code if (epw_namespace == "epw_interp" and scon_epw_code is not None) else epw_code,
@@ -168,22 +271,10 @@ def supercon(
         epw_builder.qpoints = epw_source.inputs.qpoints
         if "settings" in epw_inputs:
             epw_builder.settings = orm.Dict(epw_inputs["settings"])
-            
         sub_inputs[epw_namespace] = epw_builder._inputs(prune=False)
 
-    interp_inputs = sub_inputs["epw_interp"]
-    final_iso_inputs = sub_inputs["epw_final_iso"]
-    final_aniso_inputs = sub_inputs["epw_final_aniso"]
-
     distance_input = inputs["interpolation_distance"]
-    if isinstance(distance_input, float):
-         distance_node = orm.Float(distance_input)
-    elif isinstance(distance_input, list):
-         distance_node = orm.List(distance_input)
-    else:
-         distance_node = distance_input
-         
-    interpolation_distances = _sorted_interpolation_distances(distance_node)
+    interpolation_distances = _sorted_interpolation_distances(distance_input if isinstance(distance_input, (orm.Float, orm.List)) else orm.Float(distance_input))
 
     convergence_threshold = inputs.get("convergence_threshold")
     convergence_threshold_node = orm.Float(convergence_threshold) if convergence_threshold is not None else None
@@ -191,104 +282,44 @@ def supercon(
     structure = epw_source.inputs.structure
     kfpoints_factor = orm.Int(inputs.get("kfpoints_factor", 1))
 
-    interpolation_tasks = []
-    allen_dynes_tasks = []
-    updated_interp_parameters = None
-    degaussq_task = None
-    previous_interpolation_task = None
-
-    for index, distance in enumerate(interpolation_distances, start=1):
-        EpwInterpTask = task(identifier=f"epw_interp_{index:02d}")(EpwBaseWorkChain)
-        
-        inputs_merged = dict(interp_inputs)
-        inputs_merged.update({
-            "structure": structure,
-            "parent_folder_epw": parent_folder_epw,
-            "kfpoints_factor": kfpoints_factor,
-            "qfpoints_distance": distance,
-        })
-        if updated_interp_parameters is not None:
-             inputs_merged["parameters"] = updated_interp_parameters.result
-
-        interpolation_task = EpwInterpTask(**inputs_merged)
-
-        if previous_interpolation_task is not None:
-            interpolation_task.waiting_on.add(previous_interpolation_task)
-
-        interpolation_tasks.append(interpolation_task)
-        previous_interpolation_task = interpolation_task
-
-        allen_dynes_task = extract_allen_dynes_tc(
-            output_parameters=interpolation_task.outputs.output_parameters,
-        )
-        allen_dynes_tasks.append(allen_dynes_task)
-
-        if index == 1:
-            degaussq_task = derive_degaussq_from_a2f(
-                a2f=interpolation_task.outputs.a2f,
-            )
-            updated_interp_parameters = update_inputepw_degaussq(
-                parameters=interp_inputs["parameters"],
-                degaussq=degaussq_task.result,
-            )
-
-    if convergence_threshold_node is not None and len(allen_dynes_tasks) >= 2:
-        converged_source = has_converged(
-            previous_tc=allen_dynes_tasks[-2].result,
-            current_tc=allen_dynes_tasks[-1].result,
-            threshold=convergence_threshold_node,
-            total_runs=orm.Int(len(interpolation_tasks)),
-        ).result
-    elif convergence_threshold_node is not None:
-        converged_source = orm.Bool(False)
-    else:
-        converged_source = orm.Bool(True)
-
-    run_final_task = should_run_final_epw(
-        is_converged=converged_source,
-        always_run_final=always_run_final,
+    # --- 1. Run Convergence Loop (Nested) ---
+    conv = run_convergence(
+        interp_inputs=sub_inputs["epw_interp"],
+        interpolation_distances=interpolation_distances,
+        convergence_threshold_node=convergence_threshold_node,
+        structure=structure,
+        parent_folder_epw=parent_folder_epw,
+        kfpoints_factor=kfpoints_factor
     )
 
-    last_interpolation_task = interpolation_tasks[-1]
+    run_final_task = should_run_final_epw(
+        is_converged=conv.converged,
+        always_run_final=always_run_final
+    )
 
     with If(run_final_task.result):
-        restart_meshes = extract_restart_meshes(
-            parent_folder_epw=last_interpolation_task.outputs.remote_folder,
+        restart_meshes = extract_restart_meshes(parent_folder_epw=conv.remote_folder)
+        
+        final_iso = run_final_epw_iso(
+            final_iso_inputs=sub_inputs["epw_final_iso"],
+            structure=structure,
+            parent_folder_epw=conv.remote_folder,
+            kfpoints=restart_meshes.outputs.kfpoints,
+            qfpoints=restart_meshes.outputs.qfpoints,
+            degaussq=conv.degaussq
+        )
+        
+        final_aniso = run_final_epw_aniso(
+            final_aniso_inputs=sub_inputs["epw_final_aniso"],
+            structure=structure,
+            parent_folder_epw=conv.remote_folder,
+            kfpoints=restart_meshes.outputs.kfpoints,
+            qfpoints=restart_meshes.outputs.qfpoints,
+            final_iso_folder=final_iso.epw_folder
         )
 
-        final_iso_parameters = None
-        if degaussq_task is not None:
-            final_iso_parameters = update_inputepw_degaussq(
-                parameters=final_iso_inputs["parameters"],
-                degaussq=degaussq_task.result,
-            )
-
-        EpwFinalIsoTask = task(identifier="epw_final_iso")(EpwBaseWorkChain)
-        final_iso_inputs_merged = dict(final_iso_inputs)
-        final_iso_inputs_merged.update({
-             "structure": structure,
-             "parent_folder_epw": last_interpolation_task.outputs.remote_folder,
-             "kfpoints": restart_meshes.outputs.kfpoints,
-             "qfpoints": restart_meshes.outputs.qfpoints,
-        })
-        if final_iso_parameters is not None:
-             final_iso_inputs_merged["parameters"] = final_iso_parameters.result
-
-        final_iso_task = EpwFinalIsoTask(**final_iso_inputs_merged)
-
-        EpwFinalAnisoTask = task(identifier="epw_final_aniso")(EpwBaseWorkChain)
-        final_aniso_inputs_merged = dict(final_aniso_inputs)
-        final_aniso_inputs_merged.update({
-             "structure": structure,
-             "parent_folder_epw": last_interpolation_task.outputs.remote_folder,
-             "kfpoints": restart_meshes.outputs.kfpoints,
-             "qfpoints": restart_meshes.outputs.qfpoints,
-        })
-        final_aniso_task = EpwFinalAnisoTask(**final_aniso_inputs_merged)
-        final_aniso_task.waiting_on.add(final_iso_task)
-
     return results(
-        converged=converged_source,
-        output_parameters=last_interpolation_task.outputs.output_parameters,
-        a2f=last_interpolation_task.outputs.a2f,
+        converged=conv.converged,
+        output_parameters=conv.output_parameters,
+        a2f=conv.a2f
     )

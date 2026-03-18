@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from aiida import orm
-from aiida.engine import ProcessBuilder
+from aiida.engine import ProcessBuilder, ExitCode
 from aiida_workgraph import If, spec, task
 from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import create_kpoints_from_distance
 from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
@@ -20,7 +20,6 @@ from aiida_wannier90_workflows.common.types import WannierProjectionType
 
 from aiida_epw.tools.workchain import get_parent_folder_calculation, get_target_basepath
 from aiida_epw.workflows.base import EpwBaseWorkChain
-from aiida_epw.workflows.prep import should_run_bands_interpolation, validate_inputs
 
 Wannier90BandsTask = task(Wannier90BandsWorkChain)
 Wannier90OptimizeTask = task(Wannier90OptimizeWorkChain)
@@ -30,6 +29,34 @@ EpwBaseTask = task(EpwBaseWorkChain)
 __all__ = (
     "prep",
 )
+
+def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
+    inputs, ctx=None
+):
+    """Validate the inputs of the `EpwPrepWorkChain`."""
+    do_bands = inputs.get("do_bands_interpolation", True)
+    if isinstance(do_bands, orm.Bool):
+        do_bands = do_bands.value
+
+    if "w90_bands" not in inputs:
+        return (
+            "`w90_bands` inputs are required because this work chain needs the "
+            "NSCF and Wannier checkpoint folders produced by the Wannier90 step."
+        )
+
+    if do_bands and "epw_bands" not in inputs:
+        return (
+            "`epw_bands` inputs are required when `do_bands_interpolation` is enabled."
+        )
+
+
+def should_run_bands_interpolation(inputs) -> bool:
+    """Return whether the EPW bands interpolation step should run."""
+    do_bands = inputs.get("do_bands_interpolation", True)
+    if isinstance(do_bands, orm.Bool):
+        do_bands = do_bands.value
+
+    return bool(do_bands) and "epw_bands" in inputs
 
 @task.calcfunction(
     outputs=spec.namespace(
@@ -126,59 +153,14 @@ def run_wannier90(
     else:
         chk_folder = w90.wannier90.remote_folder
 
-    inspected = inspect_wannier90(
-        scf_remote=w90.scf.remote_folder,
-        nscf_remote=w90.nscf.remote_folder,
-        chk_folder=chk_folder,
-        band_structure=w90.band_structure,
-    )
-    return {
-        "scf_remote": inspected.scf_remote,
-        "nscf_remote": inspected.nscf_remote,
-        "chk_folder": inspected.chk_folder,
-        "band_structure": inspected.band_structure,
-    }
-
-
-def find_parent_workchain(node, label):
-    """Find the parent workchain by traversing up `caller` links."""
-    from aiida.common.links import LinkType
-    # Get creating node
-    links = node.get_incoming(link_type=LinkType.CREATE).all()
-    if not links:
-        return None
-    current = links[0].node
-    while current is not None:
-        if getattr(current, "process_label", "") == label:
-            return current
-        current = current.caller
-    return None
-
-
-@task.calcfunction(
-    outputs=spec.namespace(
-        scf_remote=Any,
-        nscf_remote=Any,
-        chk_folder=Any,
-        band_structure=Any,
-    )
-)
-def inspect_wannier90(scf_remote, nscf_remote, chk_folder, band_structure):
-    """Verify that the wannier90 workflow finished successfully."""
-    from aiida.engine import ExitCode
-    
-    workchain = find_parent_workchain(scf_remote, "Wannier90BandsWorkChain") or \
-                find_parent_workchain(scf_remote, "Wannier90OptimizeWorkChain")
-                
-    if workchain and not workchain.is_finished_ok:
-         return ExitCode(404, message=f"The `Wannier90BandsWorkChain` sub process failed with exit_status {workchain.exit_status}")
 
     return {
-        "scf_remote": scf_remote,
-        "nscf_remote": nscf_remote,
+        "scf_remote": w90.scf.remote_folder,
+        "nscf_remote": w90.nscf.remote_folder,
         "chk_folder": chk_folder,
-        "band_structure": band_structure,
+        "band_structure": w90.band_structure,
     }
+
 
 
 @task.calcfunction()
@@ -201,21 +183,9 @@ def run_ph(ph_base, qpoints, scf_remote):
         {"ph": {"parent_folder": scf_remote}},
     )
 
-    ph = PhBaseTask(**ph_inputs)
-    inspected = inspect_ph(remote_folder=ph.remote_folder)
-    return {"remote_folder": inspected.remote_folder}
 
+    return {"remote_folder": ph.remote_folder}
 
-@task.calcfunction(outputs=spec.namespace(remote_folder=Any))
-def inspect_ph(remote_folder):
-    """Verify that the `PhBaseWorkChain` finished successfully."""
-    from aiida.engine import ExitCode
-    
-    workchain = find_parent_workchain(remote_folder, "PhBaseWorkChain")
-    if workchain and not workchain.is_finished_ok:
-         return ExitCode(403, message=f"The `PhBaseWorkChain` sub process failed with exit_status {workchain.exit_status}")
-
-    return {"remote_folder": remote_folder}
 
 
 @task.calcfunction()
@@ -260,39 +230,13 @@ def run_epw(
     )
 
     epw = EpwBaseTask(**epw_inputs)
-    epw = EpwBaseTask(**epw_inputs)
-    inspected = inspect_epw(
-        retrieved=epw.retrieved,
-        epw_folder=epw.remote_stash,
-        epw_parent=epw.remote_stash,
-    )
-    return {
-        "retrieved": inspected.retrieved,
-        "epw_folder": inspected.epw_folder,
-        "epw_parent": inspected.epw_parent,
-    }
-
-
-@task.calcfunction(
-    outputs=spec.namespace(
-        retrieved=Any,
-        epw_folder=Any,
-        epw_parent=Any,
-    )
-)
-def inspect_epw(retrieved, epw_folder, epw_parent):
-    """Verify that the `EpwBaseWorkChain` finished successfully."""
-    from aiida.engine import ExitCode
-    
-    workchain = find_parent_workchain(epw_folder, "EpwBaseWorkChain")
-    if workchain and not workchain.is_finished_ok:
-         return ExitCode(405, message=f"The `EpwBaseWorkChain` sub process failed with exit_status {workchain.exit_status}")
 
     return {
-        "retrieved": retrieved,
-        "epw_folder": epw_folder,
-        "epw_parent": epw_parent,
+        "retrieved": epw.retrieved,
+        "epw_folder": epw.remote_stash,
+        "epw_parent": epw.remote_stash,
     }
+
 
 
 @task()
@@ -357,30 +301,12 @@ def run_epw_bands(
     )
 
     epw_bands_task = EpwBaseTask(**epw_bands_inputs)
-    epw_bands_task = EpwBaseTask(**epw_bands_inputs)
-    inspected = inspect_epw_bands(
-        retrieved=epw_bands_task.retrieved,
-        epw_folder=epw_bands_task.remote_stash,
-    )
-    return {
-        "retrieved": inspected.retrieved,
-        "epw_folder": inspected.epw_folder,
-    }
-
-
-@task.calcfunction(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
-def inspect_epw_bands(retrieved, epw_folder):
-    """Verify that the `EpwBandsWorkChain` finished successfully."""
-    from aiida.engine import ExitCode
-    
-    workchain = find_parent_workchain(epw_folder, "EpwBandsWorkChain")
-    if workchain and not workchain.is_finished_ok:
-         return ExitCode(406, message=f"The `EpwBandsWorkChain` sub process failed with exit_status {workchain.exit_status}")
 
     return {
-        "retrieved": retrieved,
-        "epw_folder": epw_folder,
+        "retrieved": epw_bands_task.retrieved,
+        "epw_folder": epw_bands_task.remote_stash,
     }
+
 
 
 @task.calcfunction(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
@@ -502,7 +428,6 @@ def prep(
         raise ValueError(validation_error)
 
     force_parity = kpoints_force_parity
-
 
     reciprocal_points = generate_reciprocal_points(
         structure=structure,
