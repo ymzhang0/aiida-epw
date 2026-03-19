@@ -156,15 +156,6 @@ def extract_kpoints_path(band_structure):
     return kpoints
 
 
-@task.calcfunction(outputs=spec.namespace(bands_kpoints=Any))
-def prepare_epw_bands_kpoints(band_structure):
-    """Prepare the bands interpolation k-points using the original workflow priority."""
-    return {"bands_kpoints": extract_kpoints_path(band_structure).result}
-
-
-
-
-
 @task.calcfunction(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
 def results(retrieved, epw_folder):
     """Expose the final outputs following the original ``results`` step."""
@@ -355,13 +346,11 @@ def prep(
              epw_bands_inputs["qfpoints"] = bands_kpoints_source
              epw_bands_inputs["kfpoints"] = bands_kpoints_source
         else:
-             if "reference_bands" in w90_bands and w90_bands.get("optimize_disproj"):
-                 band_structure = wannier90_run.wannier90_optimal.band_structure
-             else:
-                 band_structure = wannier90_run.wannier90.band_structure
-             bands_kpoints_task = prepare_epw_bands_kpoints(band_structure)
-             epw_bands_inputs["qfpoints"] = bands_kpoints_task.bands_kpoints
-             epw_bands_inputs["kfpoints"] = bands_kpoints_task.bands_kpoints
+             bands_kpoints = extract_kpoints_path(
+                 band_structure=wannier90_run.band_structure
+             ).result
+             epw_bands_inputs["qfpoints"] = bands_kpoints
+             epw_bands_inputs["kfpoints"] = bands_kpoints
              
         epw_bands_run = EpwBaseTask(**epw_bands_inputs)
 
@@ -391,5 +380,4 @@ def get_protocol_inputs(
     })
 
     return AdHocProtocol.get_protocol_inputs(protocol, overrides)
-
 
