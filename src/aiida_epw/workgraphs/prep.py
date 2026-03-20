@@ -237,6 +237,14 @@ def _add_options_stash_target_base(inputs: dict[str, Any], code) -> None:
         stash["stash_mode"] = stash.get("stash_mode", "copy")
 
 
+def _set_call_link_label(inputs: dict[str, Any], label: str) -> dict[str, Any]:
+    """Return inputs with a top-level metadata call link label."""
+    updated = _copy_nested_containers(inputs)
+    metadata = updated.setdefault("metadata", {})
+    metadata["call_link_label"] = label
+    return updated
+
+
 def _build_wannier90_inputs(
     *,
     codes: dict[str, Any],
@@ -558,6 +566,15 @@ def extract_kpoints_path(band_structure):
     return kpoints
 
 
+@task(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
+def results(retrieved, epw_folder):
+    """Compatibility task retained so previously saved prep graphs can still be loaded."""
+    return {
+        "retrieved": retrieved,
+        "epw_folder": epw_folder,
+    }
+
+
 def prep_from_inputs(
     *,
     structure: orm.StructureData,
@@ -599,7 +616,9 @@ def prep_from_inputs(
                     wannier90_kpoints=wannier90_runtime_inputs.wannier90_kpoints,
                     parameters=wannier90_runtime_inputs.parameters,
                 )
-                wannier90_run_proxy = Wannier90OptimizeTask(**wannier90_inputs)
+                wannier90_run_proxy = Wannier90OptimizeTask(
+                    **_set_call_link_label(wannier90_inputs, "w90_bands"),
+                )
                 _apply_socket_overrides(
                     wannier90_run_proxy._task.inputs,
                     w90_bands,
@@ -632,7 +651,9 @@ def prep_from_inputs(
                     wannier90_kpoints=wannier90_runtime_inputs.wannier90_kpoints,
                     parameters=wannier90_runtime_inputs.parameters,
                 )
-                wannier90_run_proxy = Wannier90BandsTask(**wannier90_inputs)
+                wannier90_run_proxy = Wannier90BandsTask(
+                    **_set_call_link_label(wannier90_inputs, "w90_bands"),
+                )
                 _apply_socket_overrides(
                     wannier90_run_proxy._task.inputs,
                     w90_bands,
@@ -657,7 +678,7 @@ def prep_from_inputs(
             "qpoints": reciprocal_points.qpoints,
             "ph": {"parent_folder": w90_scf_remote},
         })
-        phonons_run = PhBaseTask(**phonons_inputs)
+        phonons_run = PhBaseTask(**_set_call_link_label(phonons_inputs, "ph_base"))
         _apply_socket_overrides(
             phonons_run._task.inputs,
             ph_base,
@@ -676,7 +697,7 @@ def prep_from_inputs(
         })
         epw_inputs["parent_folder_chk"] = w90_chk_folder
 
-        epw_run = EpwBaseTask(**epw_inputs)
+        epw_run = EpwBaseTask(**_set_call_link_label(epw_inputs, "epw_base"))
         _apply_socket_overrides(
             epw_run._task.inputs,
             epw_base,
@@ -706,7 +727,9 @@ def prep_from_inputs(
                 epw_bands_inputs["qfpoints"] = bands_kpoints
                 epw_bands_inputs["kfpoints"] = bands_kpoints
 
-            epw_bands_run = EpwBaseTask(**epw_bands_inputs)
+            epw_bands_run = EpwBaseTask(
+                **_set_call_link_label(epw_bands_inputs, "epw_bands"),
+            )
             _apply_socket_overrides(
                 epw_bands_run._task.inputs,
                 epw_bands,

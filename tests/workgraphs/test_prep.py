@@ -475,9 +475,9 @@ def test_prep_workgraph_runs_with_fake_high_level_workchains(
     assert wg.process is not None
     assert wg.process.is_finished_ok
 
-    wannier_node = wg.tasks["FakeWannier90BandsRuntimeWorkChain"].process
-    phonon_node = wg.tasks["FakePhBaseRuntimeWorkChain"].process
-    epw_node = wg.tasks["FakeEpwBaseRuntimeWorkChain"].process
+    wannier_node = wg.tasks["w90_bands"].process
+    phonon_node = wg.tasks["ph_base"].process
+    epw_node = wg.tasks["epw_base"].process
     assert wannier_node is not None
     assert phonon_node is not None
     assert epw_node is not None
@@ -573,14 +573,12 @@ def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(
     engine_inputs = wg.to_engine_inputs(metadata=None)
     restored = WorkGraph.from_dict(restore_workgraph_data_from_raw_inputs(engine_inputs))
 
-    wannier_task = next(task for task in wg.tasks if task.name == "Wannier90BandsWorkChain")
-    phonon_task = next(task for task in wg.tasks if task.name == "PhBaseWorkChain")
-    epw_task = next(task for task in wg.tasks if task.name == "EpwBaseWorkChain")
-    restored_wannier_task = next(
-        task for task in restored.tasks if task.name == "Wannier90BandsWorkChain"
-    )
-    restored_phonon_task = next(task for task in restored.tasks if task.name == "PhBaseWorkChain")
-    restored_epw_task = next(task for task in restored.tasks if task.name == "EpwBaseWorkChain")
+    wannier_task = next(task for task in wg.tasks if task.name == "w90_bands")
+    phonon_task = next(task for task in wg.tasks if task.name == "ph_base")
+    epw_task = next(task for task in wg.tasks if task.name == "epw_base")
+    restored_wannier_task = next(task for task in restored.tasks if task.name == "w90_bands")
+    restored_phonon_task = next(task for task in restored.tasks if task.name == "ph_base")
+    restored_epw_task = next(task for task in restored.tasks if task.name == "epw_base")
 
     assert wannier_task.inputs["scf"]["pw"]["code"].value == codes["pw"]
     assert wannier_task.inputs["scf"]["pw"]["metadata"]["options"]["account"].value == "elph"
@@ -610,9 +608,9 @@ def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(
     assert restored_phonon_task.inputs["ph"]["metadata"]["options"]["account"].value == "elph"
     assert restored_epw_task.inputs["options"].value["account"] == "elph"
 
-    wannier_engine = engine_inputs["tasks"]["Wannier90BandsWorkChain"]
-    phonon_engine = engine_inputs["tasks"]["PhBaseWorkChain"]
-    epw_engine = engine_inputs["tasks"]["EpwBaseWorkChain"]
+    wannier_engine = engine_inputs["tasks"]["w90_bands"]
+    phonon_engine = engine_inputs["tasks"]["ph_base"]
+    epw_engine = engine_inputs["tasks"]["epw_base"]
 
     assert wannier_engine["scf"]["pw"]["metadata"]["options"]["account"] == "elph"
     assert wannier_engine["nscf"]["pw"]["metadata"]["options"]["account"] == "elph"
@@ -643,7 +641,7 @@ def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(
     manager.ctx._task_results["generate_reciprocal_points"]["qpoints"].set_kpoints_mesh([1, 1, 1])
     manager.ctx._task_results["generate_reciprocal_points"]["kpoints_nscf"].set_kpoints_mesh([2, 2, 2])
 
-    runtime_inputs = manager.get_inputs("Wannier90BandsWorkChain")["kwargs"]
+    runtime_inputs = manager.get_inputs("w90_bands")["kwargs"]
     assert runtime_inputs["scf"]["pw"]["metadata"]["options"]["account"] == "elph"
     assert runtime_inputs["nscf"]["pw"]["metadata"]["options"]["account"] == "elph"
     assert runtime_inputs["pw2wannier90"]["pw2wannier90"]["metadata"]["options"]["account"] == "elph"
