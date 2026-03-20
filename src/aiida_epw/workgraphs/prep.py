@@ -18,8 +18,8 @@ from aiida_wannier90_workflows.common.types import WannierProjectionType
 from aiida_epw.tools.workchain import get_target_basepath
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
-Wannier90BandsTask = task(Wannier90BandsWorkChain)
 Wannier90OptimizeTask = task(Wannier90OptimizeWorkChain)
+Wannier90BandsTask = task(Wannier90BandsWorkChain)
 PhBaseTask = task(PhBaseWorkChain)
 EpwBaseTask = task(EpwBaseWorkChain)
 
@@ -28,6 +28,89 @@ __all__ = (
     "prep_from_inputs",
     "build_task_inputs",
 )
+
+
+def _copy_nested_containers(value: Any) -> Any:
+    """Recursively copy Python containers while preserving AiiDA ORM nodes."""
+    if isinstance(value, dict):
+        return {key: _copy_nested_containers(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_copy_nested_containers(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_copy_nested_containers(item) for item in value)
+    return value
+
+
+def _normalize_nested_python_values(value: Any) -> Any:
+    """Normalize nested Python containers to avoid non-JSON-serializable values."""
+    if isinstance(value, orm.Dict):
+        return orm.Dict(dict=_normalize_nested_python_values(value.get_dict()))
+    if isinstance(value, dict):
+        return {
+            key: _normalize_nested_python_values(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_nested_python_values(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_nested_python_values(item) for item in value)
+    if isinstance(value, range):
+        return list(value)
+    return value
+
+
+def _get_nested_value(mapping: dict[str, Any], path: str) -> Any:
+    """Return a nested value from a mapping or ``None`` if the path is missing."""
+    current: Any = mapping
+    for key in path.split("."):
+        if not isinstance(current, dict) or key not in current:
+            return None
+        current = current[key]
+    return current
+
+
+def _set_nested_value(mapping: dict[str, Any], path: str, value: Any) -> None:
+    """Set a nested value inside a mapping, creating intermediate dictionaries."""
+    keys = path.split(".")
+    current = mapping
+    for key in keys[:-1]:
+        current = current.setdefault(key, {})
+    current[keys[-1]] = value
+
+
+def _restore_nested_fields(
+    target: dict[str, Any],
+    source: dict[str, Any],
+    paths: tuple[str, ...],
+) -> dict[str, Any]:
+    """Restore selected nested fields from a source mapping into a target mapping."""
+    restored = _copy_nested_containers(target)
+    for path in paths:
+        value = _get_nested_value(source, path)
+        if value is not None:
+            _set_nested_value(restored, path, _copy_nested_containers(value))
+    return restored
+
+
+def _set_socket_value(namespace: Any, path: str, value: Any) -> None:
+    """Set a nested socket value using a dotted path."""
+    current = namespace
+    keys = path.split(".")
+    for key in keys[:-1]:
+        current = current[key]
+    current[keys[-1]] = value
+
+
+def _apply_socket_overrides(
+    namespace: Any,
+    source: dict[str, Any],
+    paths: tuple[str, ...],
+) -> None:
+    """Apply selected values from a source mapping onto a socket namespace."""
+    for path in paths:
+        value = _get_nested_value(source, path)
+        if value is not None:
+            _set_socket_value(namespace, path, value)
 
 def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
     inputs, ctx=None
@@ -165,6 +248,7 @@ def _build_wannier90_inputs(
     bands_kpoints: orm.KpointsData | None,
 ) -> dict[str, Any]:
     """Build the static inputs for the Wannier90 task."""
+    w90_overrides = _copy_nested_containers(protocol_inputs.get("w90_bands", {}))
     if reference_bands is not None:
         w90_builder = Wannier90OptimizeWorkChain.get_builder_from_protocol(
             structure=structure,
@@ -187,6 +271,17 @@ def _build_wannier90_inputs(
         )
 
     w90_bands = get_dict_from_builder(w90_builder)
+    w90_bands = _normalize_nested_python_values(w90_bands)
+    w90_bands = _restore_nested_fields(
+        w90_bands,
+        w90_overrides,
+        (
+            "scf.pw.metadata",
+            "nscf.pw.metadata",
+            "pw2wannier90.pw2wannier90.metadata",
+            "wannier90.wannier90.metadata",
+        ),
+    )
     if wannier_projection_type == WannierProjectionType.ATOMIC_PROJECTORS_QE:
         w90_bands.pop("projwfc", None)
 
@@ -210,6 +305,8 @@ def _build_ph_inputs(
         codes["ph"], None, protocol, overrides=ph_base_inputs, **kwargs
     )
     ph_base = get_dict_from_builder(ph_base_builder)
+    ph_base = _normalize_nested_python_values(ph_base)
+    ph_base = _restore_nested_fields(ph_base, ph_base_inputs, ("ph.metadata",))
     ph_base.pop("clean_workdir", None)
     ph_base.pop("qpoints_distance", None)
     return ph_base
@@ -253,10 +350,40 @@ def _build_epw_inputs(
 
         if namespace == "epw_base":
             epw_base = get_dict_from_builder(epw_builder)
+            epw_base = _normalize_nested_python_values(epw_base)
+            epw_base = _restore_nested_fields(epw_base, epw_inputs, ("options",))
         else:
             epw_bands = get_dict_from_builder(epw_builder)
+            epw_bands = _normalize_nested_python_values(epw_bands)
+            epw_bands = _restore_nested_fields(epw_bands, epw_inputs, ("options",))
 
     return epw_base, epw_bands
+
+
+def _drop_epw_mesh_generation_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Drop builder-side mesh generation inputs when explicit meshes are wired in the graph."""
+    cleaned = _copy_nested_containers(inputs)
+    cleaned.pop("kfpoints_factor", None)
+    cleaned.pop("qfpoints_distance", None)
+    return cleaned
+
+
+def _build_wannier90_task_inputs(
+    w90_bands: dict[str, Any],
+    structure: orm.StructureData,
+    kpoints_scf: orm.KpointsData,
+    kpoints_nscf: orm.KpointsData,
+    wannier90_kpoints: orm.KpointsData,
+    parameters: Any,
+) -> dict[str, Any]:
+    """Build inputs for a Wannier90 workchain task."""
+    inputs = _copy_nested_containers(w90_bands)
+    inputs["structure"] = structure
+    inputs["scf"]["kpoints"] = kpoints_scf
+    inputs["nscf"]["kpoints"] = kpoints_nscf
+    inputs["wannier90"]["wannier90"]["kpoints"] = wannier90_kpoints
+    inputs["wannier90"]["wannier90"]["parameters"] = parameters
+    return inputs
 
 
 def build_task_inputs(
@@ -371,15 +498,34 @@ def should_run_wannier90(w90_parameters) -> bool:
     return orm.Bool(bands_plot)
 
 
-@task.calcfunction(outputs=spec.namespace(parameters=Any))
-def update_wannier90_parameters(parameters, kpoints_nscf):
-    """Update the Wannier90 ``mp_grid`` to match the NSCF mesh."""
+@task.calcfunction(
+    outputs=spec.namespace(
+        nscf_kpoints=Any,
+        wannier90_kpoints=Any,
+        parameters=Any,
+    )
+)
+def prepare_wannier90_runtime_inputs(parameters, kpoints_nscf):
+    """Build runtime NSCF and Wannier90 kpoints from the NSCF mesh."""
+    from aiida_wannier90_workflows.utils.kpoints import get_explicit_kpoints
+
+    explicit_kpoints = get_explicit_kpoints(kpoints_nscf)
+    points, weights = explicit_kpoints.get_kpoints(also_weights=True)
+    labels = explicit_kpoints.labels if explicit_kpoints.labels else None
+
+    nscf_kpoints = orm.KpointsData()
+    nscf_kpoints.set_kpoints(points, weights=weights, labels=labels)
+
+    wannier90_kpoints = orm.KpointsData()
+    wannier90_kpoints.set_kpoints(points, weights=weights, labels=labels)
+
     updated = parameters.get_dict()
     updated["mp_grid"] = kpoints_nscf.get_kpoints_mesh()[0]
-    return {"parameters": orm.Dict(updated)}
-
-
-
+    return {
+        "nscf_kpoints": nscf_kpoints,
+        "wannier90_kpoints": wannier90_kpoints,
+        "parameters": orm.Dict(updated),
+    }
 
 
 @task.calcfunction()
@@ -412,15 +558,6 @@ def extract_kpoints_path(band_structure):
     return kpoints
 
 
-@task.calcfunction(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
-def results(retrieved, epw_folder):
-    """Expose the final outputs following the original ``results`` step."""
-    return {
-        "retrieved": retrieved,
-        "epw_folder": epw_folder,
-    }
-
-
 def prep_from_inputs(
     *,
     structure: orm.StructureData,
@@ -449,60 +586,109 @@ def prep_from_inputs(
             w90_parameters=w90_bands.get("wannier90", {}).get("wannier90", {}).get("parameters")
         )
         with If(should_run_w90.result):
-            if use_wannier90_optimize:
-                wannier90_run_proxy = Wannier90OptimizeTask(**w90_bands)
-                w90_class_name = "Wannier90OptimizeWorkChain"
-            else:
-                wannier90_run_proxy = Wannier90BandsTask(**w90_bands)
-                w90_class_name = "Wannier90BandsWorkChain"
-
-            w90_t = wannier90_run_proxy._task
-            w90_t.inputs["scf"]["kpoints"] = reciprocal_points.kpoints_scf
-            w90_t.inputs["nscf"]["kpoints"] = reciprocal_points.kpoints_nscf
-            w90_t.inputs["wannier90"]["wannier90"]["kpoints"] = reciprocal_points.kpoints_nscf
-            w90_t.inputs["structure"] = structure
-
-            updated_parameters = update_wannier90_parameters(
+            wannier90_runtime_inputs = prepare_wannier90_runtime_inputs(
                 parameters=w90_bands["wannier90"]["wannier90"]["parameters"],
                 kpoints_nscf=reciprocal_points.kpoints_nscf,
             )
-            w90_t.inputs["wannier90"]["wannier90"]["parameters"] = updated_parameters.parameters
+            if use_wannier90_optimize:
+                wannier90_inputs = _build_wannier90_task_inputs(
+                    w90_bands=w90_bands,
+                    structure=structure,
+                    kpoints_scf=reciprocal_points.kpoints_scf,
+                    kpoints_nscf=wannier90_runtime_inputs.nscf_kpoints,
+                    wannier90_kpoints=wannier90_runtime_inputs.wannier90_kpoints,
+                    parameters=wannier90_runtime_inputs.parameters,
+                )
+                wannier90_run_proxy = Wannier90OptimizeTask(**wannier90_inputs)
+                _apply_socket_overrides(
+                    wannier90_run_proxy._task.inputs,
+                    w90_bands,
+                    (
+                        "scf.pw.code",
+                        "scf.pw.metadata",
+                        "nscf.pw.code",
+                        "nscf.pw.metadata",
+                        "pw2wannier90.pw2wannier90.code",
+                        "pw2wannier90.pw2wannier90.metadata",
+                        "wannier90.wannier90.code",
+                        "wannier90.wannier90.metadata",
+                    ),
+                )
 
-            wannier90_run = wannier90_run_proxy
+                w90_scf_remote = wannier90_run_proxy.scf.remote_folder
+                w90_nscf_remote = wannier90_run_proxy.nscf.remote_folder
+                w90_band_structure = wannier90_run_proxy.band_structure
+
+                if _as_bool(w90_bands.get("optimize_disproj", False)):
+                    w90_chk_folder = wannier90_run_proxy.wannier90_optimal.remote_folder
+                else:
+                    w90_chk_folder = wannier90_run_proxy.wannier90.remote_folder
+            else:
+                wannier90_inputs = _build_wannier90_task_inputs(
+                    w90_bands=w90_bands,
+                    structure=structure,
+                    kpoints_scf=reciprocal_points.kpoints_scf,
+                    kpoints_nscf=wannier90_runtime_inputs.nscf_kpoints,
+                    wannier90_kpoints=wannier90_runtime_inputs.wannier90_kpoints,
+                    parameters=wannier90_runtime_inputs.parameters,
+                )
+                wannier90_run_proxy = Wannier90BandsTask(**wannier90_inputs)
+                _apply_socket_overrides(
+                    wannier90_run_proxy._task.inputs,
+                    w90_bands,
+                    (
+                        "scf.pw.code",
+                        "scf.pw.metadata",
+                        "nscf.pw.code",
+                        "nscf.pw.metadata",
+                        "pw2wannier90.pw2wannier90.code",
+                        "pw2wannier90.pw2wannier90.metadata",
+                        "wannier90.wannier90.code",
+                        "wannier90.wannier90.metadata",
+                    ),
+                )
+
+                w90_scf_remote = wannier90_run_proxy.scf.remote_folder
+                w90_nscf_remote = wannier90_run_proxy.nscf.remote_folder
+                w90_band_structure = wannier90_run_proxy.band_structure
+                w90_chk_folder = wannier90_run_proxy.wannier90.remote_folder
 
         phonons_inputs = recursive_merge(ph_base, {
             "qpoints": reciprocal_points.qpoints,
-            "ph": {"parent_folder": wannier90_run.scf.remote_folder},
+            "ph": {"parent_folder": w90_scf_remote},
         })
         phonons_run = PhBaseTask(**phonons_inputs)
+        _apply_socket_overrides(
+            phonons_run._task.inputs,
+            ph_base,
+            ("ph.code", "ph.metadata"),
+        )
 
         kfpoints = create_kpoints_gamma()
-        epw_inputs = recursive_merge(epw_base, {
+        epw_inputs = recursive_merge(_drop_epw_mesh_generation_inputs(epw_base), {
             "structure": structure,
             "parent_folder_ph": phonons_run.remote_folder,
-            "parent_folder_nscf": wannier90_run.nscf.remote_folder,
+            "parent_folder_nscf": w90_nscf_remote,
             "kpoints": reciprocal_points.kpoints_nscf,
             "kfpoints": kfpoints.result,
             "qpoints": reciprocal_points.qpoints,
             "qfpoints": kfpoints.result,
         })
-
-        if (
-            w90_class_name == "Wannier90OptimizeWorkChain"
-            and _as_bool(w90_bands.get("optimize_disproj", False))
-        ):
-            epw_inputs["parent_folder_chk"] = wannier90_run.wannier90_optimal.remote_folder
-        else:
-            epw_inputs["parent_folder_chk"] = wannier90_run.wannier90.remote_folder
+        epw_inputs["parent_folder_chk"] = w90_chk_folder
 
         epw_run = EpwBaseTask(**epw_inputs)
+        _apply_socket_overrides(
+            epw_run._task.inputs,
+            epw_base,
+            ("code", "options"),
+        )
 
         should_run_bands = should_run_epw_bands(
             do_bands_interpolation=inputs["do_bands_interpolation"],
             epw_parameters=epw_bands.get("parameters"),
         )
         with If(should_run_bands.result):
-            epw_bands_inputs = recursive_merge(epw_bands, {
+            epw_bands_inputs = recursive_merge(_drop_epw_mesh_generation_inputs(epw_bands), {
                 "structure": structure,
                 "parent_folder_epw": epw_run.remote_stash,
                 "kpoints": reciprocal_points.kpoints_nscf,
@@ -515,19 +701,20 @@ def prep_from_inputs(
                 epw_bands_inputs["kfpoints"] = bands_kpoints_source
             else:
                 bands_kpoints = extract_kpoints_path(
-                    band_structure=wannier90_run.band_structure
+                    band_structure=w90_band_structure
                 ).result
                 epw_bands_inputs["qfpoints"] = bands_kpoints
                 epw_bands_inputs["kfpoints"] = bands_kpoints
 
-            EpwBaseTask(**epw_bands_inputs)
+            epw_bands_run = EpwBaseTask(**epw_bands_inputs)
+            _apply_socket_overrides(
+                epw_bands_run._task.inputs,
+                epw_bands,
+                ("code", "options"),
+            )
 
-        final_results = results(
-            retrieved=epw_run.retrieved,
-            epw_folder=epw_run.remote_folder,
-        )
-        wg.outputs.retrieved = final_results.retrieved
-        wg.outputs.epw_folder = final_results.epw_folder
+        wg.outputs.retrieved = epw_run.retrieved
+        wg.outputs.epw_folder = epw_run.remote_folder
 
     return wg
 
