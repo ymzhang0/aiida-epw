@@ -162,6 +162,7 @@ class FakeEpwBaseRuntimeWorkChain(WorkChain):
         spec.input("parent_folder_nscf", valid_type=orm.RemoteData, required=False)
         spec.input("parent_folder_chk", valid_type=orm.RemoteData, required=False)
         spec.input("parent_folder_epw", valid_type=orm.RemoteData, required=False)
+        spec.input("w90_chk_to_ukk_script", valid_type=orm.RemoteData, required=False)
         spec.input("kpoints", valid_type=orm.KpointsData, required=False)
         spec.input("kfpoints", valid_type=orm.KpointsData, required=False)
         spec.input("qpoints", valid_type=orm.KpointsData, required=False)
@@ -386,6 +387,83 @@ def test_drop_epw_mesh_generation_inputs_removes_builder_side_mesh_hints():
     assert cleaned["options"]["account"] == "elph"
     assert "kfpoints_factor" in original
     assert "qfpoints_distance" in original
+
+
+def test_should_run_epw_bands_reads_band_plot_from_inputepw():
+    """The EPW bands guard should honor the nested ``INPUTEPW.band_plot`` flag."""
+    result = prep_module.should_run_epw_bands._callable(
+        orm.Bool(True),
+        orm.Dict({"INPUTEPW": {"band_plot": True}}),
+    )
+
+    assert result.value is True
+
+
+def test_prep_passes_w90_chk_to_ukk_script_only_to_epw_base(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """The optional chk-to-ukk script should only be wired to the transformation EPW step."""
+    codes = {
+        "pw": fixture_code("quantumespresso.pw"),
+        "pw2wannier90": fixture_code("quantumespresso.pw2wannier90"),
+        "wannier90": fixture_code("wannier90.wannier90"),
+        "ph": fixture_code("quantumespresso.ph"),
+        "epw": fixture_code("epw.epw"),
+    }
+    structure = generate_structure()
+    script = orm.RemoteData(computer=codes["epw"].computer, remote_path="/tmp/w90_chk_to_ukk.jl")
+
+    monkeypatch.setattr(
+        prep_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "pseudo_family": "PseudoDojo/0.5/PBE/SR/standard/upf",
+            "qpoints_distance": 0.5,
+            "kpoints_distance_scf": 0.15,
+            "kpoints_factor_nscf": 2,
+            "do_bands_interpolation": True,
+            "kpoints_force_parity": False,
+            "w90_bands": {
+                "scf": {"pw": {"metadata": _metadata_dict()}},
+                "nscf": {"pw": {"metadata": _metadata_dict()}},
+                "pw2wannier90": {
+                    "pw2wannier90": {"metadata": _metadata_dict(num_mpiprocs_per_machine=8)}
+                },
+                "wannier90": {
+                    "wannier90": {"metadata": _metadata_dict(num_mpiprocs_per_machine=1)}
+                },
+            },
+            "ph_base": {"ph": {"metadata": _metadata_dict()}},
+            "epw_base": {"options": _metadata_dict()["options"]},
+            "epw_bands": {"options": _metadata_dict()["options"]},
+        },
+    )
+    monkeypatch.setattr(
+        prep_module.Wannier90BandsWorkChain,
+        "get_builder_from_protocol",
+        lambda **kwargs: _fake_wannier90_builder(kwargs["codes"]),
+    )
+    monkeypatch.setattr(
+        prep_module.Wannier90OptimizeWorkChain,
+        "get_builder_from_protocol",
+        lambda **kwargs: _fake_wannier90_builder(kwargs["codes"]),
+    )
+    monkeypatch.setattr(prep_module.PhBaseWorkChain, "get_builder_from_protocol", _fake_ph_builder)
+    monkeypatch.setattr(prep_module.EpwBaseWorkChain, "get_builder_from_protocol", _fake_epw_builder)
+
+    wg = prep_module.prep(
+        codes=codes,
+        structure=structure,
+        protocol="fast",
+        overrides={},
+        w90_chk_to_ukk_script=script,
+    )
+    engine_inputs = wg.to_engine_inputs(metadata=None)
+
+    assert engine_inputs["tasks"]["epw_base"]["w90_chk_to_ukk_script"].uuid == script.uuid
+    assert "w90_chk_to_ukk_script" not in engine_inputs["tasks"]["epw_bands"]
 
 
 def test_prep_workgraph_runs_with_fake_high_level_workchains(

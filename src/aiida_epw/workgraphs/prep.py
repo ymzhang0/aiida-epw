@@ -548,7 +548,9 @@ def create_kpoints_gamma():
 def should_run_epw_bands(do_bands_interpolation, epw_parameters) -> bool:
     """Mirror the outline guard for the EPW bands interpolation branch."""
     do_bands = _as_bool(do_bands_interpolation)
-    bands_plot = _as_dict(epw_parameters).get("band_plot", False)
+    parameters = _as_dict(epw_parameters)
+    inputepw = parameters.get("INPUTEPW", parameters.get("inputepw", {}))
+    bands_plot = inputepw.get("band_plot", parameters.get("band_plot", False))
 
     return orm.Bool(bool(do_bands) and bands_plot)
 
@@ -580,6 +582,7 @@ def prep_from_inputs(
     structure: orm.StructureData,
     inputs: dict[str, Any],
     use_wannier90_optimize: bool,
+    w90_chk_to_ukk_script: orm.RemoteData | None = None,
 ):
     """Create the prep WorkGraph from pre-built static task inputs."""
     w90_bands = inputs["w90_bands"]
@@ -696,6 +699,8 @@ def prep_from_inputs(
             "qfpoints": kfpoints.result,
         })
         epw_inputs["parent_folder_chk"] = w90_chk_folder
+        if w90_chk_to_ukk_script is not None:
+            epw_inputs["w90_chk_to_ukk_script"] = w90_chk_to_ukk_script
 
         epw_run = EpwBaseTask(**_set_call_link_label(epw_inputs, "epw_base"))
         _apply_socket_overrides(
@@ -750,6 +755,7 @@ def prep(
     wannier_projection_type=None,
     reference_bands: orm.BandsData | None = None,
     bands_kpoints: orm.KpointsData | None = None,
+    w90_chk_to_ukk_script: orm.RemoteData | None = None,
     **kwargs,
 ):
     """Build the EPW preparation WorkGraph."""
@@ -767,4 +773,5 @@ def prep(
         structure=structure,
         inputs=inputs,
         use_wannier90_optimize=reference_bands is not None,
+        w90_chk_to_ukk_script=w90_chk_to_ukk_script,
     )
