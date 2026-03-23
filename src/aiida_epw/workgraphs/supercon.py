@@ -124,6 +124,49 @@ def _get_prep_reciprocal_points(parent_prep):
     )
 
 
+def _get_prep_structure(parent_prep):
+    """Return the structure used by the prep workgraph."""
+    reciprocal_points = (
+        parent_prep.base.links.get_outgoing(link_label_filter="generate_reciprocal_points")
+        .first()
+        .node
+    )
+    return reciprocal_points.inputs.structure
+
+
+def _get_prep_epw_base(parent_prep):
+    """Return the internal EPW base task launched by the prep workgraph."""
+    link = parent_prep.base.links.get_outgoing(link_label_filter="epw_base").first()
+    if link is None:
+        raise ValueError("Could not find the `epw_base` subprocess in the prep workgraph.")
+    return link.node
+
+
+def _get_prep_restart_parent_folder(parent_prep):
+    """Return the restart parent folder exposed by the prep workgraph."""
+    try:
+        return parent_prep.outputs.epw_stash
+    except AttributeError:
+        pass
+
+    try:
+        epw_folder = parent_prep.outputs.epw_folder
+    except AttributeError as exception:
+        raise ValueError(
+            "Could not determine a restart folder from the prep workgraph outputs."
+        ) from exception
+
+    epw_base = _get_prep_epw_base(parent_prep)
+    clean_workdir = getattr(epw_base.inputs, "clean_workdir", orm.Bool(False))
+    if clean_workdir.value:
+        raise ValueError(
+            "The prep workgraph does not expose `epw_stash`, and its internal `epw_base` "
+            "was configured with `clean_workdir=True`, so `epw_folder` is not a safe restart source."
+        )
+
+    return epw_folder
+
+
 @task(outputs=spec.namespace(
     converged=Any,
     epw_final_a2f_output_parameters=Any,
@@ -155,11 +198,12 @@ def supercon(
 
     if parent_epw.process_label == "WorkGraph<prep>":
         reciprocal_points = _get_prep_reciprocal_points(parent_epw)
+        structure = _get_prep_structure(parent_epw)
         epw_source = AttributeDict(
             {
                 "inputs": AttributeDict(
                     {
-                        "structure": parent_epw.inputs.structure,
+                        "structure": structure,
                         "kpoints": reciprocal_points.kpoints,
                         "qpoints": reciprocal_points.qpoints,
                     }
@@ -179,7 +223,7 @@ def supercon(
 
     if parent_folder_epw is None:
         if parent_epw.process_label == "WorkGraph<prep>":
-            parent_folder_epw = parent_epw.outputs.epw_stash
+            parent_folder_epw = _get_prep_restart_parent_folder(parent_epw)
         else:
             from aiida_epw.workflows.supercon import get_restart_parent_folder
 

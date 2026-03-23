@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from importlib import import_module
 
+import pytest
 from aiida import orm
 from aiida.common import AttributeDict
 
@@ -168,6 +169,11 @@ def test_supercon_workgraph_uses_prep_graph_stash_output_as_restart_parent(
         "_get_prep_reciprocal_points",
         lambda _parent: AttributeDict({"kpoints": kpoints, "qpoints": qpoints}),
     )
+    monkeypatch.setattr(
+        supercon_module,
+        "_get_prep_structure",
+        lambda _parent: structure,
+    )
 
     wg = supercon_module.supercon.build(
         code=code,
@@ -181,3 +187,87 @@ def test_supercon_workgraph_uses_prep_graph_stash_output_as_restart_parent(
     assert epw_tasks[0].inputs.parent_folder_epw.value.uuid == epw_stash.uuid
     assert epw_tasks[0].inputs.kpoints.value.get_kpoints_mesh()[0] == [6, 6, 6]
     assert epw_tasks[0].inputs.qpoints.value.get_kpoints_mesh()[0] == [3, 3, 3]
+
+
+def test_supercon_workgraph_falls_back_to_prep_epw_folder_when_stash_missing(
+    fixture_code,
+    generate_kpoints_mesh,
+    generate_remote_data,
+    generate_structure,
+    fixture_localhost,
+    monkeypatch,
+):
+    """A prep workgraph parent should fall back to `epw_folder` when `epw_stash` is unavailable."""
+    code = fixture_code("epw.epw")
+    epw_folder = generate_remote_data(fixture_localhost, "/remote/epw-folder")
+    structure = generate_structure()
+    kpoints = generate_kpoints_mesh([6, 6, 6])
+    qpoints = generate_kpoints_mesh([3, 3, 3])
+    parent_prep_graph = SimpleNamespace(
+        process_label="WorkGraph<prep>",
+        outputs=SimpleNamespace(epw_folder=epw_folder),
+        base=SimpleNamespace(),
+    )
+
+    monkeypatch.setattr(
+        supercon_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "interpolation_distance": [0.1],
+            "kfpoints_factor": 2,
+            "always_run_final": False,
+            "epw_interp": {},
+            "epw_final_iso": {},
+            "epw_final_aniso": {},
+        },
+    )
+    monkeypatch.setattr(
+        supercon_module.EpwBaseWorkChain,
+        "get_builder_from_protocol",
+        lambda code, **kwargs: _fake_epw_builder(code),
+    )
+    monkeypatch.setattr(
+        supercon_module,
+        "_get_prep_reciprocal_points",
+        lambda _parent: AttributeDict({"kpoints": kpoints, "qpoints": qpoints}),
+    )
+    monkeypatch.setattr(
+        supercon_module,
+        "_get_prep_structure",
+        lambda _parent: structure,
+    )
+    monkeypatch.setattr(
+        supercon_module,
+        "_get_prep_epw_base",
+        lambda _parent: SimpleNamespace(inputs=SimpleNamespace(clean_workdir=orm.Bool(False))),
+    )
+
+    wg = supercon_module.supercon.build(
+        code=code,
+        parent_epw=parent_prep_graph,
+        protocol="fast",
+        overrides={},
+    )
+
+    epw_tasks = [task for task in wg.tasks if task.name.startswith("EpwBaseWorkChain")]
+    assert len(epw_tasks) >= 1
+    assert epw_tasks[0].inputs.parent_folder_epw.value.uuid == epw_folder.uuid
+
+
+def test_prep_epw_folder_fallback_rejects_cleaned_remote_folder(generate_remote_data, fixture_localhost):
+    """The fallback to `epw_folder` should fail if the prep EPW task cleaned its remote folder."""
+    epw_folder = generate_remote_data(fixture_localhost, "/remote/epw-folder")
+    parent_prep_graph = SimpleNamespace(
+        outputs=SimpleNamespace(epw_folder=epw_folder),
+        base=SimpleNamespace(),
+    )
+
+    clean_epw_base = SimpleNamespace(inputs=SimpleNamespace(clean_workdir=orm.Bool(True)))
+
+    original_getter = supercon_module._get_prep_epw_base
+    try:
+        supercon_module._get_prep_epw_base = lambda _parent: clean_epw_base
+        with pytest.raises(ValueError, match="clean_workdir=True"):
+            supercon_module._get_prep_restart_parent_folder(parent_prep_graph)
+    finally:
+        supercon_module._get_prep_epw_base = original_getter

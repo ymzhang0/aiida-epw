@@ -202,6 +202,86 @@ def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
     assert "structure" not in builder.w90_bands
 
 
+def test_get_builder_from_protocol_backfills_stash_mode_for_current_aiida(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """The prep builder should normalize stash options for current aiida-core validation."""
+    from aiida.common import AttributeDict
+
+    captured = {}
+    epw_code = fixture_code("epw.epw")
+    ph_code = fixture_code("quantumespresso.ph")
+
+    def fake_w90_builder(*args, **kwargs):
+        builder = AttributeDict()
+        builder.structure = generate_structure()
+        builder.open_grid = {}
+        builder.projwfc = {}
+        return builder
+
+    def fake_ph_builder(*args, **kwargs):
+        captured["ph_overrides"] = kwargs["overrides"]
+        builder = AttributeDict()
+        builder.clean_workdir = orm.Bool(False)
+        builder.qpoints_distance = orm.Float(0.4)
+        return builder
+
+    def fake_epw_builder(*args, **kwargs):
+        captured.setdefault("epw_overrides", []).append(kwargs["overrides"])
+        builder = AttributeDict()
+        builder.code = epw_code
+        builder.parameters = orm.Dict({"INPUTEPW": {}})
+        builder.options = orm.Dict(
+            {
+                "resources": {
+                    "num_machines": 1,
+                    "num_mpiprocs_per_machine": 1,
+                },
+                "max_wallclock_seconds": 1800,
+                "withmpi": True,
+            }
+        )
+        builder.qfpoints_distance = orm.Float(0.1)
+        builder.kfpoints_factor = orm.Int(2)
+        builder.max_iterations = orm.Int(2)
+        return builder
+
+    monkeypatch.setattr(
+        EpwPrepWorkChain,
+        "get_builder",
+        classmethod(lambda cls: AttributeDict()),
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.Wannier90BandsWorkChain.get_builder_from_protocol",
+        fake_w90_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.Wannier90OptimizeWorkChain.get_builder_from_protocol",
+        fake_w90_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.PhBaseWorkChain.get_builder_from_protocol",
+        fake_ph_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.EpwBaseWorkChain.get_builder_from_protocol",
+        fake_epw_builder,
+    )
+
+    EpwPrepWorkChain.get_builder_from_protocol(
+        codes={"ph": ph_code, "epw": epw_code},
+        structure=generate_structure(),
+        protocol="fast",
+    )
+
+    assert captured["ph_overrides"]["ph"]["metadata"]["options"]["stash"]["stash_mode"] == StashMode.COPY.value
+    assert "target_base" in captured["ph_overrides"]["ph"]["metadata"]["options"]["stash"]
+    assert captured["epw_overrides"][0]["options"]["stash"]["stash_mode"] == StashMode.COPY.value
+    assert "target_base" in captured["epw_overrides"][0]["options"]["stash"]
+
+
 def test_results_exposes_transformation_outputs():
     """The results step should forward the main EPW outputs."""
     retrieved = orm.FolderData()

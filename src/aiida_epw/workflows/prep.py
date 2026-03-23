@@ -4,6 +4,7 @@ from pathlib import Path
 
 from aiida import orm
 from aiida.common import AttributeDict, exceptions
+from aiida.common.datastructures import StashMode
 from aiida.engine import ToContext, WorkChain, if_
 from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import (
     create_kpoints_from_distance,
@@ -29,6 +30,15 @@ from aiida_epw.tools.workchain import (
 )
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
+
+def _ensure_stash_options(options, computer):
+    """Normalize stash options to the schema expected by current aiida-core."""
+    stash = options.get("stash")
+    if not stash:
+        return
+
+    stash.setdefault("stash_mode", StashMode.COPY.value)
+    stash.setdefault("target_base", get_target_basepath(computer))
 
 
 def should_run_bands_interpolation(inputs) -> bool:
@@ -286,10 +296,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         args = (codes["ph"], None, protocol)
         ph_base_inputs = inputs.get("ph_base", None)
-        if "target_base" not in ph_base_inputs["ph"]["metadata"]["options"]["stash"]:
-            ph_base_inputs["ph"]["metadata"]["options"]["stash"]["target_base"] = (
-                get_target_basepath(codes["ph"].computer)
-            )
+        _ensure_stash_options(ph_base_inputs["ph"]["metadata"]["options"], codes["ph"].computer)
         ph_base = PhBaseWorkChain.get_builder_from_protocol(
             *args, overrides=ph_base_inputs, **kwargs
         )
@@ -309,10 +316,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
             epw_inputs = inputs.get(namespace, None)
             if namespace == "epw_base":
-                if "target_base" not in epw_inputs["options"]["stash"]:
-                    epw_inputs["options"]["stash"]["target_base"] = get_target_basepath(
-                        codes["epw"].computer
-                    )
+                _ensure_stash_options(epw_inputs["options"], codes["epw"].computer)
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
                 code=codes["epw"],
