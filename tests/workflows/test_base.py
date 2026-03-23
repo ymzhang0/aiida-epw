@@ -419,11 +419,87 @@ def test_handle_out_of_walltime_enables_eliashberg_restart(
     assert parameters["restart"] is True
 
 
-def test_handle_scheduler_out_of_walltime_aborts_explicitly(
+def test_handle_scheduler_out_of_walltime_prepares_best_effort_restart(
+    fixture_localhost,
+    generate_remote_data,
     generate_workchain,
     generate_inputs_epw_base,
 ):
-    """Scheduler walltime exits should not be retried blindly."""
+    """Scheduler walltime exits should retry from the latest available EPW folder."""
+    remote_folder = generate_remote_data(fixture_localhost, "/remote/scheduler-restart")
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            parameters=orm.Dict({"INPUTEPW": {"elph": True}})
+        ),
+    )
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
+        remote_folder=remote_folder,
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result.status == 0
+
+    process.prepare_process()
+    parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
+
+    assert process.ctx.inputs.parent_folder_epw == remote_folder
+    assert parameters["epwread"] is True
+    assert getattr(process.ctx, "restart_calc", None) is None
+
+
+def test_handle_scheduler_out_of_walltime_enables_eliashberg_restart(
+    fixture_localhost,
+    generate_remote_data,
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Scheduler walltime exits should also switch on Eliashberg restart flags."""
+    remote_folder = generate_remote_data(
+        fixture_localhost, "/remote/scheduler-eliashberg"
+    )
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            parameters=orm.Dict(
+                {"INPUTEPW": {"elph": True, "eliashberg": True, "ephwrite": True}}
+            )
+        ),
+    )
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
+        remote_folder=remote_folder,
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result.status == 0
+
+    process.prepare_process()
+    parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
+
+    assert process.ctx.inputs.parent_folder_epw == remote_folder
+    assert parameters["epwread"] is True
+    assert parameters["restart"] is True
+
+
+def test_handle_scheduler_out_of_walltime_aborts_without_remote_folder(
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Scheduler walltime exits still abort when there is no usable restart folder."""
     process = generate_workchain("epw.base", generate_inputs_epw_base())
     process.setup()
 

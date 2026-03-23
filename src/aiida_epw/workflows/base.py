@@ -465,19 +465,30 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         exit_codes=EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
     )
     def handle_scheduler_out_of_walltime(self, calculation):
-        """Abort scheduler walltime failures explicitly.
+        """Attempt a best-effort restart after a scheduler walltime stop.
 
         Unlike `ERROR_OUT_OF_WALLTIME`, a scheduler-enforced stop does not guarantee
-        that EPW wrote a restartable state, so avoid automatically reusing its folder.
+        that EPW wrote a clean restart point. However, on many systems EPW still
+        leaves a usable restart folder behind, so retry from the latest remote
+        folder before giving up.
         """
+        if not self.set_restart_from_calculation(calculation):
+            action = (
+                "scheduler walltime detected but no remote folder is available, "
+                "aborting..."
+            )
+            self.report_error_handled(calculation, action)
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        self.ctx.restart_calc = calculation
         action = (
-            "scheduler walltime detected before a clean EPW shutdown; "
-            "aborting instead of attempting an unsafe restart."
+            "scheduler walltime detected, attempting a best-effort restart from "
+            "the latest EPW remote folder."
         )
         self.report_error_handled(calculation, action)
-        return ProcessHandlerReport(
-            True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
-        )
+        return ProcessHandlerReport(True)
 
     @process_handler(
         priority=605,
