@@ -555,6 +555,35 @@ def should_run_epw_bands(do_bands_interpolation, epw_parameters) -> bool:
     return orm.Bool(bool(do_bands) and bands_plot)
 
 
+@task.workfunction()
+def get_seekpath_explicit_kpoints(reference_output):
+    """Trace the explicit k-point path back to the internal seekpath calcfunction."""
+    from aiida.common.links import LinkType
+    from aiida.orm import ProcessNode
+
+    workchain = None
+    for link in reference_output.base.links.get_incoming(link_type=LinkType.RETURN).all():
+        if not isinstance(link.node, ProcessNode):
+            continue
+        outgoing = link.node.base.links.get_outgoing(link_type=LinkType.CALL_CALC).all()
+        if any(out.link_label == "seekpath_structure_analysis" for out in outgoing):
+            workchain = link.node
+            break
+
+    if workchain is None:
+        raise ValueError(
+            "Could not find a parent workchain with a `seekpath_structure_analysis` call."
+        )
+
+    for link in workchain.base.links.get_outgoing(link_type=LinkType.CALL_CALC).all():
+        if link.link_label == "seekpath_structure_analysis":
+            return link.node.outputs.explicit_kpoints
+
+    raise ValueError(
+        "The parent workchain does not expose an `explicit_kpoints` output from seekpath."
+    )
+
+
 @task.calcfunction()
 def extract_kpoints_path(band_structure):
     """Convert a ``BandsData`` output into a standalone ``KpointsData`` node."""
@@ -568,12 +597,19 @@ def extract_kpoints_path(band_structure):
     return kpoints
 
 
-@task(outputs=spec.namespace(retrieved=Any, epw_folder=Any))
-def results(retrieved, epw_folder):
+@task(outputs=spec.namespace(
+    retrieved=Any,
+    epw_folder=Any,
+    epw_stash=Any,
+))
+def results(retrieved, epw_folder, epw_stash=None, epw_kpoints=None, epw_qpoints=None):
     """Compatibility task retained so previously saved prep graphs can still be loaded."""
     return {
         "retrieved": retrieved,
         "epw_folder": epw_folder,
+        "epw_stash": epw_stash,
+        "epw_kpoints": epw_kpoints,
+        "epw_qpoints": epw_qpoints,
     }
 
 
@@ -592,7 +628,11 @@ def prep_from_inputs(
 
     with WorkGraph(
         name="prep",
-        outputs=spec.namespace(retrieved=Any, epw_folder=Any),
+        outputs=spec.namespace(
+            retrieved=Any,
+            epw_folder=Any,
+            epw_stash=Any,
+        ),
     ) as wg:
         reciprocal_points = generate_reciprocal_points(
             structure=structure,
@@ -639,7 +679,6 @@ def prep_from_inputs(
 
                 w90_scf_remote = wannier90_run_proxy.scf.remote_folder
                 w90_nscf_remote = wannier90_run_proxy.nscf.remote_folder
-                w90_band_structure = wannier90_run_proxy.band_structure
 
                 if _as_bool(w90_bands.get("optimize_disproj", False)):
                     w90_chk_folder = wannier90_run_proxy.wannier90_optimal.remote_folder
@@ -674,7 +713,6 @@ def prep_from_inputs(
 
                 w90_scf_remote = wannier90_run_proxy.scf.remote_folder
                 w90_nscf_remote = wannier90_run_proxy.nscf.remote_folder
-                w90_band_structure = wannier90_run_proxy.band_structure
                 w90_chk_folder = wannier90_run_proxy.wannier90.remote_folder
 
         phonons_inputs = recursive_merge(ph_base, {
@@ -726,8 +764,8 @@ def prep_from_inputs(
                 epw_bands_inputs["qfpoints"] = bands_kpoints_source
                 epw_bands_inputs["kfpoints"] = bands_kpoints_source
             else:
-                bands_kpoints = extract_kpoints_path(
-                    band_structure=w90_band_structure
+                bands_kpoints = get_seekpath_explicit_kpoints(
+                    reference_output=w90_nscf_remote
                 ).result
                 epw_bands_inputs["qfpoints"] = bands_kpoints
                 epw_bands_inputs["kfpoints"] = bands_kpoints
@@ -743,6 +781,7 @@ def prep_from_inputs(
 
         wg.outputs.retrieved = epw_run.retrieved
         wg.outputs.epw_folder = epw_run.remote_folder
+        wg.outputs.epw_stash = epw_run.remote_stash
 
     return wg
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Union
 
 from aiida import orm
+from aiida.common import AttributeDict
 from aiida.engine import ProcessBuilder
 from aiida.engine.processes.builder import ProcessBuilderNamespace
 from aiida_workgraph import If, WorkGraph, spec, task
@@ -108,7 +109,26 @@ def extract_restart_meshes(parent_folder_epw):
     }
 
 
-@task.calcfunction()
+def _get_prep_reciprocal_points(parent_prep):
+    """Return the reciprocal meshes produced by the prep workgraph."""
+    reciprocal_points = (
+        parent_prep.base.links.get_outgoing(link_label_filter="generate_reciprocal_points")
+        .first()
+        .node
+    )
+    return AttributeDict(
+        {
+            "kpoints": reciprocal_points.outputs.kpoints_nscf,
+            "qpoints": reciprocal_points.outputs.qpoints,
+        }
+    )
+
+
+@task(outputs=spec.namespace(
+    converged=Any,
+    epw_final_a2f_output_parameters=Any,
+    epw_final_a2f_a2f=Any,
+))
 def results(converged, output_parameters, a2f):
     """Expose the final outputs following the original ``results`` step."""
     return {
@@ -120,23 +140,33 @@ def results(converged, output_parameters, a2f):
 
 @task.graph(outputs=["converged", "epw_final_a2f_output_parameters", "epw_final_a2f_a2f"])
 def supercon(
-    epw_code,
+    code,
     parent_epw,
     protocol=None,
     overrides=None,
-    scon_epw_code=None,
     parent_folder_epw=None,
     **kwargs,
 ):
     """Superconductivity WorkGraph."""
-    if hasattr(codes, "items"):
-        codes = dict(codes.items())
     if overrides and hasattr(overrides, "items"):
         overrides = dict(overrides.items())
-        
+
     inputs = get_protocol_inputs(protocol, overrides)
 
-    if parent_epw.process_label == "EpwPrepWorkChain":
+    if parent_epw.process_label == "WorkGraph<prep>":
+        reciprocal_points = _get_prep_reciprocal_points(parent_epw)
+        epw_source = AttributeDict(
+            {
+                "inputs": AttributeDict(
+                    {
+                        "structure": parent_epw.inputs.structure,
+                        "kpoints": reciprocal_points.kpoints,
+                        "qpoints": reciprocal_points.qpoints,
+                    }
+                )
+            }
+        )
+    elif parent_epw.process_label == "EpwPrepWorkChain":
         epw_source = (
             parent_epw.base.links.get_outgoing(link_label_filter="epw_base")
             .first()
@@ -148,8 +178,12 @@ def supercon(
         raise ValueError(f"Invalid parent_epw process: {parent_epw.process_label}")
 
     if parent_folder_epw is None:
-        from aiida_epw.workflows.supercon import get_restart_parent_folder
-        parent_folder_epw = get_restart_parent_folder(parent_epw)
+        if parent_epw.process_label == "WorkGraph<prep>":
+            parent_folder_epw = parent_epw.outputs.epw_stash
+        else:
+            from aiida_epw.workflows.supercon import get_restart_parent_folder
+
+            parent_folder_epw = get_restart_parent_folder(parent_epw)
 
     sub_inputs = {}
     for epw_namespace in (
@@ -159,7 +193,7 @@ def supercon(
     ):
         epw_inputs = inputs.get(epw_namespace, {})
         epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
-            code=scon_epw_code if (epw_namespace == "epw_interp" and scon_epw_code is not None) else epw_code,
+            code=code,
             structure=epw_source.inputs.structure,
             protocol=protocol,
             overrides=epw_inputs,
@@ -214,19 +248,19 @@ def supercon(
         interpolation_task = EpwInterpTask(**inputs_merged)
 
         if previous_interpolation_task is not None:
-            interpolation_task.waiting_on.add(previous_interpolation_task)
+            interpolation_task._task.waiting_on.add(previous_interpolation_task._task)
 
         interpolation_tasks.append(interpolation_task)
         previous_interpolation_task = interpolation_task
 
         allen_dynes_task = extract_allen_dynes_tc(
-            output_parameters=interpolation_task.outputs.output_parameters,
+            output_parameters=interpolation_task.output_parameters,
         )
         allen_dynes_tasks.append(allen_dynes_task)
 
         if index == 1:
             degaussq_task = derive_degaussq_from_a2f(
-                a2f=interpolation_task.outputs.a2f,
+                a2f=interpolation_task.a2f,
             )
             updated_interp_parameters = update_inputepw_degaussq(
                 parameters=interp_inputs["parameters"],
@@ -254,7 +288,7 @@ def supercon(
 
     with If(run_final_task.result):
         restart_meshes = extract_restart_meshes(
-            parent_folder_epw=last_interpolation_task.outputs.remote_folder,
+            parent_folder_epw=last_interpolation_task.remote_folder,
         )
 
         final_iso_parameters = None
@@ -268,9 +302,9 @@ def supercon(
         final_iso_inputs_merged = dict(final_iso_inputs)
         final_iso_inputs_merged.update({
              "structure": structure,
-             "parent_folder_epw": last_interpolation_task.outputs.remote_folder,
-             "kfpoints": restart_meshes.outputs.kfpoints,
-             "qfpoints": restart_meshes.outputs.qfpoints,
+             "parent_folder_epw": last_interpolation_task.remote_folder,
+             "kfpoints": restart_meshes.kfpoints,
+             "qfpoints": restart_meshes.qfpoints,
         })
         if final_iso_parameters is not None:
              final_iso_inputs_merged["parameters"] = final_iso_parameters.result
@@ -281,15 +315,15 @@ def supercon(
         final_aniso_inputs_merged = dict(final_aniso_inputs)
         final_aniso_inputs_merged.update({
              "structure": structure,
-             "parent_folder_epw": last_interpolation_task.outputs.remote_folder,
-             "kfpoints": restart_meshes.outputs.kfpoints,
-             "qfpoints": restart_meshes.outputs.qfpoints,
+             "parent_folder_epw": last_interpolation_task.remote_folder,
+             "kfpoints": restart_meshes.kfpoints,
+             "qfpoints": restart_meshes.qfpoints,
         })
         final_aniso_task = EpwFinalAnisoTask(**final_aniso_inputs_merged)
-        final_aniso_task.waiting_on.add(final_iso_task)
+        final_aniso_task._task.waiting_on.add(final_iso_task._task)
 
     return results(
         converged=converged_source,
-        output_parameters=last_interpolation_task.outputs.output_parameters,
-        a2f=last_interpolation_task.outputs.a2f,
+        output_parameters=last_interpolation_task.output_parameters,
+        a2f=last_interpolation_task.a2f,
     )

@@ -111,17 +111,23 @@ class FakeWannier90BandsRuntimeWorkChain(WorkChain):
         spec.output("scf.remote_folder", valid_type=orm.RemoteData)
         spec.output("nscf.remote_folder", valid_type=orm.RemoteData)
         spec.output("wannier90.remote_folder", valid_type=orm.RemoteData)
+        spec.output("primitive_structure", valid_type=orm.StructureData)
         spec.output("band_structure", valid_type=orm.BandsData)
 
     def generate_outputs(self):
         """Emit the outputs that the prep graph expects downstream."""
         code = self.inputs.scf["pw"]["code"]
+        seekpath = _fake_seekpath_structure_analysis(
+            structure=self.inputs.structure,
+            metadata={"call_link_label": "seekpath_structure_analysis"},
+        )
         self.out("scf.remote_folder", _make_remote_data(code, orm.Str(f"{self.node.uuid}-scf")))
         self.out("nscf.remote_folder", _make_remote_data(code, orm.Str(f"{self.node.uuid}-nscf")))
         self.out(
             "wannier90.remote_folder",
             _make_remote_data(code, orm.Str(f"{self.node.uuid}-wannier90")),
         )
+        self.out("primitive_structure", seekpath["primitive_structure"])
         self.out("band_structure", _make_bands_data(self.inputs.structure))
 
 
@@ -296,7 +302,7 @@ def _fake_epw_builder(code, structure, *_args, **_kwargs):
     builder = AttributeDict()
     builder.code = code
     builder.structure = structure
-    builder.parameters = orm.Dict({"INPUTEPW": {"band_plot": False}})
+    builder.parameters = orm.Dict({"INPUTEPW": {"band_plot": True}})
     builder.options = _metadata_dict()
     builder.settings = orm.Dict({})
     builder.parallelization = orm.Dict({})
@@ -351,6 +357,16 @@ def _make_bands_data(structure):
 def _make_folder_data():
     """Create a folder data node for tests."""
     return orm.FolderData()
+
+
+@calcfunction
+def _fake_seekpath_structure_analysis(structure):
+    """Create lightweight seekpath-like outputs with provenance for tests."""
+    primitive_structure = orm.StructureData(ase=structure.get_ase())
+    return {
+        "primitive_structure": primitive_structure,
+        "explicit_kpoints": _create_explicit_kpoints([2, 2, 2]),
+    }
 
 
 def test_prepare_wannier90_runtime_inputs_returns_distinct_nodes():
@@ -552,13 +568,16 @@ def test_prep_workgraph_runs_with_fake_high_level_workchains(
 
     assert wg.process is not None
     assert wg.process.is_finished_ok
+    assert wg.process.outputs.epw_stash.uuid == wg.tasks["epw_base"].process.outputs.remote_stash.uuid
 
     wannier_node = wg.tasks["w90_bands"].process
     phonon_node = wg.tasks["ph_base"].process
     epw_node = wg.tasks["epw_base"].process
+    epw_bands_node = wg.tasks["epw_bands"].process
     assert wannier_node is not None
     assert phonon_node is not None
     assert epw_node is not None
+    assert epw_bands_node is not None
 
     nscf_kpoints = wannier_node.inputs.nscf.kpoints
     wannier_kpoints = wannier_node.inputs.wannier90.wannier90.kpoints
@@ -572,8 +591,26 @@ def test_prep_workgraph_runs_with_fake_high_level_workchains(
     assert epw_node.inputs.parent_folder_ph.uuid == phonon_node.outputs.remote_folder.uuid
     assert epw_node.inputs.parent_folder_nscf.uuid == wannier_node.outputs.nscf.remote_folder.uuid
     assert epw_node.inputs.parent_folder_chk.uuid == wannier_node.outputs.wannier90.remote_folder.uuid
+    reciprocal_points_node = wg.tasks["generate_reciprocal_points"].process
+    assert reciprocal_points_node is not None
+    assert reciprocal_points_node.outputs.kpoints_nscf.get_kpoints_mesh()[0] == epw_node.inputs.kpoints.get_kpoints_mesh()[0]
+    assert reciprocal_points_node.outputs.qpoints.get_kpoints_mesh()[0] == epw_node.inputs.qpoints.get_kpoints_mesh()[0]
     assert epw_node.inputs.kfpoints.get_kpoints_mesh()[0] == [1, 1, 1]
     assert epw_node.inputs.qfpoints.get_kpoints_mesh()[0] == [1, 1, 1]
+    with pytest.raises(AttributeError):
+        epw_bands_node.inputs.kfpoints.get_kpoints_mesh()
+    with pytest.raises(AttributeError):
+        epw_bands_node.inputs.qfpoints.get_kpoints_mesh()
+    epw_bands_kf = epw_bands_node.inputs.kfpoints.get_kpoints()
+    epw_bands_qf = epw_bands_node.inputs.qfpoints.get_kpoints()
+    assert len(epw_bands_kf) > 0
+    assert np.array_equal(epw_bands_kf, epw_bands_qf)
+    seekpath_node = next(
+        link.node
+        for link in wannier_node.base.links.get_outgoing(link_type=LinkType.CALL_CALC).all()
+        if link.link_label == "seekpath_structure_analysis"
+    )
+    assert epw_bands_node.inputs.kfpoints.uuid == seekpath_node.outputs.explicit_kpoints.uuid
 
 
 def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(
