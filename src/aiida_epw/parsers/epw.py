@@ -38,6 +38,23 @@ class EpwParser(BaseParser):
     }
 
     @staticmethod
+    def is_scheduler_out_of_memory(stderr):
+        """Return whether scheduler stderr indicates an out-of-memory kill."""
+        if not stderr:
+            return False
+
+        stderr_lower = stderr.lower()
+        return any(
+            marker in stderr_lower
+            for marker in (
+                "oom_kill",
+                "out of memory",
+                "oom killed",
+                "exceeded memory limit",
+            )
+        )
+
+    @staticmethod
     def get_parser_settings_key():
         """Return the settings key reserved for parser-specific options."""
         return "parser_options"
@@ -65,10 +82,20 @@ class EpwParser(BaseParser):
         logs = get_logging_container()
 
         stdout, parsed_data, logs = self.parse_stdout_from_retrieved(logs)
+        scheduler_stderr = self.node.get_scheduler_stderr()
 
         # Preserve scheduler walltime failures instead of overriding them with parser-side stdout errors.
         if self.node.exit_status == self.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status:
             return self.exit(logs=logs)
+
+        if (
+            self.node.exit_status
+            == self.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY.status
+        ):
+            return self.exit(logs=logs)
+
+        if self.is_scheduler_out_of_memory(scheduler_stderr):
+            return self.exit(self.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY, logs)
 
         base_exit_code = self.check_base_errors(logs)
         if base_exit_code:

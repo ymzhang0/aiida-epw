@@ -682,7 +682,7 @@ class EpwCalculation(NamelistsCalculation):
         if parameters["INPUTEPW"].get("eliashberg", False):
             if parameters["INPUTEPW"].get("ephwrite", True):
                 if parameters["INPUTEPW"].get("restart", False):
-                    file_list = ["crystal.fmt", "restart.fmt", "selecq.fmt"]
+                    file_list = [f"{self._PREFIX}.ukk", "crystal.fmt", "dmedata.fmt", "epwdata.fmt", "restart.fmt", "selecq.fmt", "vmedata.fmt"]
                     remote_symlink_list.append(
                         (
                             parent_folder_epw.computer.uuid,

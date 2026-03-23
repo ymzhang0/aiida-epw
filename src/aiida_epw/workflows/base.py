@@ -73,6 +73,12 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
     _process_class = EpwCalculation
 
+    defaults = AttributeDict(
+        {
+            "min_num_mpiprocs_per_machine_for_oom_restart": 32,
+        }
+    )
+
     @classmethod
     def define(cls, spec):
         """Define the process specification."""
@@ -448,6 +454,24 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report("{}<{}> failed with exit status {}: {}".format(*arguments))
         self.report(f"Action taken: {action}")
 
+    def reduce_num_mpiprocs_per_machine_for_oom(self):
+        """Halve the MPI ranks per machine, unless that would drop below the restart floor."""
+        options = self.ctx.inputs.metadata.get("options", {})
+        resources = options.get("resources", {})
+        current = resources.get("num_mpiprocs_per_machine", None)
+
+        if current is None:
+            return None
+
+        new_value = current // 2
+        minimum = self.defaults.min_num_mpiprocs_per_machine_for_oom_restart
+
+        if new_value < minimum:
+            return None
+
+        resources["num_mpiprocs_per_machine"] = new_value
+        return current, new_value
+
     @process_handler(
         priority=600,
         exit_codes=[EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT],
@@ -484,8 +508,46 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         self.ctx.restart_calc = calculation
         action = (
-            "scheduler walltime detected, attempting a best-effort restart from "
-            "the latest EPW remote folder."
+            "attempting a restart from the previous EPW remote folder."
+        )
+        self.report_error_handled(calculation, action)
+        return ProcessHandlerReport(True)
+
+    @process_handler(
+        priority=615,
+        exit_codes=EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY,
+    )
+    def handle_scheduler_out_of_memory(self, calculation):
+        """Retry scheduler OOM failures by reducing MPI ranks per machine."""
+        reduced = self.reduce_num_mpiprocs_per_machine_for_oom()
+
+        if reduced is None:
+            action = (
+                "scheduler out-of-memory detected but `num_mpiprocs_per_machine` "
+                f"cannot be reduced to at least "
+                f"{self.defaults.min_num_mpiprocs_per_machine_for_oom_restart}, aborting..."
+            )
+            self.report_error_handled(calculation, action)
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        if not self.set_restart_from_calculation(calculation):
+            action = (
+                "scheduler out-of-memory detected but no remote folder is available, "
+                "aborting..."
+            )
+            self.report_error_handled(calculation, action)
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        current, new_value = reduced
+        self.ctx.restart_calc = calculation
+        action = (
+            "scheduler out-of-memory detected, reducing "
+            f"`num_mpiprocs_per_machine` from {current} to {new_value} and "
+            "restarting from the latest EPW remote folder."
         )
         self.report_error_handled(calculation, action)
         return ProcessHandlerReport(True)

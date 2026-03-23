@@ -327,6 +327,57 @@ def test_epw_preserves_scheduler_out_of_walltime(aiida_localhost, tmp_path):
     )
 
 
+def test_epw_detects_scheduler_out_of_memory_from_stderr(aiida_localhost, tmp_path):
+    """Scheduler OOM messages should take precedence over incomplete stdout parsing."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.set_option("scheduler_stderr", "_scheduler-stderr.txt")
+    node.store()
+
+    stdout_path = tmp_path / "aiida.out"
+    stdout_path.write_text(
+        textwrap.dedent(
+            """\
+            Program EPW v.5.7 starts on 15May2023 at  3: 7:50
+            """
+        )
+    )
+    scheduler_stderr_path = tmp_path / "_scheduler-stderr.txt"
+    scheduler_stderr_path.write_text(
+        textwrap.dedent(
+            """\
+            slurmstepd: error: Detected 4 oom_kill events in StepId=13178347.0.
+            srun: error: cns261: tasks 104,106: Out Of Memory
+            """
+        )
+    )
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_file(stdout_path.as_posix(), "aiida.out")
+    retrieved.base.repository.put_object_from_file(
+        scheduler_stderr_path.as_posix(), "_scheduler-stderr.txt"
+    )
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    _, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished
+    assert calcfunction.is_failed
+    assert (
+        calcfunction.exit_status
+        == EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY.status
+    )
+
+
 def test_parse_iso_gap_functions_returns_typed_data(files_path):
     """Test isotropic gap-function files are wrapped in `GapFunctionData`."""
     iso_dir = files_path / "tools" / "parsers" / "full_iso_eliashberg"

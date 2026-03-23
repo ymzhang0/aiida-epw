@@ -515,6 +515,88 @@ def test_handle_scheduler_out_of_walltime_aborts_without_remote_folder(
     assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
 
 
+def test_handle_scheduler_out_of_memory_reduces_mpi_ranks_and_restarts(
+    fixture_localhost,
+    generate_remote_data,
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Scheduler OOM exits should reduce MPI ranks per machine and retry."""
+    remote_folder = generate_remote_data(fixture_localhost, "/remote/oom-restart")
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            parameters=orm.Dict({"INPUTEPW": {"elph": True}}),
+            options=orm.Dict(
+                {
+                    "resources": {
+                        "num_machines": 1,
+                        "num_mpiprocs_per_machine": 128,
+                    },
+                    "max_wallclock_seconds": 1800,
+                    "withmpi": True,
+                }
+            ),
+        ),
+    )
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY,
+        remote_folder=remote_folder,
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result.status == 0
+
+    process.prepare_process()
+    parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
+    resources = process.ctx.inputs.metadata["options"]["resources"]
+
+    assert process.ctx.inputs.parent_folder_epw == remote_folder
+    assert resources["num_mpiprocs_per_machine"] == 64
+    assert parameters["epwread"] is True
+    assert getattr(process.ctx, "restart_calc", None) is None
+
+
+def test_handle_scheduler_out_of_memory_aborts_below_minimum_mpi_ranks(
+    generate_workchain,
+    generate_inputs_epw_base,
+):
+    """Scheduler OOM exits should abort once the MPI rank count is already too low."""
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            options=orm.Dict(
+                {
+                    "resources": {
+                        "num_machines": 1,
+                        "num_mpiprocs_per_machine": 32,
+                    },
+                    "max_wallclock_seconds": 1800,
+                    "withmpi": True,
+                }
+            ),
+        ),
+    )
+    process.setup()
+
+    calculation = create_failed_epw_calculation(
+        EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY
+    )
+
+    process.ctx.iteration = 1
+    process.ctx.children = [calculation]
+
+    result = process.inspect_process()
+
+    assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+
+
 def test_handle_known_unrecoverable_failure_uses_dedicated_exit_code(
     generate_workchain,
     generate_inputs_epw_base,
