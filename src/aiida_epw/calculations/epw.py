@@ -141,6 +141,14 @@ class EpwCalculation(NamelistsCalculation):
             valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
             help="folder that contains all files required to restart an `EpwCalculation`",
         )
+        spec.input(
+            "w90_chk_to_ukk_script",
+            valid_type=orm.RemoteData,
+            required=False,
+            help=(
+                "A script that converts `prefix.chk` into `prefix.ukk` before launching EPW."
+            ),
+        )
 
         spec.inputs.validator = cls.validate_inputs
 
@@ -866,6 +874,18 @@ class EpwCalculation(NamelistsCalculation):
         calcinfo.retrieve_list += self._internal_retrieve_list
         calcinfo.retrieve_temporary_list = self._retrieve_temporary_list
         calcinfo.retrieve_singlefile_list = self._retrieve_singlefile_list
+
+        if "w90_chk_to_ukk_script" in self.inputs and "parent_folder_chk" in self.inputs:
+            script = self.inputs.w90_chk_to_ukk_script.get_remote_path()
+            command = (
+                f"{script} {self._PREFIX}.chk "
+                f"{self._OUTPUT_SUBFOLDER}{self._PREFIX}.xml "
+                f"{self._PREFIX}.ukk {self._PREFIX}.wannier90.mmn {self._PREFIX}.mmn"
+            )
+            prepend_text = getattr(calcinfo, "prepend_text", None)
+            calcinfo.prepend_text = (
+                f"{prepend_text}\n{command}" if prepend_text else command
+            )
 
         return calcinfo
 

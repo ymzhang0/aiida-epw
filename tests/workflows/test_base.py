@@ -7,7 +7,11 @@ from aiida.common import LinkType
 from aiida.engine import ProcessHandlerReport
 from aiida.plugins import CalculationFactory
 
-from aiida_epw.workflows.base import EpwBaseWorkChain, validate_inputs
+from aiida_epw.workflows.base import (
+    EpwBaseWorkChain,
+    derive_inputepw_parameters,
+    validate_inputs,
+)
 
 EpwCalculation = CalculationFactory("epw.epw")
 
@@ -188,13 +192,9 @@ def test_setup_updates_parameters_from_wannier_parent(
     process.setup()
 
     parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
-    prepend_text = process.ctx.inputs.metadata["options"]["prepend_text"]
 
     assert parameters["nbndsub"] == 8
     assert parameters["bands_skipped"] == "exclude_bands = 1:4"
-    assert "/remote/bin/w90_chk2ukk.jl" in prepend_text
-    assert "aiida.chk" in prepend_text
-    assert "aiida.ukk" in prepend_text
 
 
 def test_setup_updates_parameters_from_epw_restart_parent(
@@ -235,6 +235,26 @@ def test_setup_updates_parameters_from_epw_restart_parent(
     assert parameters["use_ws"] is True
     assert parameters["nbndsub"] == 12
     assert parameters["bands_skipped"] == "exclude_bands = 2:5"
+
+
+def test_derive_inputepw_parameters_from_wannier_parent(fixture_localhost):
+    """The helper should derive Wannier-dependent EPW parameters deterministically."""
+    wannier_parameters = orm.Dict(
+        {"mp_grid": [4, 4, 4], "num_wann": 8, "exclude_bands": [1, 4]}
+    )
+    parent_folder_chk = create_remote_data_with_creator(
+        fixture_localhost,
+        "/remote/wannier",
+        "aiida.calculations:wannier90.wannier90",
+        inputs={"parameters": wannier_parameters},
+    )
+
+    parameters = derive_inputepw_parameters(
+        {"INPUTEPW": {}}, parent_folder_chk=parent_folder_chk
+    )["INPUTEPW"]
+
+    assert parameters["nbndsub"] == 8
+    assert parameters["bands_skipped"] == "exclude_bands = 1:4"
 
 
 def test_validate_kpoints_uses_parent_folders(
@@ -565,13 +585,13 @@ def test_handle_scheduler_out_of_walltime_aborts_without_remote_folder(
     assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
 
 
-def test_handle_scheduler_out_of_memory_reduces_mpi_ranks_and_restarts(
+def test_handle_scheduler_out_of_memory_aborts_without_restart(
     fixture_localhost,
     generate_remote_data,
     generate_workchain,
     generate_inputs_epw_base,
 ):
-    """Scheduler OOM exits should reduce MPI ranks per machine and retry."""
+    """Scheduler OOM exits should abort without mutating restart inputs."""
     remote_folder = generate_remote_data(fixture_localhost, "/remote/oom-restart")
     process = generate_workchain(
         "epw.base",
@@ -601,23 +621,14 @@ def test_handle_scheduler_out_of_memory_reduces_mpi_ranks_and_restarts(
 
     result = process.inspect_process()
 
-    assert result.status == 0
-
-    process.prepare_process()
-    parameters = process.ctx.inputs.parameters.get_dict()["INPUTEPW"]
-    resources = process.ctx.inputs.metadata["options"]["resources"]
-
-    assert process.ctx.inputs.parent_folder_epw == remote_folder
-    assert resources["num_mpiprocs_per_machine"] == 64
-    assert parameters["epwread"] is True
-    assert getattr(process.ctx, "restart_calc", None) is None
+    assert result == process.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
 
 
-def test_handle_scheduler_out_of_memory_aborts_below_minimum_mpi_ranks(
+def test_handle_scheduler_out_of_memory_also_aborts_with_small_mpi_layout(
     generate_workchain,
     generate_inputs_epw_base,
 ):
-    """Scheduler OOM exits should abort once the MPI rank count is already too low."""
+    """Scheduler OOM exits should still abort when the MPI layout is already small."""
     process = generate_workchain(
         "epw.base",
         generate_inputs_epw_base(

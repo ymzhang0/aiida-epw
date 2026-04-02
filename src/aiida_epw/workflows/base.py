@@ -45,6 +45,36 @@ def get_kpoints_from_chk_folder(chk_folder):
         )
 
 
+def derive_inputepw_parameters(
+    parameters, parent_folder_chk=None, parent_folder_epw=None
+):
+    """Return EPW parameters updated from Wannier/EPW parent folders."""
+    parameters = parameters.copy()
+    inputepw = parameters.setdefault("INPUTEPW", {})
+
+    if parent_folder_chk is not None:
+        w90_params = parent_folder_chk.creator.inputs.parameters.get_dict()
+        exclude_bands = w90_params.get("exclude_bands", None)
+
+        if exclude_bands:
+            inputepw["bands_skipped"] = (
+                f"exclude_bands = {exclude_bands[0]}:{exclude_bands[-1]}"
+            )
+
+        inputepw["nbndsub"] = w90_params["num_wann"]
+
+    if parent_folder_epw is not None:
+        calculation = find_related_calculation(parent_folder_epw)
+        epw_params = calculation.inputs.parameters.get_dict()["INPUTEPW"]
+
+        inputepw["use_ws"] = epw_params.get("use_ws", False)
+        inputepw["nbndsub"] = epw_params["nbndsub"]
+        if "bands_skipped" in epw_params:
+            inputepw["bands_skipped"] = epw_params.get("bands_skipped")
+
+    return parameters
+
+
 def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
     inputs, ctx=None
 ):
@@ -265,51 +295,15 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         metadata["options"] = self.inputs.options.get_dict()
 
-        ## Didn't find the way to modify `metadata` in EpwCalculation.
-        ## It should be migrated into EpwCalculation in the future.
-        if (
-            "w90_chk_to_ukk_script" in self.inputs
-            and "parent_folder_chk" in self.inputs
-        ):
-            prepend_text = metadata["options"].get("prepend_text", "")
-            prepend_text += f"\n{self.inputs.w90_chk_to_ukk_script.get_remote_path()} {EpwCalculation._PREFIX}.chk {EpwCalculation._OUTPUT_SUBFOLDER}{EpwCalculation._PREFIX}.xml {EpwCalculation._PREFIX}.ukk {EpwCalculation._PREFIX}.wannier90.mmn {EpwCalculation._PREFIX}.mmn"
-
-            metadata["options"]["prepend_text"] = prepend_text
-
         self.ctx.inputs.metadata = metadata
 
-        # Update of the parameters should be done here instead of in EpwCalculation
-        # so that all the changes of parameters are saved!
-        # IMPORTANT: I notice that since now EpwCalculation is not encapsulated, the parameters exposed to
-        # the EpwBaseWorkChain and the parameters inside EpwCalculation are not the same.
-        parameters = self.ctx.inputs.parameters.get_dict()
-
-        if "parent_folder_chk" in self.inputs:
-            w90_params = (
-                self.inputs.parent_folder_chk.creator.inputs.parameters.get_dict()
-            )
-            exclude_bands = w90_params.get("exclude_bands", None)  # TODO check this!
-
-            if exclude_bands:
-                parameters["INPUTEPW"]["bands_skipped"] = (
-                    f"exclude_bands = {exclude_bands[0]}:{exclude_bands[-1]}"
-                )
-
-            parameters["INPUTEPW"]["nbndsub"] = w90_params["num_wann"]
-
-        if "parent_folder_epw" in self.inputs:
-            calculation = find_related_calculation(self.inputs.parent_folder_epw)
-            epw_params = calculation.inputs.parameters.get_dict()
-
-            parameters["INPUTEPW"]["use_ws"] = epw_params["INPUTEPW"].get(
-                "use_ws", False
-            )
-            parameters["INPUTEPW"]["nbndsub"] = epw_params["INPUTEPW"]["nbndsub"]
-            if "bands_skipped" in epw_params["INPUTEPW"]:
-                parameters["INPUTEPW"]["bands_skipped"] = epw_params["INPUTEPW"].get(
-                    "bands_skipped"
-                )
-
+        # Persist derived parameters on the workchain inputs so restart provenance
+        # reflects the actual values submitted to the calcjob.
+        parameters = derive_inputepw_parameters(
+            self.ctx.inputs.parameters.get_dict(),
+            parent_folder_chk=self.inputs.get("parent_folder_chk"),
+            parent_folder_epw=self.inputs.get("parent_folder_epw"),
+        )
         self.ctx.inputs.parameters = orm.Dict(parameters)
 
     # We should validate the kpoints and qpoints on the fly
@@ -458,24 +452,6 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report("{}<{}> failed with exit status {}: {}".format(*arguments))
         self.report(f"Action taken: {action}")
 
-    def reduce_num_mpiprocs_per_machine_for_oom(self):
-        """Halve the MPI ranks per machine, unless that would drop below the restart floor."""
-        options = self.ctx.inputs.metadata.get("options", {})
-        resources = options.get("resources", {})
-        current = resources.get("num_mpiprocs_per_machine", None)
-
-        if current is None:
-            return None
-
-        new_value = current // 2
-        minimum = self.defaults.min_num_mpiprocs_per_machine_for_oom_restart
-
-        if new_value < minimum:
-            return None
-
-        resources["num_mpiprocs_per_machine"] = new_value
-        return current, new_value
-
     @process_handler(
         priority=600,
         exit_codes=[EpwCalculation.exit_codes.ERROR_MEMORY_EXCEEDS_MAX_MEMLT],
@@ -522,39 +498,15 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         exit_codes=EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY,
     )
     def handle_scheduler_out_of_memory(self, calculation):
-        """Retry scheduler OOM failures by reducing MPI ranks per machine."""
-        reduced = self.reduce_num_mpiprocs_per_machine_for_oom()
-
-        if reduced is None:
-            action = (
-                "scheduler out-of-memory detected but `num_mpiprocs_per_machine` "
-                f"cannot be reduced to at least "
-                f"{self.defaults.min_num_mpiprocs_per_machine_for_oom_restart}, aborting..."
-            )
-            self.report_error_handled(calculation, action)
-            return ProcessHandlerReport(
-                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
-            )
-
-        if not self.set_restart_from_calculation(calculation):
-            action = (
-                "scheduler out-of-memory detected but no remote folder is available, "
-                "aborting..."
-            )
-            self.report_error_handled(calculation, action)
-            return ProcessHandlerReport(
-                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
-            )
-
-        current, new_value = reduced
-        self.ctx.restart_calc = calculation
+        """Abort scheduler OOM failures without attempting a restart."""
         action = (
-            "scheduler out-of-memory detected, reducing "
-            f"`num_mpiprocs_per_machine` from {current} to {new_value} and "
-            "restarting from the latest EPW remote folder."
+            "scheduler out-of-memory detected; EPW restarts are not considered "
+            "safe after changing the MPI layout, aborting..."
         )
         self.report_error_handled(calculation, action)
-        return ProcessHandlerReport(True)
+        return ProcessHandlerReport(
+            True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+        )
 
     @process_handler(
         priority=605,
