@@ -13,6 +13,18 @@ default_inputs:
   # In addition, it seems epw.x has some problem when restarting from a
   # pw.x calculation with `nosym` and `noinv` set to True, therefore, we
   # switch to the `bands` mode.
+  nscf:
+    pw:
+        parameters:
+            SYSTEM:
+                nosym: True
+                noinv: True
+            CONTROL:
+                calculation: nscf
+                restart_mode: from_scratch
+            ELECTRONS:
+                diago_full_acc: True
+                startingpot: file
   w90_bands:
     nscf:
       pw:
