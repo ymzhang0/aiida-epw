@@ -200,10 +200,25 @@ def test_should_run_epw_bands_delegates_to_helper():
     assert EpwPrepWorkChain.should_run_epw_bands(process)
 
 
-def test_generate_reciprocal_points_uses_same_coarse_mesh_for_direct_wannierize(
+def test_generate_reciprocal_points_splits_scf_and_nscf_meshes_for_direct_wannierize(
     generate_structure,
+    monkeypatch,
 ):
-    """Direct EPW Wannierization should reuse a single coarse electron mesh."""
+    """Direct EPW Wannierization should keep the SCF and NSCF coarse meshes separate."""
+    def fake_create_kpoints_from_distance(**inputs):
+        kpoints = orm.KpointsData()
+        call_link_label = inputs["metadata"]["call_link_label"]
+        if call_link_label == "create_qpoints_from_distance":
+            kpoints.set_kpoints_mesh([3, 3, 3])
+        else:
+            kpoints.set_kpoints_mesh([4, 4, 4])
+        return kpoints
+
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.create_kpoints_from_distance",
+        fake_create_kpoints_from_distance,
+    )
+
     process = SimpleNamespace(
         inputs=AttributeDict(
             {
@@ -219,10 +234,57 @@ def test_generate_reciprocal_points_uses_same_coarse_mesh_for_direct_wannierize(
 
     EpwPrepWorkChain.generate_reciprocal_points(process)
 
-    assert process.ctx.kpoints_scf.get_kpoints_mesh()[0] == process.ctx.kpoints_nscf.get_kpoints_mesh()[0]
-    assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [
-        value * 2 for value in process.ctx.qpoints.get_kpoints_mesh()[0]
-    ]
+    assert process.ctx.qpoints.get_kpoints_mesh()[0] == [3, 3, 3]
+    assert process.ctx.kpoints_scf.get_kpoints_mesh()[0] == [4, 4, 4]
+    assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [6, 6, 6]
+
+
+def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
+    generate_structure,
+    fixture_localhost,
+    generate_remote_data,
+    monkeypatch,
+):
+    """Restarting from an existing PhCalculation should make its q-points authoritative."""
+    restart_qpoints = orm.KpointsData()
+    restart_qpoints.set_kpoints_mesh([5, 5, 5])
+    restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+
+    def fake_create_kpoints_from_distance(**inputs):
+        kpoints = orm.KpointsData()
+        kpoints.set_kpoints_mesh([4, 4, 4])
+        return kpoints
+
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.create_kpoints_from_distance",
+        fake_create_kpoints_from_distance,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.get_parent_folder_calculation",
+        lambda _folder: SimpleNamespace(
+            process_label="PhCalculation",
+            inputs=SimpleNamespace(qpoints=restart_qpoints),
+        ),
+    )
+
+    process = SimpleNamespace(
+        inputs=AttributeDict(
+            {
+                "structure": generate_structure(),
+                "parent_folder_ph": restart_parent,
+                "qpoints_distance": orm.Float(0.3),
+                "kpoints_distance_scf": orm.Float(0.15),
+                "kpoints_factor_nscf": orm.Int(2),
+                "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            }
+        ),
+        ctx=AttributeDict(),
+    )
+
+    EpwPrepWorkChain.generate_reciprocal_points(process)
+
+    assert process.ctx.qpoints == restart_qpoints
+    assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [10, 10, 10]
 
 
 def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
@@ -449,6 +511,59 @@ def test_run_epw_skips_chk_parent_for_direct_wannierize(
 
     assert "parent_folder_chk" not in captured["inputs"]
     assert captured["inputs"]["parent_folder_nscf"] == process.ctx.parent_folder_nscf
+
+
+def test_run_ph_prefers_restart_qpoints_from_parent_folder_ph(
+    fixture_localhost,
+    generate_remote_data,
+    monkeypatch,
+):
+    """Restarting from an existing PhCalculation should reuse its q-points."""
+    restart_qpoints = orm.KpointsData()
+    restart_qpoints.set_kpoints_mesh([3, 3, 3])
+    generated_qpoints = orm.KpointsData()
+    generated_qpoints.set_kpoints_mesh([5, 5, 5])
+    restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+
+    captured = {}
+
+    def submit(_process_class, **inputs):
+        captured["inputs"] = inputs
+        return SimpleNamespace(pk=654)
+
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.get_parent_folder_calculation",
+        lambda _folder: SimpleNamespace(
+            process_label="PhCalculation",
+            inputs=SimpleNamespace(qpoints=restart_qpoints),
+        ),
+    )
+
+    process = SimpleNamespace(
+        inputs=AttributeDict({"parent_folder_ph": restart_parent}),
+        ctx=AttributeDict(
+            {
+                "qpoints": generated_qpoints,
+                "parent_folder_scf": generate_remote_data(
+                    fixture_localhost, "/remote/scf"
+                ),
+            }
+        ),
+        exposed_inputs=lambda *_args, **_kwargs: AttributeDict(
+            {
+                "ph": AttributeDict(),
+                "metadata": AttributeDict(),
+            }
+        ),
+        submit=submit,
+        report=lambda *_args, **_kwargs: None,
+    )
+
+    EpwPrepWorkChain.run_ph(process)
+
+    assert captured["inputs"]["ph"]["parent_folder"] == restart_parent
+    assert captured["inputs"]["ph"]["qpoints"] == restart_qpoints
+    assert captured["inputs"]["qpoints"] == generated_qpoints
 
 
 def test_get_builder_from_protocol_backfills_stash_mode_for_current_aiida(

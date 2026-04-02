@@ -471,22 +471,46 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def generate_reciprocal_points(self):
         """Generate the qpoints and kpoints meshes for the `ph.x` and `pw.x` calculations."""
-        inputs = {
-            "structure": self.inputs.structure,
-            "distance": self.inputs.qpoints_distance,
-            "force_parity": self.inputs.get("kpoints_force_parity", orm.Bool(False)),
-            "metadata": {"call_link_label": "create_qpoints_from_distance"},
-        }
-        qpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
+        parent_folder_ph_calculation = None
+        if "parent_folder_ph" in self.inputs:
+            parent_folder_ph_calculation = get_parent_folder_calculation(
+                self.inputs.parent_folder_ph
+            )
+
+        if (
+            parent_folder_ph_calculation is not None
+            and parent_folder_ph_calculation.process_label == "PhCalculation"
+        ):
+            qpoints = parent_folder_ph_calculation.inputs.qpoints
+        else:
+            inputs = {
+                "structure": self.inputs.structure,
+                "distance": self.inputs.qpoints_distance,
+                "force_parity": self.inputs.get(
+                    "kpoints_force_parity", orm.Bool(False)
+                ),
+                "metadata": {"call_link_label": "create_qpoints_from_distance"},
+            }
+            qpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
         self.ctx.qpoints = qpoints
 
         if should_epw_wannierize(self.inputs):
+            inputs = {
+                "structure": self.inputs.structure,
+                "distance": self.inputs.kpoints_distance_scf,
+                "force_parity": self.inputs.get(
+                    "kpoints_force_parity", orm.Bool(False)
+                ),
+                "metadata": {"call_link_label": "create_kpoints_scf_from_distance"},
+            }
+            kpoints_scf = create_kpoints_from_distance(**inputs)
+            self.ctx.kpoints_scf = kpoints_scf
+
             qpoints_mesh = qpoints.get_kpoints_mesh()[0]
             kpoints_nscf = orm.KpointsData()
             kpoints_nscf.set_kpoints_mesh(
                 [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
             )
-            self.ctx.kpoints_scf = kpoints_nscf
             self.ctx.kpoints_nscf = kpoints_nscf
         elif "w90_bands" in self.inputs:
             inputs = {
