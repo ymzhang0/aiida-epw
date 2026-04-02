@@ -282,7 +282,9 @@ class EpwCalculation(NamelistsCalculation):
     @classmethod
     def validate_restart_inputs(cls, parameters, inputs):
         """Validate restart-related input combinations against the EPW parameters."""
-        if not parameters["INPUTEPW"].get("wannierize", False):
+        inputepw = parameters["INPUTEPW"]
+
+        if not inputepw.get("wannierize", False):
             return
 
         for input_name in ("parent_folder_epw", "parent_folder_chk"):
@@ -291,6 +293,21 @@ class EpwCalculation(NamelistsCalculation):
                     f"`{input_name}` cannot be specified when "
                     "`parameters.INPUTEPW.wannierize` is true."
                 )
+
+        if "parent_folder_nscf" not in inputs:
+            raise exceptions.InputValidationError(
+                "`parent_folder_nscf` must be specified when "
+                "`parameters.INPUTEPW.wannierize` is true."
+            )
+
+    @staticmethod
+    def has_manual_projections(inputepw):
+        """Return whether manual projection entries were provided for EPW Wannierization."""
+        projections = inputepw.get("proj")
+        if projections is not None:
+            return projections
+
+        return any(key.startswith("proj(") for key in inputepw)
 
     @classmethod
     def validate_parameters_inputs(cls, parameters, inputs):
@@ -302,6 +319,32 @@ class EpwCalculation(NamelistsCalculation):
 
         cls.set_blocked_keywords(parameters)
         cls.validate_restart_inputs(parameters, inputs)
+
+        inputepw = parameters["INPUTEPW"]
+        if inputepw.get("wannierize", False):
+            if inputepw.get("auto_projections", False):
+                raise exceptions.InputValidationError(
+                    "`parameters.INPUTEPW.auto_projections` is not supported; "
+                    "provide manual `proj` entries instead."
+                )
+
+            if inputepw.get("scdm_proj", False):
+                raise exceptions.InputValidationError(
+                    "`parameters.INPUTEPW.scdm_proj` is not supported; "
+                    "provide manual `proj` entries instead."
+                )
+
+            if "proj" in inputepw and not isinstance(inputepw["proj"], (list, tuple)):
+                raise exceptions.InputValidationError(
+                    "`parameters.INPUTEPW.proj` must be a list or tuple so it can "
+                    "be written as `proj(i)` entries."
+                )
+
+            if not cls.has_manual_projections(inputepw):
+                raise exceptions.InputValidationError(
+                    "Manual `proj` entries must be provided when "
+                    "`parameters.INPUTEPW.wannierize` is true."
+                )
 
     @classmethod
     def set_blocked_keywords(cls, parameters):

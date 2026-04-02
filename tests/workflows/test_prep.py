@@ -58,12 +58,47 @@ def make_cleanup_process(workchain_cls, clean_workdir, descendants, monkeypatch)
 
 
 def test_validate_inputs_requires_w90_bands():
-    """The preparation workflow currently requires the Wannier90 step."""
+    """The preparation workflow requires either Wannier90 or direct EPW Wannierization."""
     message = validate_inputs({"ph_base": {}, "epw_base": {}, "epw_bands": {}})
 
-    assert message == (
-        "`w90_bands` inputs are required because this work chain needs the "
-        "NSCF and Wannier checkpoint folders produced by the Wannier90 step."
+    assert (
+        message
+        == "Either provide `w90_bands` inputs or set `epw_base.parameters.INPUTEPW.wannierize = True`."
+    )
+
+
+def test_validate_inputs_rejects_mutually_exclusive_w90_and_epw_wannierize():
+    """The prep workflow should not accept both Wannierization entry points at once."""
+    message = validate_inputs(
+        {
+            "w90_bands": {},
+            "scf": {},
+            "nscf": {},
+            "ph_base": {},
+            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            "do_bands_interpolation": False,
+        }
+    )
+
+    assert (
+        message
+        == "`w90_bands` inputs and `epw_base.parameters.INPUTEPW.wannierize = True` are mutually exclusive."
+    )
+
+
+def test_validate_inputs_requires_scf_and_nscf_for_epw_wannierize():
+    """Direct EPW Wannierization should require standalone PW inputs."""
+    message = validate_inputs(
+        {
+            "ph_base": {},
+            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            "do_bands_interpolation": False,
+        }
+    )
+
+    assert (
+        message
+        == "`scf` and `nscf` inputs are required when `epw_base.parameters.INPUTEPW.wannierize = True`."
     )
 
 
@@ -102,7 +137,25 @@ def test_should_run_wannier90_depends_on_namespace():
     assert EpwPrepWorkChain.should_run_wannier90(
         SimpleNamespace(inputs={"w90_bands": {}})
     )
+    assert not EpwPrepWorkChain.should_run_wannier90(
+        SimpleNamespace(
+            inputs={
+                "w90_bands": {},
+                "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            }
+        )
+    )
     assert not EpwPrepWorkChain.should_run_wannier90(SimpleNamespace(inputs={}))
+
+
+def test_should_run_scf_and_nscf_follow_epw_wannierize():
+    """The standalone PW branches should only run for direct EPW Wannierization."""
+    process = SimpleNamespace(
+        inputs={"epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}}}
+    )
+
+    assert EpwPrepWorkChain.should_run_scf(process)
+    assert EpwPrepWorkChain.should_run_nscf(process)
 
 
 def test_should_run_epw_bands_delegates_to_helper():
@@ -200,6 +253,87 @@ def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
     assert "projwfc" not in builder.w90_bands
     assert "open_grid" not in builder.w90_bands
     assert "structure" not in builder.w90_bands
+
+
+def test_get_builder_from_protocol_uses_standalone_pw_for_epw_wannierize(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """Direct EPW Wannierization should build standalone SCF/NSCF namespaces instead of `w90_bands`."""
+    from aiida.common import AttributeDict
+
+    epw_code = fixture_code("epw.epw")
+    captured = {"pw_overrides": []}
+
+    def fake_pw_builder(*args, **kwargs):
+        captured["pw_overrides"].append(kwargs["overrides"])
+        builder = AttributeDict()
+        builder.pw = AttributeDict()
+        builder.clean_workdir = orm.Bool(False)
+        builder.kpoints_distance = orm.Float(0.2)
+        return builder
+
+    def fake_ph_builder(*args, **kwargs):
+        builder = AttributeDict()
+        builder.clean_workdir = orm.Bool(False)
+        builder.qpoints_distance = orm.Float(0.4)
+        return builder
+
+    def fake_epw_builder(*args, **kwargs):
+        builder = AttributeDict()
+        builder.code = epw_code
+        builder.parameters = orm.Dict({"INPUTEPW": {"wannierize": True}})
+        builder.options = orm.Dict(
+            {
+                "resources": {
+                    "num_machines": 1,
+                    "num_mpiprocs_per_machine": 1,
+                },
+                "max_wallclock_seconds": 1800,
+                "withmpi": True,
+            }
+        )
+        builder.qfpoints_distance = orm.Float(0.1)
+        builder.kfpoints_factor = orm.Int(2)
+        builder.max_iterations = orm.Int(2)
+        return builder
+
+    monkeypatch.setattr(
+        EpwPrepWorkChain,
+        "get_builder",
+        classmethod(lambda cls: AttributeDict()),
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.PwBaseWorkChain.get_builder_from_protocol",
+        fake_pw_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.PhBaseWorkChain.get_builder_from_protocol",
+        fake_ph_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.EpwBaseWorkChain.get_builder_from_protocol",
+        fake_epw_builder,
+    )
+
+    builder = EpwPrepWorkChain.get_builder_from_protocol(
+        codes={
+            "pw": fixture_code("quantumespresso.pw"),
+            "ph": fixture_code("quantumespresso.ph"),
+            "epw": epw_code,
+        },
+        structure=generate_structure(),
+        overrides={"epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}}},
+    )
+
+    assert "w90_bands" not in builder
+    assert "scf" in builder
+    assert "nscf" in builder
+    assert "epw_bands" not in builder
+    assert builder.do_bands_interpolation.value is False
+    assert captured["pw_overrides"][0]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
+    assert captured["pw_overrides"][1]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
 
 
 def test_get_builder_from_protocol_backfills_stash_mode_for_current_aiida(

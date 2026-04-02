@@ -284,6 +284,56 @@ def test_validate_kpoints_uses_parent_folders(
     assert process.ctx.inputs.kfpoints.get_kpoints_mesh()[0] == [6, 6, 6]
 
 
+def test_validate_kpoints_uses_parent_nscf_folder(
+    fixture_localhost,
+    generate_kpoints_mesh,
+    generate_workchain,
+    generate_inputs_epw_base,
+    monkeypatch,
+):
+    """The base workchain should derive the coarse k mesh from an NSCF parent when no chk folder is provided."""
+    parent_folder_nscf = create_remote_data_with_creator(
+        fixture_localhost,
+        "/remote/nscf",
+        "aiida.calculations:quantumespresso.pw",
+        inputs={"kpoints": generate_kpoints_mesh([4, 4, 4])},
+    )
+    parent_folder_ph = orm.RemoteData(
+        computer=fixture_localhost, remote_path="/remote/ph"
+    ).store()
+
+    qpoints = generate_kpoints_mesh([2, 2, 2])
+    qfpoints = generate_kpoints_mesh([3, 3, 3])
+
+    monkeypatch.setattr(
+        "aiida_epw.workflows.base.get_parent_folder_calculation",
+        lambda folder: (
+            SimpleNamespace(inputs=SimpleNamespace(qpoints=qpoints))
+            if folder.uuid == parent_folder_ph.uuid
+            else folder.creator
+        ),
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.base.create_kpoints_from_distance",
+        lambda **_: qfpoints,
+    )
+
+    process = generate_workchain(
+        "epw.base",
+        generate_inputs_epw_base(
+            parent_folder_nscf=parent_folder_nscf,
+            parent_folder_ph=parent_folder_ph,
+        ),
+    )
+    process.setup()
+
+    assert process.validate_kpoints() is None
+    assert process.ctx.inputs.kpoints.get_kpoints_mesh()[0] == [4, 4, 4]
+    assert process.ctx.inputs.qpoints.get_kpoints_mesh()[0] == [2, 2, 2]
+    assert process.ctx.inputs.qfpoints.get_kpoints_mesh()[0] == [3, 3, 3]
+    assert process.ctx.inputs.kfpoints.get_kpoints_mesh()[0] == [6, 6, 6]
+
+
 def test_validate_kpoints_uses_restart_parent_meshes(
     fixture_localhost,
     generate_kpoints_mesh,

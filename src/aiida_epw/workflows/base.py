@@ -335,11 +335,15 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         else:
             if "kpoints" in self.inputs:
                 kpoints = self.inputs.kpoints
+            elif "parent_folder_nscf" in self.inputs:
+                kpoints = get_parent_folder_calculation(
+                    self.inputs.parent_folder_nscf
+                ).inputs.kpoints
             elif "parent_folder_chk" in self.inputs:
                 kpoints = get_kpoints_from_chk_folder(self.inputs.parent_folder_chk)
             else:
                 self.report(
-                    "Could not determine the coarse k-points from the inputs or the parent folder of the wannier90 calculation."
+                    "Could not determine the coarse k-points from the inputs, the parent folder of the NSCF calculation, or the parent folder of the wannier90 calculation."
                 )
                 return self.exit_codes.ERROR_COARSE_GRID_NOT_VALID
 
