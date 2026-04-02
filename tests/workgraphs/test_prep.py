@@ -2,6 +2,7 @@
 
 import json
 from importlib import import_module
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -146,6 +147,23 @@ class FakePhBaseRuntimeWorkChain(WorkChain):
         """Emit the remote folder expected by the EPW task."""
         code = self.inputs.ph["code"]
         self.out("remote_folder", _make_remote_data(code, orm.Str(f"{self.node.uuid}-ph")))
+
+
+class FakePwBaseRuntimeWorkChain(WorkChain):
+    """Lightweight substitute for the high-level PW task."""
+
+    @classmethod
+    def define(cls, spec):
+        super().define(spec)
+        spec.input_namespace("pw", dynamic=True)
+        spec.input("kpoints", valid_type=orm.KpointsData)
+        spec.outline(cls.generate_outputs)
+        spec.output("remote_folder", valid_type=orm.RemoteData)
+
+    def generate_outputs(self):
+        """Emit the remote folder expected downstream."""
+        code = self.inputs.pw["code"]
+        self.out("remote_folder", _make_remote_data(code, orm.Str(f"{self.node.uuid}-pw")))
 
 
 class FakeEpwBaseRuntimeWorkChain(WorkChain):
@@ -297,15 +315,35 @@ def _fake_ph_builder(code, *_args, **_kwargs):
     return builder
 
 
-def _fake_epw_builder(code, structure, *_args, **_kwargs):
+def _fake_pw_builder(code, structure, *_args, **_kwargs):
+    """Return a minimal PW builder-like namespace."""
+    builder = AttributeDict()
+    builder.clean_workdir = orm.Bool(False)
+    builder.kpoints_distance = orm.Float(0.2)
+    builder.pw = AttributeDict(
+        {
+            "code": code,
+            "metadata": _metadata_dict(),
+            "parameters": orm.Dict({"SYSTEM": {"occupations": "smearing"}}),
+            "pseudos": {},
+            "structure": structure,
+        }
+    )
+    return builder
+
+
+def _fake_epw_builder(code, structure, *_args, **kwargs):
     """Return a minimal EPW builder-like namespace."""
+    overrides = kwargs.get("overrides", {})
     builder = AttributeDict()
     builder.code = code
     builder.structure = structure
-    builder.parameters = orm.Dict({"INPUTEPW": {"band_plot": True}})
-    builder.options = _metadata_dict()
-    builder.settings = orm.Dict({})
-    builder.parallelization = orm.Dict({})
+    builder.parameters = orm.Dict(
+        overrides.get("parameters", {"INPUTEPW": {"band_plot": True}})
+    )
+    builder.options = orm.Dict(overrides.get("options", _metadata_dict()["options"]))
+    builder.settings = orm.Dict(overrides.get("settings", {}))
+    builder.parallelization = orm.Dict(overrides.get("parallelization", {}))
     builder.clean_workdir = orm.Bool(False)
     builder.max_iterations = orm.Int(2)
     builder.qfpoints_distance = orm.Float(0.1)
@@ -328,6 +366,13 @@ def _create_explicit_kpoints(mesh):
                     ]
                 )
     kpoints.set_kpoints(points)
+    return kpoints
+
+
+def _mesh_kpoints(mesh):
+    """Create a mesh-style KpointsData node."""
+    kpoints = orm.KpointsData()
+    kpoints.set_kpoints_mesh(mesh)
     return kpoints
 
 
@@ -413,6 +458,78 @@ def test_should_run_epw_bands_reads_band_plot_from_inputepw():
     )
 
     assert result.value is True
+
+
+def test_validate_inputs_accepts_direct_epw_wannierize_inputs():
+    """The workgraph should accept the direct EPW Wannierization entry point."""
+    message = prep_module.validate_inputs(
+        {
+            "scf": {},
+            "nscf": {},
+            "ph_base": {},
+            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}}},
+            "do_bands_interpolation": False,
+        }
+    )
+
+    assert message is None
+
+
+def test_validate_inputs_rejects_bands_interpolation_for_direct_epw_wannierize():
+    """Direct EPW Wannierization should disable the optional bands interpolation branch."""
+    message = prep_module.validate_inputs(
+        {
+            "scf": {},
+            "nscf": {},
+            "ph_base": {},
+            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}}},
+            "epw_bands": {},
+            "do_bands_interpolation": True,
+        }
+    )
+
+    assert (
+        message
+        == "`do_bands_interpolation` is not supported when `epw_base.parameters.INPUTEPW.wannierize = True`."
+    )
+
+
+def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
+    fixture_localhost,
+    generate_remote_data,
+    monkeypatch,
+):
+    """Restarting from an existing PhCalculation should make its q-points authoritative."""
+    restart_qpoints = orm.KpointsData()
+    restart_qpoints.set_kpoints_mesh([5, 5, 5])
+    restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+
+    monkeypatch.setattr(
+        prep_module,
+        "_create_kpoints_from_distance_node",
+        lambda *args, **kwargs: _mesh_kpoints([4, 4, 4]),
+    )
+    monkeypatch.setattr(
+        prep_module,
+        "get_parent_folder_calculation",
+        lambda _folder: SimpleNamespace(
+            process_label="PhCalculation",
+            inputs=SimpleNamespace(qpoints=restart_qpoints),
+        ),
+    )
+
+    result = prep_module.generate_reciprocal_points._callable(
+        structure=orm.StructureData(cell=[[1, 0, 0], [0, 1, 0], [0, 0, 1]]),
+        force_parity=orm.Bool(False),
+        kpoints_distance_scf=orm.Float(0.15),
+        qpoints_distance=orm.Float(0.3),
+        kpoints_factor_nscf=orm.Int(2),
+        parent_folder_ph=restart_parent,
+    )
+
+    assert result["qpoints"] == restart_qpoints
+    assert result["kpoints_scf"].get_kpoints_mesh()[0] == [4, 4, 4]
+    assert result["kpoints_nscf"].get_kpoints_mesh()[0] == [10, 10, 10]
 
 
 def test_prep_passes_w90_chk_to_ukk_script_only_to_epw_base(
@@ -611,6 +728,141 @@ def test_prep_workgraph_runs_with_fake_high_level_workchains(
         if link.link_label == "seekpath_structure_analysis"
     )
     assert epw_bands_node.inputs.kfpoints.uuid == seekpath_node.outputs.explicit_kpoints.uuid
+
+
+def test_build_task_inputs_uses_direct_pw_namespaces_for_epw_wannierize(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """Direct EPW Wannierization should build standalone SCF/NSCF namespaces instead of `w90_bands`."""
+    codes = {
+        "pw": fixture_code("quantumespresso.pw"),
+        "ph": fixture_code("quantumespresso.ph"),
+        "epw": fixture_code("epw.epw"),
+    }
+    structure = generate_structure()
+
+    monkeypatch.setattr(
+        prep_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "pseudo_family": "PseudoDojo/0.5/PBE/SR/standard/upf",
+            "qpoints_distance": 0.5,
+            "kpoints_distance_scf": 0.15,
+            "kpoints_factor_nscf": 2,
+            "do_bands_interpolation": False,
+            "kpoints_force_parity": False,
+            "scf": {"pw": {"metadata": _metadata_dict()}},
+            "nscf": {"pw": {"metadata": _metadata_dict()}},
+            "ph_base": {"ph": {"metadata": _metadata_dict()}},
+            "epw_base": {
+                "options": _metadata_dict()["options"],
+                "parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}},
+            },
+        },
+    )
+    monkeypatch.setattr(prep_module.PwBaseWorkChain, "get_builder_from_protocol", _fake_pw_builder)
+    monkeypatch.setattr(prep_module.PhBaseWorkChain, "get_builder_from_protocol", _fake_ph_builder)
+    monkeypatch.setattr(prep_module.EpwBaseWorkChain, "get_builder_from_protocol", _fake_epw_builder)
+
+    prepared_inputs = prep_module.build_task_inputs(
+        codes=codes,
+        structure=structure,
+        protocol="fast",
+        overrides={},
+    )
+
+    assert prepared_inputs["w90_bands"] == {}
+    assert "pw" in prepared_inputs["scf"]
+    assert "pw" in prepared_inputs["nscf"]
+    assert prepared_inputs["epw_bands"] == {}
+
+
+def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchains(
+    fixture_code,
+    fixture_localhost,
+    generate_remote_data,
+    generate_structure,
+    monkeypatch,
+):
+    """The workgraph should mirror the classical direct EPW Wannierization path."""
+    codes = {
+        "pw": fixture_code("quantumespresso.pw"),
+        "ph": fixture_code("quantumespresso.ph"),
+        "epw": fixture_code("epw.epw"),
+    }
+    structure = generate_structure()
+    restart_qpoints = _mesh_kpoints([3, 3, 3])
+    parent_folder_ph = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+
+    monkeypatch.setattr(
+        prep_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "pseudo_family": "PseudoDojo/0.5/PBE/SR/standard/upf",
+            "qpoints_distance": 0.5,
+            "kpoints_distance_scf": 0.15,
+            "kpoints_factor_nscf": 2,
+            "do_bands_interpolation": False,
+            "kpoints_force_parity": False,
+            "scf": {"pw": {"metadata": _metadata_dict()}},
+            "nscf": {"pw": {"metadata": _metadata_dict()}},
+            "ph_base": {"ph": {"metadata": _metadata_dict()}},
+            "epw_base": {
+                "options": _metadata_dict()["options"],
+                "parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}},
+            },
+        },
+    )
+    monkeypatch.setattr(prep_module.PwBaseWorkChain, "get_builder_from_protocol", _fake_pw_builder)
+    monkeypatch.setattr(prep_module.PhBaseWorkChain, "get_builder_from_protocol", _fake_ph_builder)
+    monkeypatch.setattr(prep_module.EpwBaseWorkChain, "get_builder_from_protocol", _fake_epw_builder)
+    monkeypatch.setattr(
+        prep_module,
+        "get_parent_folder_calculation",
+        lambda _folder: SimpleNamespace(
+            process_label="PhCalculation",
+            inputs=SimpleNamespace(qpoints=restart_qpoints),
+        ),
+    )
+    monkeypatch.setattr(prep_module, "_apply_socket_overrides", lambda *args, **kwargs: None)
+    monkeypatch.setattr(prep_module, "PwBaseTask", task(FakePwBaseRuntimeWorkChain))
+    monkeypatch.setattr(prep_module, "PhBaseTask", task(FakePhBaseRuntimeWorkChain))
+    monkeypatch.setattr(prep_module, "EpwBaseTask", task(FakeEpwBaseRuntimeWorkChain))
+
+    wg = prep_module.prep(
+        codes=codes,
+        structure=structure,
+        protocol="fast",
+        overrides={},
+        parent_folder_ph=parent_folder_ph,
+    )
+    wg.run()
+
+    assert wg.process is not None
+    assert wg.process.is_finished_ok
+    assert "w90_bands" not in {task.name for task in wg.tasks}
+
+    scf_node = wg.tasks["scf"].process
+    nscf_node = wg.tasks["nscf"].process
+    phonon_node = wg.tasks["ph_base"].process
+    epw_node = wg.tasks["epw_base"].process
+    reciprocal_points_node = wg.tasks["generate_reciprocal_points"].process
+
+    assert scf_node is not None
+    assert nscf_node is not None
+    assert phonon_node is not None
+    assert epw_node is not None
+    assert reciprocal_points_node is not None
+
+    assert phonon_node.inputs.ph.parent_folder.uuid == parent_folder_ph.uuid
+    assert phonon_node.inputs.ph.qpoints.uuid == restart_qpoints.uuid
+    assert epw_node.inputs.parent_folder_nscf.uuid == nscf_node.outputs.remote_folder.uuid
+    assert "parent_folder_chk" not in epw_node.inputs
+    assert reciprocal_points_node.outputs.qpoints.uuid == restart_qpoints.uuid
+    assert epw_node.inputs.qpoints.uuid == restart_qpoints.uuid
+    assert epw_node.inputs.kpoints.get_kpoints_mesh()[0] == reciprocal_points_node.outputs.kpoints_nscf.get_kpoints_mesh()[0]
 
 
 def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(

@@ -43,6 +43,17 @@ def _ensure_stash_options(options, computer):
     stash.setdefault("target_base", get_target_basepath(computer))
 
 
+def should_run_bands_interpolation(inputs) -> bool:
+    """Return whether the optional EPW bands interpolation step should run."""
+    do_bands = inputs.get("do_bands_interpolation", True)
+    if isinstance(do_bands, orm.Bool):
+        do_bands = do_bands.value
+
+    return bool(do_bands) and "epw_bands" in inputs and not should_epw_wannierize(
+        inputs
+    )
+
+
 def _as_mapping(value):
     """Return an AiiDA/Python mapping as a plain dictionary."""
     if isinstance(value, orm.Dict):
@@ -62,6 +73,10 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
     inputs, ctx=None
 ):
     """Validate the inputs of the `EpwPrepWorkChain`."""
+    do_bands = inputs.get("do_bands_interpolation", True)
+    if isinstance(do_bands, orm.Bool):
+        do_bands = do_bands.value
+
     has_w90_bands = "w90_bands" in inputs
     use_epw_wannierize = should_epw_wannierize(inputs)
 
@@ -84,6 +99,17 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
                 "`scf` and `nscf` inputs are required when "
                 "`epw_base.parameters.INPUTEPW.wannierize = True`."
             )
+
+        if do_bands:
+            return (
+                "`do_bands_interpolation` is not supported when "
+                "`epw_base.parameters.INPUTEPW.wannierize = True`."
+            )
+
+    if do_bands and "epw_bands" not in inputs:
+        return (
+            "`epw_bands` inputs are required when `do_bands_interpolation` is enabled."
+        )
 
 
 class EpwPrepWorkChain(ProtocolMixin, WorkChain):
@@ -118,6 +144,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             "kpoints_factor_nscf",
             valid_type=orm.Int,
             default=lambda: orm.Int(2),
+        )
+        spec.input(
+            "do_bands_interpolation",
+            valid_type=orm.Bool,
+            default=lambda: orm.Bool(True),
         )
 
         spec.input(
@@ -319,6 +350,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         builder = cls.get_builder()
         builder.structure = structure
+        builder.do_bands_interpolation = orm.Bool(
+            inputs.get("do_bands_interpolation", True)
+        )
 
         pseudo_family = inputs.pop("pseudo_family", None)
         w90_bands_inputs = inputs.get("w90_bands", {})
@@ -354,6 +388,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             nscf.pop("clean_workdir", None)
             nscf.pop("kpoints_distance", None)
             builder.nscf = nscf
+            builder.do_bands_interpolation = orm.Bool(False)
             builder.pop("w90_bands", None)
         else:
             if reference_bands:
@@ -402,6 +437,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         # Here I have a loop for the epw builders for furture extension of another epw bands interpolation
         # .
         for namespace in ["epw_base", "epw_bands"]:
+            if namespace == "epw_bands" and (
+                use_epw_wannierize or not inputs.get("do_bands_interpolation", True)
+            ):
+                continue
 
             epw_inputs = inputs.get(namespace, None)
             if namespace == "epw_base":
@@ -659,7 +698,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         # The EpwBaseWorkChain will take the parent folder of the previous
         # PhCalculation, PwCalculation, and Wannier90Calculation.
-        inputs.parent_folder_ph = self.ctx.parent_folder_ph
+        inputs.parent_folder_ph = self.ctx.get(
+            "parent_folder_ph", self.ctx.workchain_ph.outputs.remote_folder
+        )
         inputs.parent_folder_nscf = self.ctx.parent_folder_nscf
         if "parent_folder_chk" in self.ctx:
             inputs.parent_folder_chk = self.ctx.parent_folder_chk
@@ -699,7 +740,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def should_run_epw_bands(self):
         """Check if the bands interpolation should be run."""
-        return "epw_bands" in self.inputs
+        return should_run_bands_interpolation(self.inputs)
 
     def run_epw_bands(self):
         """Run the `EpwBaseWorkChain` in bands interpolation mode."""
