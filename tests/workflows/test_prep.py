@@ -102,6 +102,25 @@ def test_validate_inputs_requires_scf_and_nscf_for_epw_wannierize():
     )
 
 
+def test_validate_inputs_rejects_bands_interpolation_for_epw_wannierize():
+    """Direct EPW Wannierization should not enter the bands interpolation branch."""
+    message = validate_inputs(
+        {
+            "scf": {},
+            "nscf": {},
+            "ph_base": {},
+            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            "epw_bands": {},
+            "do_bands_interpolation": True,
+        }
+    )
+
+    assert (
+        message
+        == "`do_bands_interpolation` is not supported when `epw_base.parameters.INPUTEPW.wannierize = True`."
+    )
+
+
 def test_validate_inputs_allows_skipping_band_interpolation_namespace():
     """The bands namespace is optional when the interpolation step is disabled."""
     message = validate_inputs(
@@ -123,6 +142,17 @@ def test_should_run_bands_interpolation_respects_flag():
         {"do_bands_interpolation": False, "epw_bands": {}}
     )
     assert not should_run_bands_interpolation({"do_bands_interpolation": True})
+
+
+def test_should_run_bands_interpolation_skips_direct_epw_wannierize():
+    """Direct EPW Wannierization should suppress the optional interpolation branch."""
+    assert not should_run_bands_interpolation(
+        {
+            "do_bands_interpolation": True,
+            "epw_bands": {},
+            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+        }
+    )
 
 
 def test_get_target_basepath_uses_local_workdir(fixture_localhost):
@@ -168,6 +198,31 @@ def test_should_run_epw_bands_delegates_to_helper():
     )
 
     assert EpwPrepWorkChain.should_run_epw_bands(process)
+
+
+def test_generate_reciprocal_points_uses_same_coarse_mesh_for_direct_wannierize(
+    generate_structure,
+):
+    """Direct EPW Wannierization should reuse a single coarse electron mesh."""
+    process = SimpleNamespace(
+        inputs=AttributeDict(
+            {
+                "structure": generate_structure(),
+                "qpoints_distance": orm.Float(0.3),
+                "kpoints_distance_scf": orm.Float(0.15),
+                "kpoints_factor_nscf": orm.Int(2),
+                "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            }
+        ),
+        ctx=AttributeDict(),
+    )
+
+    EpwPrepWorkChain.generate_reciprocal_points(process)
+
+    assert process.ctx.kpoints_scf.get_kpoints_mesh()[0] == process.ctx.kpoints_nscf.get_kpoints_mesh()[0]
+    assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [
+        value * 2 for value in process.ctx.qpoints.get_kpoints_mesh()[0]
+    ]
 
 
 def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
@@ -334,6 +389,66 @@ def test_get_builder_from_protocol_uses_standalone_pw_for_epw_wannierize(
     assert builder.do_bands_interpolation.value is False
     assert captured["pw_overrides"][0]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
     assert captured["pw_overrides"][1]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
+
+
+def test_run_epw_skips_chk_parent_for_direct_wannierize(
+    fixture_localhost,
+    generate_remote_data,
+):
+    """Direct EPW Wannierization should not pass a Wannier90 checkpoint parent."""
+    kpoints = orm.KpointsData()
+    kpoints.set_kpoints_mesh([5, 5, 5])
+    qpoints = orm.KpointsData()
+    qpoints.set_kpoints_mesh([5, 5, 5])
+
+    captured = {}
+
+    def submit(_process_class, **inputs):
+        captured["inputs"] = inputs
+        return SimpleNamespace(pk=321)
+
+    process = SimpleNamespace(
+        inputs=AttributeDict({"structure": orm.StructureData()}),
+        ctx=AttributeDict(
+            {
+                "workchain_ph": SimpleNamespace(
+                    outputs=SimpleNamespace(
+                        remote_folder=generate_remote_data(
+                            fixture_localhost, "/remote/ph"
+                        )
+                    )
+                ),
+                "parent_folder_nscf": generate_remote_data(
+                    fixture_localhost, "/remote/nscf"
+                ),
+                "kpoints_nscf": kpoints,
+                "qpoints": qpoints,
+            }
+        ),
+        exposed_inputs=lambda *_args, **_kwargs: AttributeDict(
+            {
+                "metadata": AttributeDict(),
+                "parameters": orm.Dict({"INPUTEPW": {"wannierize": True}}),
+                "options": orm.Dict(
+                    {
+                        "resources": {
+                            "num_machines": 1,
+                            "num_mpiprocs_per_machine": 1,
+                        },
+                        "max_wallclock_seconds": 1800,
+                        "withmpi": True,
+                    }
+                ),
+            }
+        ),
+        submit=submit,
+        report=lambda *_args, **_kwargs: None,
+    )
+
+    EpwPrepWorkChain.run_epw(process)
+
+    assert "parent_folder_chk" not in captured["inputs"]
+    assert captured["inputs"]["parent_folder_nscf"] == process.ctx.parent_folder_nscf
 
 
 def test_get_builder_from_protocol_backfills_stash_mode_for_current_aiida(

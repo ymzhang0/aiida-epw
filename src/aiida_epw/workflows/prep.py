@@ -44,12 +44,14 @@ def _ensure_stash_options(options, computer):
 
 
 def should_run_bands_interpolation(inputs) -> bool:
-    """Return whether the EPW bands interpolation step should run."""
+    """Return whether the optional EPW bands interpolation step should run."""
     do_bands = inputs.get("do_bands_interpolation", True)
     if isinstance(do_bands, orm.Bool):
         do_bands = do_bands.value
 
-    return bool(do_bands) and "epw_bands" in inputs
+    return bool(do_bands) and "epw_bands" in inputs and not should_epw_wannierize(
+        inputs
+    )
 
 
 def _as_mapping(value):
@@ -348,7 +350,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         builder = cls.get_builder()
         builder.structure = structure
-        builder.do_bands_interpolation = orm.Bool(inputs.get("do_bands_interpolation", True))
+        builder.do_bands_interpolation = orm.Bool(
+            inputs.get("do_bands_interpolation", True)
+        )
 
         pseudo_family = inputs.pop("pseudo_family", None)
         w90_bands_inputs = inputs.get("w90_bands", {})
@@ -357,7 +361,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         if use_epw_wannierize:
             scf_inputs = recursive_merge(
                 {"pseudo_family": pseudo_family},
-                w90_bands_inputs.get("scf", {}),
+                inputs.get("scf", {}),
             )
             scf = PwBaseWorkChain.get_builder_from_protocol(
                 code=codes["pw"],
@@ -372,7 +376,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
             nscf_inputs = recursive_merge(
                 {"pseudo_family": pseudo_family},
-                w90_bands_inputs.get("nscf", {}),
+                inputs.get("nscf", {}),
             )
             nscf = PwBaseWorkChain.get_builder_from_protocol(
                 code=codes["pw"],
@@ -385,6 +389,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             nscf.pop("kpoints_distance", None)
             builder.nscf = nscf
             builder.do_bands_interpolation = orm.Bool(False)
+            builder.pop("w90_bands", None)
         else:
             if reference_bands:
                 w90_bands = Wannier90OptimizeWorkChain.get_builder_from_protocol(
@@ -414,6 +419,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             w90_bands.pop("open_grid", None)
 
             builder.w90_bands = w90_bands
+            builder.pop("scf", None)
+            builder.pop("nscf", None)
 
         args = (codes["ph"], None, protocol)
         ph_base_inputs = inputs.get("ph_base", None)
@@ -473,7 +480,15 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         qpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
         self.ctx.qpoints = qpoints
 
-        if "w90_bands" in self.inputs or should_epw_wannierize(self.inputs):
+        if should_epw_wannierize(self.inputs):
+            qpoints_mesh = qpoints.get_kpoints_mesh()[0]
+            kpoints_nscf = orm.KpointsData()
+            kpoints_nscf.set_kpoints_mesh(
+                [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
+            )
+            self.ctx.kpoints_scf = kpoints_nscf
+            self.ctx.kpoints_nscf = kpoints_nscf
+        elif "w90_bands" in self.inputs:
             inputs = {
                 "structure": self.inputs.structure,
                 "distance": self.inputs.kpoints_distance_scf,
@@ -527,6 +542,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.report(format_subprocess_failure(workchain, "PwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_SCF
 
+        self.ctx.parent_folder_scf = workchain.outputs.remote_folder
+
     def run_nscf(self):
         """Run the standalone NSCF workflow for direct EPW Wannierization."""
         inputs = AttributeDict(self.exposed_inputs(PwBaseWorkChain, namespace="nscf"))
@@ -547,6 +564,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         if not workchain.is_finished_ok:
             self.report(format_subprocess_failure(workchain, "PwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_NSCF
+
+        self.ctx.parent_folder_nscf = workchain.outputs.remote_folder
 
     def run_wannier90(self):
         """Run the wannier90 workflow."""
@@ -581,6 +600,27 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             self.report(format_subprocess_failure(workchain, self.ctx.w90_class_name))
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_WANNIER90
 
+        scf_base_wc = (
+            workchain.base.links.get_outgoing(link_label_filter="scf").first().node
+        )
+        self.ctx.parent_folder_scf = scf_base_wc.outputs.remote_folder
+
+        nscf_base_wc = (
+            workchain.base.links.get_outgoing(link_label_filter="nscf").first().node
+        )
+        self.ctx.parent_folder_nscf = nscf_base_wc.outputs.remote_folder
+
+        optimize_disproj = getattr(workchain.inputs, "optimize_disproj", False)
+        if (
+            self.ctx.w90_class_name == "Wannier90OptimizeWorkChain"
+            and optimize_disproj
+        ):
+            self.ctx.parent_folder_chk = (
+                workchain.outputs.wannier90_optimal__remote_folder
+            )
+        else:
+            self.ctx.parent_folder_chk = workchain.outputs.wannier90.remote_folder
+
     def run_ph(self):
         """Run the `PhBaseWorkChain`."""
         inputs = AttributeDict(
@@ -600,17 +640,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             inputs.ph.parent_folder = self.inputs.parent_folder_ph
             inputs.ph.qpoints = parent_folder_ph_calculation.inputs.qpoints
         else:
-            if self.should_run_wannier90():
-                scf_base_wc = (
-                    self.ctx.workchain_w90_bands.base.links.get_outgoing(
-                        link_label_filter="scf"
-                    )
-                    .first()
-                    .node
-                )
-                inputs.ph.parent_folder = scf_base_wc.outputs.remote_folder
-            else:
-                inputs.ph.parent_folder = self.ctx.workchain_scf.outputs.remote_folder
+            inputs.ph.parent_folder = self.ctx.parent_folder_scf
 
         inputs.qpoints = self.ctx.qpoints
 
@@ -639,21 +669,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         # The EpwBaseWorkChain will take the parent folder of the previous
         # PhCalculation, PwCalculation, and Wannier90Calculation.
         inputs.parent_folder_ph = self.ctx.workchain_ph.outputs.remote_folder
-
-        if self.should_run_wannier90():
-            w90_workchain = self.ctx.workchain_w90_bands
-            inputs.parent_folder_nscf = w90_workchain.outputs.nscf.remote_folder
-            if (
-                self.ctx.w90_class_name == "Wannier90OptimizeWorkChain"
-                and w90_workchain.inputs.optimize_disproj
-            ):
-                inputs.parent_folder_chk = (
-                    w90_workchain.outputs.wannier90_optimal__remote_folder
-                )
-            else:
-                inputs.parent_folder_chk = w90_workchain.outputs.wannier90.remote_folder
-        else:
-            inputs.parent_folder_nscf = self.ctx.workchain_nscf.outputs.remote_folder
+        inputs.parent_folder_nscf = self.ctx.parent_folder_nscf
+        if "parent_folder_chk" in self.ctx:
+            inputs.parent_folder_chk = self.ctx.parent_folder_chk
 
         fine_points = orm.KpointsData()
         fine_points.set_kpoints_mesh([1, 1, 1])
