@@ -118,10 +118,6 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
     inputs, ctx=None
 ):
     """Validate the inputs of the `EpwPrepWorkChain`."""
-    do_bands = inputs.get("do_bands_interpolation", True)
-    if isinstance(do_bands, orm.Bool):
-        do_bands = do_bands.value
-
     has_w90_bands = "w90_bands" in inputs
     use_epw_wannierize = should_epw_wannierize(inputs)
 
@@ -145,17 +141,6 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
                 "`epw_base.parameters.INPUTEPW.wannierize = True`."
             )
 
-        if do_bands:
-            return (
-                "`do_bands_interpolation` is not supported when "
-                "`epw_base.parameters.INPUTEPW.wannierize = True`."
-            )
-
-    if do_bands and "epw_bands" not in inputs:
-        return (
-            "`epw_bands` inputs are required when `do_bands_interpolation` is enabled."
-        )
-
 
 def should_epw_wannierize(inputs) -> bool:
     """Return whether the EPW namespace is configured to run Wannierization directly."""
@@ -163,17 +148,6 @@ def should_epw_wannierize(inputs) -> bool:
     parameters = _as_dict(epw_base.get("parameters"))
     inputepw = _as_dict(parameters.get("INPUTEPW", parameters.get("inputepw")))
     return bool(inputepw.get("wannierize", False))
-
-
-def should_run_bands_interpolation(inputs) -> bool:
-    """Return whether the EPW bands interpolation step should run."""
-    do_bands = inputs.get("do_bands_interpolation", True)
-    if isinstance(do_bands, orm.Bool):
-        do_bands = do_bands.value
-
-    return bool(do_bands) and "epw_bands" in inputs and not should_epw_wannierize(
-        inputs
-    )
 
 
 def _as_bool(value: Any) -> bool:
@@ -396,15 +370,8 @@ def _build_epw_inputs(
     epw_base: dict[str, Any] = {}
     epw_bands: dict[str, Any] = {}
     epw_code = codes.get("epw")
-    use_epw_wannierize = should_epw_wannierize(protocol_inputs)
 
     for namespace in ("epw_base", "epw_bands"):
-        if namespace == "epw_bands" and (
-            use_epw_wannierize
-            or not protocol_inputs.get("do_bands_interpolation", True)
-        ):
-            continue
-
         epw_inputs = protocol_inputs.get(namespace, {})
         if namespace == "epw_base":
             _add_options_stash_target_base(epw_inputs, epw_code)
@@ -543,9 +510,6 @@ def build_task_inputs(
         "qpoints_distance": orm.Float(protocol_inputs["qpoints_distance"]),
         "kpoints_distance_scf": orm.Float(protocol_inputs["kpoints_distance_scf"]),
         "kpoints_factor_nscf": orm.Int(protocol_inputs["kpoints_factor_nscf"]),
-        "do_bands_interpolation": orm.Bool(
-            protocol_inputs.get("do_bands_interpolation", True)
-        ),
         "kpoints_force_parity": orm.Bool(
             protocol_inputs.get("kpoints_force_parity", False)
         ),
@@ -656,17 +620,6 @@ def prepare_nscf_runtime_kpoints(kpoints_nscf):
     return get_explicit_kpoints(kpoints_nscf)
 
 
-@task()
-def should_run_epw_bands(do_bands_interpolation, epw_parameters) -> bool:
-    """Mirror the outline guard for the EPW bands interpolation branch."""
-    do_bands = _as_bool(do_bands_interpolation)
-    parameters = _as_dict(epw_parameters)
-    inputepw = parameters.get("INPUTEPW", parameters.get("inputepw", {}))
-    bands_plot = inputepw.get("band_plot", parameters.get("band_plot", False))
-
-    return orm.Bool(bool(do_bands) and bands_plot)
-
-
 @task.workfunction()
 def get_seekpath_explicit_kpoints(reference_output):
     """Trace the explicit k-point path back to the internal seekpath calcfunction."""
@@ -707,6 +660,20 @@ def extract_kpoints_path(band_structure):
     kpoints.set_kpoints(points, weights=weights, labels=labels)
 
     return kpoints
+
+
+@task.workfunction()
+def generate_seekpath_explicit_kpoints(structure):
+    """Generate an explicit band path directly from the input structure."""
+    from aiida_quantumespresso.calculations.functions.seekpath_structure_analysis import (
+        seekpath_structure_analysis,
+    )
+
+    result = seekpath_structure_analysis(
+        structure=structure,
+        metadata={"call_link_label": "seekpath_structure_analysis"},
+    )
+    return result["explicit_kpoints"]
 
 
 @task(outputs=spec.namespace(
@@ -926,38 +893,36 @@ def prep_from_inputs(
             ("code", "options"),
         )
 
-        if should_run_bands_interpolation(inputs):
-            should_run_bands = should_run_epw_bands(
-                do_bands_interpolation=inputs["do_bands_interpolation"],
-                epw_parameters=epw_bands.get("parameters"),
+        if epw_bands:
+            epw_bands_inputs = recursive_merge(_drop_epw_mesh_generation_inputs(epw_bands), {
+                "structure": structure,
+                "parent_folder_epw": epw_run.remote_stash,
+                "kpoints": reciprocal_points.kpoints_nscf,
+                "qpoints": reciprocal_points.qpoints,
+            })
+
+            if "bands_kpoints" in w90_bands:
+                bands_kpoints_source = w90_bands["bands_kpoints"]
+            elif w90_bands:
+                bands_kpoints_source = get_seekpath_explicit_kpoints(
+                    reference_output=nscf_remote
+                ).result
+            else:
+                bands_kpoints_source = generate_seekpath_explicit_kpoints(
+                    structure=structure
+                ).result
+
+            epw_bands_inputs["qfpoints"] = bands_kpoints_source
+            epw_bands_inputs["kfpoints"] = bands_kpoints_source
+
+            epw_bands_run = EpwBaseTask(
+                **_set_call_link_label(epw_bands_inputs, "epw_bands"),
             )
-            with If(should_run_bands.result):
-                epw_bands_inputs = recursive_merge(_drop_epw_mesh_generation_inputs(epw_bands), {
-                    "structure": structure,
-                    "parent_folder_epw": epw_run.remote_stash,
-                    "kpoints": reciprocal_points.kpoints_nscf,
-                    "qpoints": reciprocal_points.qpoints,
-                })
-
-                if "bands_kpoints" in w90_bands:
-                    bands_kpoints_source = w90_bands["bands_kpoints"]
-                    epw_bands_inputs["qfpoints"] = bands_kpoints_source
-                    epw_bands_inputs["kfpoints"] = bands_kpoints_source
-                else:
-                    bands_kpoints = get_seekpath_explicit_kpoints(
-                        reference_output=nscf_remote
-                    ).result
-                    epw_bands_inputs["qfpoints"] = bands_kpoints
-                    epw_bands_inputs["kfpoints"] = bands_kpoints
-
-                epw_bands_run = EpwBaseTask(
-                    **_set_call_link_label(epw_bands_inputs, "epw_bands"),
-                )
-                _apply_socket_overrides(
-                    epw_bands_run._task.inputs,
-                    epw_bands,
-                    ("code", "options"),
-                )
+            _apply_socket_overrides(
+                epw_bands_run._task.inputs,
+                epw_bands,
+                ("code", "options"),
+            )
 
         wg.outputs.retrieved = epw_run.retrieved
         wg.outputs.epw_folder = epw_run.remote_folder

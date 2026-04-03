@@ -12,7 +12,6 @@ from aiida.plugins.entry_point import format_entry_point_string
 from aiida_epw.workflows.prep import (
     EpwPrepWorkChain,
     get_target_basepath,
-    should_run_bands_interpolation,
     validate_inputs,
 )
 
@@ -76,7 +75,6 @@ def test_validate_inputs_rejects_mutually_exclusive_w90_and_epw_wannierize():
             "nscf": {},
             "ph_base": {},
             "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
-            "do_bands_interpolation": False,
         }
     )
 
@@ -92,7 +90,6 @@ def test_validate_inputs_requires_scf_and_nscf_for_epw_wannierize():
         {
             "ph_base": {},
             "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
-            "do_bands_interpolation": False,
         }
     )
 
@@ -102,8 +99,8 @@ def test_validate_inputs_requires_scf_and_nscf_for_epw_wannierize():
     )
 
 
-def test_validate_inputs_rejects_bands_interpolation_for_epw_wannierize():
-    """Direct EPW Wannierization should not enter the bands interpolation branch."""
+def test_validate_inputs_allows_epw_bands_for_epw_wannierize():
+    """Direct EPW Wannierization can still request the EPW bands branch."""
     message = validate_inputs(
         {
             "scf": {},
@@ -111,48 +108,23 @@ def test_validate_inputs_rejects_bands_interpolation_for_epw_wannierize():
             "ph_base": {},
             "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
             "epw_bands": {},
-            "do_bands_interpolation": True,
-        }
-    )
-
-    assert (
-        message
-        == "`do_bands_interpolation` is not supported when `epw_base.parameters.INPUTEPW.wannierize = True`."
-    )
-
-
-def test_validate_inputs_allows_skipping_band_interpolation_namespace():
-    """The bands namespace is optional when the interpolation step is disabled."""
-    message = validate_inputs(
-        {
-            "w90_bands": {},
-            "ph_base": {},
-            "epw_base": {},
-            "do_bands_interpolation": False,
         }
     )
 
     assert message is None
 
 
-def test_should_run_bands_interpolation_respects_flag():
-    """The interpolation step should only run when explicitly enabled."""
-    assert should_run_bands_interpolation({"do_bands_interpolation": True, "epw_bands": {}})
-    assert not should_run_bands_interpolation(
-        {"do_bands_interpolation": False, "epw_bands": {}}
-    )
-    assert not should_run_bands_interpolation({"do_bands_interpolation": True})
-
-
-def test_should_run_bands_interpolation_skips_direct_epw_wannierize():
-    """Direct EPW Wannierization should suppress the optional interpolation branch."""
-    assert not should_run_bands_interpolation(
+def test_validate_inputs_allows_skipping_band_interpolation_namespace():
+    """The bands namespace remains optional."""
+    message = validate_inputs(
         {
-            "do_bands_interpolation": True,
-            "epw_bands": {},
-            "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            "w90_bands": {},
+            "ph_base": {},
+            "epw_base": {},
         }
     )
+
+    assert message is None
 
 
 def test_get_target_basepath_uses_local_workdir(fixture_localhost):
@@ -188,16 +160,10 @@ def test_should_run_scf_and_nscf_follow_epw_wannierize():
     assert EpwPrepWorkChain.should_run_nscf(process)
 
 
-def test_should_run_epw_bands_delegates_to_helper():
-    """The workchain method should follow the same interpolation gating helper."""
-    process = SimpleNamespace(
-        inputs={
-            "do_bands_interpolation": orm.Bool(True),
-            "epw_bands": {},
-        }
-    )
-
-    assert EpwPrepWorkChain.should_run_epw_bands(process)
+def test_should_run_epw_bands_checks_namespace_presence():
+    """The workchain should run the bands branch whenever the namespace is present."""
+    assert EpwPrepWorkChain.should_run_epw_bands(SimpleNamespace(inputs={"epw_bands": {}}))
+    assert not EpwPrepWorkChain.should_run_epw_bands(SimpleNamespace(inputs={}))
 
 
 def test_generate_reciprocal_points_splits_scf_and_nscf_meshes_for_direct_wannierize(
@@ -287,14 +253,14 @@ def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
     assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [10, 10, 10]
 
 
-def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
+def test_get_builder_from_protocol_builds_epw_bands_by_default(
     fixture_code,
     fixture_localhost,
     generate_remote_data,
     generate_structure,
     monkeypatch,
 ):
-    """The prep protocol builder should omit the optional bands namespace when disabled."""
+    """The prep protocol builder should keep the EPW bands namespace from the protocol."""
     from aiida.common import AttributeDict
 
     epw_code = fixture_code("epw.epw")
@@ -357,7 +323,6 @@ def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
     builder = EpwPrepWorkChain.get_builder_from_protocol(
         codes={"ph": fixture_code("quantumespresso.ph"), "epw": epw_code},
         structure=generate_structure(),
-        overrides={"do_bands_interpolation": False},
         parent_folder_ph=parent_folder_ph,
     )
 
@@ -366,7 +331,7 @@ def test_get_builder_from_protocol_skips_epw_bands_when_disabled(
     assert builder.kpoints_distance_scf.value == 0.15
     assert builder.kpoints_factor_nscf.value == 2
     assert builder.parent_folder_ph == parent_folder_ph
-    assert "epw_bands" not in builder
+    assert "epw_bands" in builder
     assert "projwfc" not in builder.w90_bands
     assert "open_grid" not in builder.w90_bands
     assert "structure" not in builder.w90_bands
@@ -447,8 +412,7 @@ def test_get_builder_from_protocol_uses_standalone_pw_for_epw_wannierize(
     assert "w90_bands" not in builder
     assert "scf" in builder
     assert "nscf" in builder
-    assert "epw_bands" not in builder
-    assert builder.do_bands_interpolation.value is False
+    assert "epw_bands" in builder
     assert captured["pw_overrides"][0]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
     assert captured["pw_overrides"][1]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
 
@@ -473,6 +437,9 @@ def test_run_epw_skips_chk_parent_for_direct_wannierize(
         inputs=AttributeDict({"structure": orm.StructureData()}),
         ctx=AttributeDict(
             {
+                "parent_folder_ph": generate_remote_data(
+                    fixture_localhost, "/remote/ph"
+                ),
                 "workchain_ph": SimpleNamespace(
                     outputs=SimpleNamespace(
                         remote_folder=generate_remote_data(

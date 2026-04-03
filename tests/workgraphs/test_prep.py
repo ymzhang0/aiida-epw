@@ -450,16 +450,6 @@ def test_drop_epw_mesh_generation_inputs_removes_builder_side_mesh_hints():
     assert "qfpoints_distance" in original
 
 
-def test_should_run_epw_bands_reads_band_plot_from_inputepw():
-    """The EPW bands guard should honor the nested ``INPUTEPW.band_plot`` flag."""
-    result = prep_module.should_run_epw_bands._callable(
-        orm.Bool(True),
-        orm.Dict({"INPUTEPW": {"band_plot": True}}),
-    )
-
-    assert result.value is True
-
-
 def test_validate_inputs_accepts_direct_epw_wannierize_inputs():
     """The workgraph should accept the direct EPW Wannierization entry point."""
     message = prep_module.validate_inputs(
@@ -468,15 +458,14 @@ def test_validate_inputs_accepts_direct_epw_wannierize_inputs():
             "nscf": {},
             "ph_base": {},
             "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}}},
-            "do_bands_interpolation": False,
         }
     )
 
     assert message is None
 
 
-def test_validate_inputs_rejects_bands_interpolation_for_direct_epw_wannierize():
-    """Direct EPW Wannierization should disable the optional bands interpolation branch."""
+def test_validate_inputs_accepts_direct_epw_wannierize_with_epw_bands():
+    """Direct EPW Wannierization can still request the EPW bands branch."""
     message = prep_module.validate_inputs(
         {
             "scf": {},
@@ -484,14 +473,10 @@ def test_validate_inputs_rejects_bands_interpolation_for_direct_epw_wannierize()
             "ph_base": {},
             "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}}},
             "epw_bands": {},
-            "do_bands_interpolation": True,
         }
     )
 
-    assert (
-        message
-        == "`do_bands_interpolation` is not supported when `epw_base.parameters.INPUTEPW.wannierize = True`."
-    )
+    assert message is None
 
 
 def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
@@ -556,7 +541,6 @@ def test_prep_passes_w90_chk_to_ukk_script_only_to_epw_base(
             "qpoints_distance": 0.5,
             "kpoints_distance_scf": 0.15,
             "kpoints_factor_nscf": 2,
-            "do_bands_interpolation": True,
             "kpoints_force_parity": False,
             "w90_bands": {
                 "scf": {"pw": {"metadata": _metadata_dict()}},
@@ -622,7 +606,6 @@ def test_prep_workgraph_runs_with_fake_high_level_workchains(
                 "qpoints_distance": 0.5,
                 "kpoints_distance_scf": 0.15,
                 "kpoints_factor_nscf": 2,
-                "do_bands_interpolation": True,
                 "kpoints_force_parity": False,
             "w90_bands": {
                 "scf": {"pw": {"metadata": _metadata_dict()}},
@@ -751,7 +734,6 @@ def test_build_task_inputs_uses_direct_pw_namespaces_for_epw_wannierize(
             "qpoints_distance": 0.5,
             "kpoints_distance_scf": 0.15,
             "kpoints_factor_nscf": 2,
-            "do_bands_interpolation": False,
             "kpoints_force_parity": False,
             "scf": {"pw": {"metadata": _metadata_dict()}},
             "nscf": {"pw": {"metadata": _metadata_dict()}},
@@ -776,7 +758,7 @@ def test_build_task_inputs_uses_direct_pw_namespaces_for_epw_wannierize(
     assert prepared_inputs["w90_bands"] == {}
     assert "pw" in prepared_inputs["scf"]
     assert "pw" in prepared_inputs["nscf"]
-    assert prepared_inputs["epw_bands"] == {}
+    assert "code" in prepared_inputs["epw_bands"]
 
 
 def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchains(
@@ -804,7 +786,6 @@ def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchai
             "qpoints_distance": 0.5,
             "kpoints_distance_scf": 0.15,
             "kpoints_factor_nscf": 2,
-            "do_bands_interpolation": False,
             "kpoints_force_parity": False,
             "scf": {"pw": {"metadata": _metadata_dict()}},
             "nscf": {"pw": {"metadata": _metadata_dict()}},
@@ -848,12 +829,14 @@ def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchai
     nscf_node = wg.tasks["nscf"].process
     phonon_node = wg.tasks["ph_base"].process
     epw_node = wg.tasks["epw_base"].process
+    epw_bands_node = wg.tasks["epw_bands"].process
     reciprocal_points_node = wg.tasks["generate_reciprocal_points"].process
 
     assert scf_node is not None
     assert nscf_node is not None
     assert phonon_node is not None
     assert epw_node is not None
+    assert epw_bands_node is not None
     assert reciprocal_points_node is not None
 
     assert phonon_node.inputs.ph.parent_folder.uuid == parent_folder_ph.uuid
@@ -863,6 +846,61 @@ def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchai
     assert reciprocal_points_node.outputs.qpoints.uuid == restart_qpoints.uuid
     assert epw_node.inputs.qpoints.uuid == restart_qpoints.uuid
     assert epw_node.inputs.kpoints.get_kpoints_mesh()[0] == reciprocal_points_node.outputs.kpoints_nscf.get_kpoints_mesh()[0]
+    assert epw_bands_node.inputs.parent_folder_epw.uuid == epw_node.outputs.remote_stash.uuid
+    assert epw_bands_node.inputs.kfpoints.uuid == epw_bands_node.inputs.qfpoints.uuid
+
+
+def test_prep_workgraph_runs_direct_epw_bands_without_w90(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """Direct EPW Wannierization should still build the bands branch from seekpath."""
+    codes = {
+        "pw": fixture_code("quantumespresso.pw"),
+        "ph": fixture_code("quantumespresso.ph"),
+        "epw": fixture_code("epw.epw"),
+    }
+    structure = generate_structure()
+    monkeypatch.setattr(
+        prep_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "pseudo_family": "PseudoDojo/0.5/PBE/SR/standard/upf",
+            "qpoints_distance": 0.5,
+            "kpoints_distance_scf": 0.15,
+            "kpoints_factor_nscf": 2,
+            "kpoints_force_parity": False,
+            "scf": {"pw": {"metadata": _metadata_dict()}},
+            "nscf": {"pw": {"metadata": _metadata_dict()}},
+            "ph_base": {"ph": {"metadata": _metadata_dict()}},
+            "epw_base": {
+                "options": _metadata_dict()["options"],
+                "parameters": {"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}},
+            },
+            "epw_bands": {"options": _metadata_dict()["options"]},
+        },
+    )
+    monkeypatch.setattr(prep_module.PwBaseWorkChain, "get_builder_from_protocol", _fake_pw_builder)
+    monkeypatch.setattr(prep_module.PhBaseWorkChain, "get_builder_from_protocol", _fake_ph_builder)
+    monkeypatch.setattr(prep_module.EpwBaseWorkChain, "get_builder_from_protocol", _fake_epw_builder)
+    monkeypatch.setattr(prep_module, "_apply_socket_overrides", lambda *args, **kwargs: None)
+    monkeypatch.setattr(prep_module, "PwBaseTask", task(FakePwBaseRuntimeWorkChain))
+    monkeypatch.setattr(prep_module, "PhBaseTask", task(FakePhBaseRuntimeWorkChain))
+    monkeypatch.setattr(prep_module, "EpwBaseTask", task(FakeEpwBaseRuntimeWorkChain))
+
+    wg = prep_module.prep(
+        codes=codes,
+        structure=structure,
+        protocol="fast",
+        overrides={},
+    )
+    wg.run()
+
+    epw_bands_node = wg.tasks["epw_bands"].process
+
+    assert epw_bands_node is not None
+    assert epw_bands_node.inputs.kfpoints.uuid == epw_bands_node.inputs.qfpoints.uuid
 
 
 def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(
@@ -888,7 +926,6 @@ def test_prep_workgraph_preserves_nested_scheduler_options_and_codes(
             "qpoints_distance": 0.5,
             "kpoints_distance_scf": 0.15,
             "kpoints_factor_nscf": 2,
-            "do_bands_interpolation": False,
             "kpoints_force_parity": False,
             "w90_bands": {
                 "scf": {"pw": {"metadata": _metadata_dict()}},
