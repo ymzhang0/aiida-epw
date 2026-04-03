@@ -446,6 +446,13 @@ def build_task_inputs(
         overrides = dict(overrides.items())
 
     protocol_inputs = get_protocol_inputs(protocol, overrides)
+    use_epw_wannierize = should_epw_wannierize(protocol_inputs)
+    if use_epw_wannierize:
+        protocol_inputs.pop("w90_bands", None)
+    else:
+        protocol_inputs.pop("scf", None)
+        protocol_inputs.pop("nscf", None)
+
     validation_error = validate_inputs(protocol_inputs)
     if validation_error is not None:
         raise ValueError(validation_error)
@@ -454,7 +461,6 @@ def build_task_inputs(
         wannier_projection_type = WannierProjectionType.ATOMIC_PROJECTORS_QE
 
     pseudo_family = protocol_inputs.pop("pseudo_family", None)
-    use_epw_wannierize = should_epw_wannierize(protocol_inputs)
     w90_bands: dict[str, Any] = {}
     scf: dict[str, Any] = {}
     nscf: dict[str, Any] = {}
