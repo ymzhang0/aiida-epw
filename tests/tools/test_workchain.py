@@ -5,6 +5,7 @@ import pytest
 from aiida_epw.tools.workchain import (
     find_related_calculation,
     get_parent_folder_calculation,
+    get_parent_ph_pw_calculation,
     get_parent_ph_qpoints,
     structures_match,
     validate_parent_ph_inputs,
@@ -164,3 +165,23 @@ def test_validate_parent_ph_inputs_checks_parent_pw_runtime_details(generate_str
             scf_parameters=parameters,
             scf_pseudos={"Si": pseudo},
         )
+
+
+def test_get_parent_ph_pw_calculation_walks_restart_chain():
+    """The phonon helper should skip intermediate restarted `PhCalculation` parents."""
+    original_pw = SimpleNamespace(process_label="PwCalculation", inputs=SimpleNamespace())
+    restarted_ph = SimpleNamespace(
+        process_label="PhCalculation",
+        inputs=SimpleNamespace(parent_folder=SimpleNamespace(creator=original_pw)),
+    )
+    latest_ph_parent = SimpleNamespace(
+        creator=SimpleNamespace(
+            process_label="PhCalculation",
+            inputs=SimpleNamespace(
+                qpoints=SimpleNamespace(),
+                parent_folder=SimpleNamespace(creator=restarted_ph),
+            ),
+        )
+    )
+
+    assert get_parent_ph_pw_calculation(latest_ph_parent) is original_pw

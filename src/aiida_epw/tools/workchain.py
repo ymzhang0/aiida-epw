@@ -130,6 +130,40 @@ def get_parent_ph_qpoints(parent_folder_ph):
     return qpoints
 
 
+def get_parent_ph_pw_calculation(parent_folder_ph):
+    """Return the original ``PwCalculation`` behind a phonon parent folder."""
+    calculation = get_parent_ph_calculation(parent_folder_ph)
+    visited = set()
+
+    while True:
+        identifier = getattr(calculation, "uuid", id(calculation))
+        if identifier in visited:
+            raise ValueError(
+                "Detected a cycle while tracing `parent_folder_ph` back to the "
+                "original `PwCalculation`."
+            )
+        visited.add(identifier)
+
+        parent_folder = getattr(calculation.inputs, "parent_folder", None)
+        if parent_folder is None:
+            raise ValueError(
+                "The provided `parent_folder_ph` does not expose the parent folder "
+                "needed to validate its SCF provenance."
+            )
+
+        parent_calculation = get_parent_folder_calculation(parent_folder)
+        if parent_calculation.process_label == "PwCalculation":
+            return parent_calculation
+
+        if parent_calculation.process_label != "PhCalculation":
+            raise ValueError(
+                "`parent_folder_ph` must trace back through `PhCalculation` restarts "
+                f"to a `PwCalculation`, got `{parent_calculation.process_label}`."
+            )
+
+        calculation = parent_calculation
+
+
 def validate_parent_ph_inputs(
     parent_folder_ph,
     structure,
@@ -140,22 +174,7 @@ def validate_parent_ph_inputs(
 ):
     """Validate a phonon parent folder against the target EPW inputs."""
     qpoints = get_parent_ph_qpoints(parent_folder_ph)
-    ph_calculation = get_parent_ph_calculation(parent_folder_ph)
-
-    parent_pw_folder = getattr(ph_calculation.inputs, "parent_folder", None)
-    if parent_pw_folder is None:
-        raise ValueError(
-            "The provided `parent_folder_ph` does not expose the parent PW folder "
-            "needed to validate its structure."
-        )
-
-    parent_pw_calculation = get_parent_folder_calculation(parent_pw_folder)
-    if parent_pw_calculation.process_label != "PwCalculation":
-        raise ValueError(
-            "`parent_folder_ph` must trace back to a `PwCalculation` through "
-            f"`PhCalculation.inputs.parent_folder`, got "
-            f"`{parent_pw_calculation.process_label}`."
-        )
+    parent_pw_calculation = get_parent_ph_pw_calculation(parent_folder_ph)
 
     parent_structure = getattr(parent_pw_calculation.inputs, "structure", None)
     if parent_structure is None:
