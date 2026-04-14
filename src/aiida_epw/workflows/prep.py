@@ -466,6 +466,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             builder.ph_base = ph_base
         else:
             builder.pop("ph_base", None)
+            builder.parent_folder_ph = parent_folder_ph
 
         # TODO:
         # Here I have a loop for the epw builders for furture extension of another epw bands interpolation
@@ -493,8 +494,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         builder.qpoints_distance = orm.Float(inputs["qpoints_distance"])
         builder.kpoints_distance_scf = orm.Float(inputs["kpoints_distance_scf"])
         builder.kpoints_factor_nscf = orm.Int(inputs["kpoints_factor_nscf"])
-        if parent_folder_ph:
-            builder.parent_folder_ph = parent_folder_ph
         builder.clean_workdir = orm.Bool(inputs["clean_workdir"])
 
         return builder
@@ -519,41 +518,22 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             qpoints = create_kpoints_from_distance(**inputs)  # pylint: disable=unexpected-keyword-arg
         self.ctx.qpoints = qpoints
 
-        if should_epw_wannierize(self.inputs):
-            inputs = {
-                "structure": self.inputs.structure,
-                "distance": self.inputs.kpoints_distance_scf,
-                "force_parity": self.inputs.get(
-                    "kpoints_force_parity", orm.Bool(False)
-                ),
-                "metadata": {"call_link_label": "create_kpoints_scf_from_distance"},
-            }
-            kpoints_scf = create_kpoints_from_distance(**inputs)
+        inputs = {
+            "structure": self.inputs.structure,
+            "distance": self.inputs.kpoints_distance_scf,
+            "force_parity": self.inputs.get(
+                "kpoints_force_parity", orm.Bool(False)
+            ),
+            "metadata": {"call_link_label": "create_kpoints_scf_from_distance"},
+        }
+        kpoints_scf = create_kpoints_from_distance(**inputs)
 
-            qpoints_mesh = qpoints.get_kpoints_mesh()[0]
-            kpoints_nscf = orm.KpointsData()
-            kpoints_nscf.set_kpoints_mesh(
-                [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
-            )
-        elif "w90_bands" in self.inputs:
-            inputs = {
-                "structure": self.inputs.structure,
-                "distance": self.inputs.kpoints_distance_scf,
-                "force_parity": self.inputs.get(
-                    "kpoints_force_parity", orm.Bool(False)
-                ),
-                "metadata": {"call_link_label": "create_kpoints_scf_from_distance"},
-            }
+        qpoints_mesh = qpoints.get_kpoints_mesh()[0]
+        kpoints_nscf = orm.KpointsData()
+        kpoints_nscf.set_kpoints_mesh(
+            [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
+        )
 
-            kpoints_scf = create_kpoints_from_distance(**inputs)
-
-            qpoints_mesh = qpoints.get_kpoints_mesh()[0]
-
-            kpoints_nscf = orm.KpointsData()
-            kpoints_nscf.set_kpoints_mesh(
-                [v * self.inputs.kpoints_factor_nscf.value for v in qpoints_mesh]
-            )
-        
         self.ctx.kpoints_scf = kpoints_scf
         self.ctx.kpoints_nscf = kpoints_nscf
 
