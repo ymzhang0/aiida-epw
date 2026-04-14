@@ -16,6 +16,7 @@ from aiida_workgraph import task
 from aiida_workgraph.engine.task_manager import TaskManager
 from aiida_workgraph.utils import restore_workgraph_data_from_raw_inputs
 from aiida_quantumespresso.utils.mapping import prepare_process_inputs
+from aiida_wannier90_workflows.common.types import WannierProjectionType
 
 prep_module = import_module("aiida_epw.workgraphs.prep")
 
@@ -759,6 +760,129 @@ def test_build_task_inputs_uses_direct_pw_namespaces_for_epw_wannierize(
     assert "pw" in prepared_inputs["scf"]
     assert "pw" in prepared_inputs["nscf"]
     assert "code" in prepared_inputs["epw_bands"]
+
+
+def test_build_task_inputs_supports_analytic_wannier_projections(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """The workgraph helper should preserve analytic Wannier90 projections."""
+    codes = {
+        "pw": fixture_code("quantumespresso.pw"),
+        "pw2wannier90": fixture_code("quantumespresso.pw2wannier90"),
+        "wannier90": fixture_code("wannier90.wannier90"),
+        "ph": fixture_code("quantumespresso.ph"),
+        "epw": fixture_code("epw.epw"),
+    }
+    structure = generate_structure()
+    captured = {}
+
+    monkeypatch.setattr(
+        prep_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "pseudo_family": "PseudoDojo/0.5/PBE/SR/standard/upf",
+            "qpoints_distance": 0.5,
+            "kpoints_distance_scf": 0.15,
+            "kpoints_factor_nscf": 2,
+            "kpoints_force_parity": False,
+            "w90_bands": {
+                "scf": {"pw": {"metadata": _metadata_dict()}},
+                "nscf": {"pw": {"metadata": _metadata_dict()}},
+                "pw2wannier90": {"pw2wannier90": {"metadata": _metadata_dict()}},
+                "wannier90": {"wannier90": {"metadata": _metadata_dict()}},
+            },
+            "ph_base": {"ph": {"metadata": _metadata_dict()}},
+            "epw_base": {"options": _metadata_dict()["options"]},
+        },
+    )
+
+    def fake_w90_builder(**kwargs):
+        captured["projection_type"] = kwargs["projection_type"]
+        builder = _fake_wannier90_builder(kwargs["codes"])
+        builder.wannier90["wannier90"]["projections"] = orm.List(list=["Si:s", "Si:p"])
+        return builder
+
+    monkeypatch.setattr(
+        prep_module.Wannier90BandsWorkChain,
+        "get_builder_from_protocol",
+        fake_w90_builder,
+    )
+    monkeypatch.setattr(
+        prep_module.Wannier90OptimizeWorkChain,
+        "get_builder_from_protocol",
+        fake_w90_builder,
+    )
+    monkeypatch.setattr(
+        prep_module.PhBaseWorkChain,
+        "get_builder_from_protocol",
+        _fake_ph_builder,
+    )
+    monkeypatch.setattr(
+        prep_module.EpwBaseWorkChain,
+        "get_builder_from_protocol",
+        _fake_epw_builder,
+    )
+
+    prepared_inputs = prep_module.build_task_inputs(
+        codes=codes,
+        structure=structure,
+        protocol="fast",
+        overrides={},
+        wannier_projection_type=WannierProjectionType.ANALYTIC,
+    )
+
+    assert captured["projection_type"] == WannierProjectionType.ANALYTIC
+    assert prepared_inputs["w90_bands"]["wannier90"]["wannier90"]["projections"] == [
+        "Si:s",
+        "Si:p",
+    ]
+
+
+def test_build_task_inputs_rejects_reference_bands_for_analytic_projections(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """Analytic projections should not enter the optimization builder path."""
+    codes = {
+        "pw": fixture_code("quantumespresso.pw"),
+        "pw2wannier90": fixture_code("quantumespresso.pw2wannier90"),
+        "wannier90": fixture_code("wannier90.wannier90"),
+        "ph": fixture_code("quantumespresso.ph"),
+        "epw": fixture_code("epw.epw"),
+    }
+
+    monkeypatch.setattr(
+        prep_module,
+        "get_protocol_inputs",
+        lambda protocol=None, overrides=None: {
+            "pseudo_family": "PseudoDojo/0.5/PBE/SR/standard/upf",
+            "qpoints_distance": 0.5,
+            "kpoints_distance_scf": 0.15,
+            "kpoints_factor_nscf": 2,
+            "kpoints_force_parity": False,
+            "w90_bands": {
+                "scf": {"pw": {"metadata": _metadata_dict()}},
+                "nscf": {"pw": {"metadata": _metadata_dict()}},
+                "pw2wannier90": {"pw2wannier90": {"metadata": _metadata_dict()}},
+                "wannier90": {"wannier90": {"metadata": _metadata_dict()}},
+            },
+            "ph_base": {"ph": {"metadata": _metadata_dict()}},
+            "epw_base": {"options": _metadata_dict()["options"]},
+        },
+    )
+
+    with pytest.raises(ValueError, match="Wannier90OptimizeWorkChain"):
+        prep_module.build_task_inputs(
+            codes=codes,
+            structure=generate_structure(),
+            protocol="fast",
+            overrides={},
+            wannier_projection_type=WannierProjectionType.ANALYTIC,
+            reference_bands=orm.BandsData(),
+        )
 
 
 def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchains(

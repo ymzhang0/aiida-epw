@@ -58,6 +58,24 @@ def should_epw_wannierize(inputs) -> bool:
     return bool(inputepw.get("wannierize", False))
 
 
+def _validate_reference_bands_projection_type(
+    reference_bands,
+    wannier_projection_type: WannierProjectionType,
+) -> None:
+    """Reject unsupported optimization modes for the selected projection type."""
+    if (
+        reference_bands is not None
+        and wannier_projection_type == WannierProjectionType.ANALYTIC
+    ):
+        raise ValueError(
+            "`reference_bands` with `WannierProjectionType.ANALYTIC` is not "
+            "supported in `EpwPrepWorkChain`: the optimize branch uses "
+            "`Wannier90OptimizeWorkChain`, which optimizes `dis_proj_min/max`. "
+            "Use `Wannier90BandsWorkChain` without `reference_bands` and tune "
+            "`dis_win_*`/`dis_froz_*` manually."
+        )
+
+
 def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
     inputs, ctx=None
 ):
@@ -89,8 +107,14 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
 class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     """Main work chain to start calculating properties using EPW.
 
-    Has support for both the selected columns of the density matrix (SCDM) and
-    (projectability-disentangled Wannier function) PDWF projection types.
+    When the workflow runs the ``w90_bands`` branch, the projection strategy is
+    delegated to ``Wannier90BandsWorkChain``/``Wannier90OptimizeWorkChain`` and
+    therefore supports the same projection types, including analytic
+    ``proj =`` entries generated from ``WannierProjectionType.ANALYTIC``.
+
+    The direct EPW Wannierization branch
+    (``epw_base.parameters.INPUTEPW.wannierize = True``) is more limited and
+    only supports explicit manual ``proj(i)`` entries accepted by ``epw.x``.
     """
 
     @classmethod
@@ -311,11 +335,20 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         :param structure: the ``StructureData`` instance to use.
         :param protocol: protocol to use, if not specified, the default will be used.
         :param overrides: optional dictionary of inputs to override the defaults of the protocol.
+        :param wannier_projection_type: projection type forwarded to the
+            Wannier90 builder when the ``w90_bands`` branch is used. This can be
+            ``WannierProjectionType.ANALYTIC`` to let Wannier90 use explicit
+            analytic projections. It is ignored for the direct EPW
+            Wannierization branch, which requires manual ``proj(i)`` entries in
+            ``epw_base.parameters.INPUTEPW``.
         :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
             sub processes that are called by this workchain.
         :return: a process builder instance with all inputs defined ready for launch.
         """
         inputs = cls.get_protocol_inputs(protocol, overrides)
+        _validate_reference_bands_projection_type(
+            reference_bands, wannier_projection_type
+        )
 
         builder = cls.get_builder()
         builder.structure = structure

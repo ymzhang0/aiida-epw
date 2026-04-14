@@ -3,11 +3,13 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from aiida import orm
 from aiida.common import AttributeDict, LinkType
 from aiida.common.datastructures import StashMode
 from aiida.engine import WorkChain
 from aiida.plugins.entry_point import format_entry_point_string
+from aiida_wannier90_workflows.common.types import WannierProjectionType
 
 from aiida_epw.workflows.prep import (
     EpwPrepWorkChain,
@@ -415,6 +417,103 @@ def test_get_builder_from_protocol_uses_standalone_pw_for_epw_wannierize(
     assert "epw_bands" in builder
     assert captured["pw_overrides"][0]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
     assert captured["pw_overrides"][1]["pseudo_family"] == "PseudoDojo/0.5/PBE/SR/standard/upf"
+
+
+def test_get_builder_from_protocol_supports_analytic_wannier_projections(
+    fixture_code,
+    generate_structure,
+    monkeypatch,
+):
+    """The prep builder should forward analytic projections to the Wannier90 branch."""
+    from aiida.common import AttributeDict
+
+    captured = {}
+    epw_code = fixture_code("epw.epw")
+
+    def fake_w90_builder(*args, **kwargs):
+        captured["projection_type"] = kwargs["projection_type"]
+        builder = AttributeDict()
+        builder.structure = generate_structure()
+        builder.open_grid = {}
+        builder.wannier90 = AttributeDict(
+            {
+                "wannier90": AttributeDict(
+                    {
+                        "projections": orm.List(list=["Si:s", "Si:p"]),
+                    }
+                )
+            }
+        )
+        return builder
+
+    def fake_ph_builder(*args, **kwargs):
+        builder = AttributeDict()
+        builder.clean_workdir = orm.Bool(False)
+        builder.qpoints_distance = orm.Float(0.4)
+        return builder
+
+    def fake_epw_builder(*args, **kwargs):
+        builder = AttributeDict()
+        builder.code = epw_code
+        builder.parameters = orm.Dict({"INPUTEPW": {}})
+        builder.options = orm.Dict(
+            {
+                "resources": {
+                    "num_machines": 1,
+                    "num_mpiprocs_per_machine": 1,
+                },
+                "max_wallclock_seconds": 1800,
+                "withmpi": True,
+            }
+        )
+        builder.qfpoints_distance = orm.Float(0.1)
+        builder.kfpoints_factor = orm.Int(2)
+        builder.max_iterations = orm.Int(2)
+        return builder
+
+    monkeypatch.setattr(
+        EpwPrepWorkChain,
+        "get_builder",
+        classmethod(lambda cls: AttributeDict()),
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.Wannier90BandsWorkChain.get_builder_from_protocol",
+        fake_w90_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.PhBaseWorkChain.get_builder_from_protocol",
+        fake_ph_builder,
+    )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.EpwBaseWorkChain.get_builder_from_protocol",
+        fake_epw_builder,
+    )
+
+    builder = EpwPrepWorkChain.get_builder_from_protocol(
+        codes={"ph": fixture_code("quantumespresso.ph"), "epw": epw_code},
+        structure=generate_structure(),
+        wannier_projection_type=WannierProjectionType.ANALYTIC,
+    )
+
+    assert captured["projection_type"] == WannierProjectionType.ANALYTIC
+    assert builder.w90_bands["wannier90"]["wannier90"]["projections"].get_list() == [
+        "Si:s",
+        "Si:p",
+    ]
+
+
+def test_get_builder_from_protocol_rejects_reference_bands_for_analytic_projections(
+    fixture_code,
+    generate_structure,
+):
+    """Analytic projections should not enter the dis_proj optimization branch."""
+    with pytest.raises(ValueError, match="Wannier90OptimizeWorkChain"):
+        EpwPrepWorkChain.get_builder_from_protocol(
+            codes={"ph": fixture_code("quantumespresso.ph"), "epw": fixture_code("epw.epw")},
+            structure=generate_structure(),
+            wannier_projection_type=WannierProjectionType.ANALYTIC,
+            reference_bands=orm.BandsData(),
+        )
 
 
 def test_run_epw_skips_chk_parent_for_direct_wannierize(

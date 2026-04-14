@@ -254,6 +254,24 @@ def _set_call_link_label(inputs: dict[str, Any], label: str) -> dict[str, Any]:
     return updated
 
 
+def _validate_reference_bands_projection_type(
+    reference_bands: orm.BandsData | None,
+    wannier_projection_type: WannierProjectionType,
+) -> None:
+    """Reject unsupported optimization modes for the selected projection type."""
+    if (
+        reference_bands is not None
+        and wannier_projection_type == WannierProjectionType.ANALYTIC
+    ):
+        raise ValueError(
+            "`reference_bands` with `WannierProjectionType.ANALYTIC` is not "
+            "supported in `EpwPrepWorkChain`: the optimize branch uses "
+            "`Wannier90OptimizeWorkChain`, which optimizes `dis_proj_min/max`. "
+            "Use `Wannier90BandsWorkChain` without `reference_bands` and tune "
+            "`dis_win_*`/`dis_froz_*` manually."
+        )
+
+
 def _build_wannier90_inputs(
     *,
     codes: dict[str, Any],
@@ -265,6 +283,9 @@ def _build_wannier90_inputs(
     bands_kpoints: orm.KpointsData | None,
 ) -> dict[str, Any]:
     """Build the static inputs for the Wannier90 task."""
+    _validate_reference_bands_projection_type(
+        reference_bands, wannier_projection_type
+    )
     w90_overrides = _copy_nested_containers(protocol_inputs.get("w90_bands", {}))
     if reference_bands is not None:
         w90_builder = Wannier90OptimizeWorkChain.get_builder_from_protocol(
