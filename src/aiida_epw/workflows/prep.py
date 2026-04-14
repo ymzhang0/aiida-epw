@@ -29,6 +29,7 @@ from aiida_epw.tools.workchain import (
     format_subprocess_failure,
     get_parent_folder_calculation,
     get_target_basepath,
+    validate_parent_ph_inputs,
 )
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
@@ -76,6 +77,14 @@ def _validate_reference_bands_projection_type(
         )
 
 
+def _validate_parent_folder_ph(parent_folder_ph, structure) -> None:
+    """Validate that a provided phonon parent folder can be reused safely."""
+    if parent_folder_ph is None:
+        return
+
+    validate_parent_ph_inputs(parent_folder_ph, structure)
+
+
 def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
     inputs, ctx=None
 ):
@@ -102,6 +111,9 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
                 "`scf` and `nscf` inputs are required when "
                 "`epw_base.parameters.INPUTEPW.wannierize = True`."
             )
+
+    if "parent_folder_ph" not in inputs and "ph_base" not in inputs:
+        return "Either provide `ph_base` inputs or set `parent_folder_ph`."
 
 
 class EpwPrepWorkChain(ProtocolMixin, WorkChain):
@@ -205,6 +217,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "qpoints_distance",
             ),
             namespace_options={
+                "required": False,
                 "help": "Inputs for the `PhBaseWorkChain` that does the `ph.x` calculation."
             },
         )
@@ -267,8 +280,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 cls.run_wannier90,
                 cls.inspect_wannier90,
             ),
-            cls.run_ph,
-            cls.inspect_ph,
+            if_(cls.should_run_ph)(
+                cls.run_ph,
+                cls.inspect_ph,
+            ),
+            cls.setup_parent_folder_ph,
             cls.run_epw,
             cls.inspect_epw,
             if_(cls.should_run_epw_bands)(
@@ -306,6 +322,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             406,
             "ERROR_SUB_PROCESS_FAILED_EPW_BANDS",
             message="The `EpwBandsWorkChain` sub process failed",
+        )
+        spec.exit_code(
+            407,
+            "ERROR_INVALID_PARENT_FOLDER_PH",
+            message="The provided `parent_folder_ph` is not a valid phonon parent folder",
         )
 
     @classmethod
@@ -349,6 +370,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         _validate_reference_bands_projection_type(
             reference_bands, wannier_projection_type
         )
+        _validate_parent_folder_ph(parent_folder_ph, structure)
 
         builder = cls.get_builder()
         builder.structure = structure
@@ -420,16 +442,19 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             builder.pop("scf", None)
             builder.pop("nscf", None)
 
-        args = (codes["ph"], None, protocol)
-        ph_base_inputs = inputs.get("ph_base", None)
-        _ensure_stash_options(ph_base_inputs["ph"]["metadata"]["options"], codes["ph"].computer)
-        ph_base = PhBaseWorkChain.get_builder_from_protocol(
-            *args, overrides=ph_base_inputs, **kwargs
-        )
-        ph_base.pop("clean_workdir", None)
-        ph_base.pop("qpoints_distance")
+        if parent_folder_ph is None:
+            args = (codes["ph"], None, protocol)
+            ph_base_inputs = inputs.get("ph_base", None)
+            _ensure_stash_options(
+                ph_base_inputs["ph"]["metadata"]["options"], codes["ph"].computer
+            )
+            ph_base = PhBaseWorkChain.get_builder_from_protocol(
+                *args, overrides=ph_base_inputs, **kwargs
+            )
+            ph_base.pop("clean_workdir", None)
+            ph_base.pop("qpoints_distance")
 
-        builder.ph_base = ph_base
+            builder.ph_base = ph_base
 
         # TODO:
         # Here I have a loop for the epw builders for furture extension of another epw bands interpolation
@@ -465,20 +490,14 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
     def generate_reciprocal_points(self):
         """Generate the qpoints and kpoints meshes for the `ph.x` and `pw.x` calculations."""
-        from aiida_wannier90_workflows.utils.kpoints import (
-            get_explicit_kpoints
-        )
-        parent_folder_ph_calculation = None
         if "parent_folder_ph" in self.inputs:
-            parent_folder_ph_calculation = get_parent_folder_calculation(
-                self.inputs.parent_folder_ph
-            )
-
-        if (
-            parent_folder_ph_calculation is not None
-            and parent_folder_ph_calculation.process_label == "PhCalculation"
-        ):
-            qpoints = parent_folder_ph_calculation.inputs.qpoints
+            try:
+                qpoints = validate_parent_ph_inputs(
+                    self.inputs.parent_folder_ph, self.inputs.structure
+                )
+            except ValueError as exception:
+                self.report(str(exception))
+                return self.exit_codes.ERROR_INVALID_PARENT_FOLDER_PH
         else:
             inputs = {
                 "structure": self.inputs.structure,
@@ -540,6 +559,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
     def should_run_nscf(self):
         """Check if the standalone NSCF workflow should be run."""
         return should_epw_wannierize(self.inputs)
+
+    def should_run_ph(self):
+        """Check if the phonon workflow should be run."""
+        return "parent_folder_ph" not in self.inputs
 
     def run_scf(self):
         """Run the standalone SCF workflow for direct EPW Wannierization."""
@@ -681,6 +704,11 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_PHONON
 
         self.ctx.parent_folder_ph = workchain.outputs.remote_folder
+
+    def setup_parent_folder_ph(self):
+        """Use the provided phonon parent folder when the phonon branch is skipped."""
+        if "parent_folder_ph" in self.inputs:
+            self.ctx.parent_folder_ph = self.inputs.parent_folder_ph
 
     def run_epw(self):
         """Run the `EpwBaseWorkChain`."""

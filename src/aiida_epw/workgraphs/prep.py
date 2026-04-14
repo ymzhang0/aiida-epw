@@ -16,7 +16,10 @@ from aiida_wannier90_workflows.workflows import (
 )
 from aiida_wannier90_workflows.common.types import WannierProjectionType
 
-from aiida_epw.tools.workchain import get_parent_folder_calculation, get_target_basepath
+from aiida_epw.tools.workchain import (
+    get_target_basepath,
+    validate_parent_ph_inputs,
+)
 from aiida_epw.workflows.base import EpwBaseWorkChain
 
 PwBaseTask = task(PwBaseWorkChain)
@@ -140,6 +143,9 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
                 "`scf` and `nscf` inputs are required when "
                 "`epw_base.parameters.INPUTEPW.wannierize = True`."
             )
+
+    if "parent_folder_ph" not in inputs and "ph_base" not in inputs:
+        return "Either provide `ph_base` inputs or set `parent_folder_ph`."
 
 
 def should_epw_wannierize(inputs) -> bool:
@@ -272,6 +278,14 @@ def _validate_reference_bands_projection_type(
         )
 
 
+def _validate_parent_folder_ph(parent_folder_ph, structure) -> None:
+    """Validate that a provided phonon parent folder can be reused safely."""
+    if parent_folder_ph is None:
+        return
+
+    validate_parent_ph_inputs(parent_folder_ph, structure)
+
+
 def _build_wannier90_inputs(
     *,
     codes: dict[str, Any],
@@ -336,6 +350,9 @@ def _build_ph_inputs(
     kwargs: dict[str, Any],
 ) -> dict[str, Any]:
     """Build the static inputs for the phonon task."""
+    if codes.get("ph") is None:
+        return {}
+
     ph_base_inputs = protocol_inputs.get("ph_base", {})
     _add_metadata_stash_target_base(ph_base_inputs.setdefault("ph", {}), codes.get("ph"))
 
@@ -467,7 +484,12 @@ def build_task_inputs(
         overrides = dict(overrides.items())
 
     protocol_inputs = get_protocol_inputs(protocol, overrides)
+    if parent_folder_ph is not None:
+        _validate_parent_folder_ph(parent_folder_ph, structure)
     use_epw_wannierize = should_epw_wannierize(protocol_inputs)
+    protocol_inputs = _copy_nested_containers(protocol_inputs)
+    if parent_folder_ph is not None:
+        protocol_inputs["parent_folder_ph"] = parent_folder_ph
     if use_epw_wannierize:
         protocol_inputs.pop("w90_bands", None)
     else:
@@ -513,12 +535,14 @@ def build_task_inputs(
             reference_bands=reference_bands,
             bands_kpoints=bands_kpoints,
         )
-    ph_base = _build_ph_inputs(
-        codes=codes,
-        protocol=protocol,
-        protocol_inputs=protocol_inputs,
-        kwargs=kwargs,
-    )
+    ph_base = {}
+    if parent_folder_ph is None:
+        ph_base = _build_ph_inputs(
+            codes=codes,
+            protocol=protocol,
+            protocol_inputs=protocol_inputs,
+            kwargs=kwargs,
+        )
     epw_base, epw_bands = _build_epw_inputs(
         codes=codes,
         structure=structure,
@@ -564,15 +588,8 @@ def generate_reciprocal_points(
         distance=kpoints_distance_scf,
         force_parity=force_parity,
     )
-    parent_folder_ph_calculation = None
     if parent_folder_ph is not None:
-        parent_folder_ph_calculation = get_parent_folder_calculation(parent_folder_ph)
-
-    if (
-        parent_folder_ph_calculation is not None
-        and parent_folder_ph_calculation.process_label == "PhCalculation"
-    ):
-        qpoints = parent_folder_ph_calculation.inputs.qpoints
+        qpoints = validate_parent_ph_inputs(parent_folder_ph, structure)
     else:
         qpoints = _create_kpoints_from_distance_node(
             structure=structure,
@@ -731,7 +748,7 @@ def prep_from_inputs(
     w90_bands = inputs.get("w90_bands", {})
     scf = inputs.get("scf", {})
     nscf = inputs.get("nscf", {})
-    ph_base = inputs["ph_base"]
+    ph_base = inputs.get("ph_base", {})
     epw_base = inputs["epw_base"]
     epw_bands = inputs["epw_bands"]
 
@@ -865,25 +882,7 @@ def prep_from_inputs(
                     nscf_remote = wannier90_run_proxy.nscf.remote_folder
                     chk_folder = wannier90_run_proxy.wannier90.remote_folder
 
-        parent_folder_ph_calculation = None
-        if parent_folder_ph is not None:
-            parent_folder_ph_calculation = get_parent_folder_calculation(parent_folder_ph)
-
-        if (
-            parent_folder_ph_calculation is not None
-            and parent_folder_ph_calculation.process_label == "PhCalculation"
-        ):
-            phonons_inputs = recursive_merge(
-                ph_base,
-                {
-                    "qpoints": reciprocal_points.qpoints,
-                    "ph": {
-                        "parent_folder": parent_folder_ph,
-                        "qpoints": reciprocal_points.qpoints,
-                    },
-                },
-            )
-        else:
+        if parent_folder_ph is None:
             phonons_inputs = recursive_merge(
                 ph_base,
                 {
@@ -891,17 +890,20 @@ def prep_from_inputs(
                     "ph": {"parent_folder": scf_remote},
                 },
             )
-        phonons_run = PhBaseTask(**_set_call_link_label(phonons_inputs, "ph_base"))
-        _apply_socket_overrides(
-            phonons_run._task.inputs,
-            ph_base,
-            ("ph.code", "ph.metadata"),
-        )
+            phonons_run = PhBaseTask(**_set_call_link_label(phonons_inputs, "ph_base"))
+            _apply_socket_overrides(
+                phonons_run._task.inputs,
+                ph_base,
+                ("ph.code", "ph.metadata"),
+            )
+            parent_ph_for_epw = phonons_run.remote_folder
+        else:
+            parent_ph_for_epw = parent_folder_ph
 
         kfpoints = create_kpoints_gamma()
         epw_inputs = recursive_merge(_drop_epw_mesh_generation_inputs(epw_base), {
             "structure": structure,
-            "parent_folder_ph": phonons_run.remote_folder,
+            "parent_folder_ph": parent_ph_for_epw,
             "parent_folder_nscf": nscf_remote,
             "kpoints": reciprocal_points.kpoints_nscf,
             "kfpoints": kfpoints.result,

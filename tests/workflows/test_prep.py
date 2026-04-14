@@ -129,6 +129,19 @@ def test_validate_inputs_allows_skipping_band_interpolation_namespace():
     assert message is None
 
 
+def test_validate_inputs_allows_parent_folder_ph_without_ph_base():
+    """A reused phonon parent folder should make the `ph_base` namespace optional."""
+    message = validate_inputs(
+        {
+            "w90_bands": {},
+            "parent_folder_ph": object(),
+            "epw_base": {},
+        }
+    )
+
+    assert message is None
+
+
 def test_get_target_basepath_uses_local_workdir(fixture_localhost):
     """The stash basepath should be derived from the computer work directory."""
     assert get_target_basepath(fixture_localhost) == Path(
@@ -166,6 +179,14 @@ def test_should_run_epw_bands_checks_namespace_presence():
     """The workchain should run the bands branch whenever the namespace is present."""
     assert EpwPrepWorkChain.should_run_epw_bands(SimpleNamespace(inputs={"epw_bands": {}}))
     assert not EpwPrepWorkChain.should_run_epw_bands(SimpleNamespace(inputs={}))
+
+
+def test_should_run_ph_skips_when_parent_folder_is_provided():
+    """The phonon branch should be skipped when a reusable parent folder is supplied."""
+    assert not EpwPrepWorkChain.should_run_ph(
+        SimpleNamespace(inputs={"parent_folder_ph": object()})
+    )
+    assert EpwPrepWorkChain.should_run_ph(SimpleNamespace(inputs={}))
 
 
 def test_generate_reciprocal_points_splits_scf_and_nscf_meshes_for_direct_wannierize(
@@ -228,11 +249,8 @@ def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
         fake_create_kpoints_from_distance,
     )
     monkeypatch.setattr(
-        "aiida_epw.workflows.prep.get_parent_folder_calculation",
-        lambda _folder: SimpleNamespace(
-            process_label="PhCalculation",
-            inputs=SimpleNamespace(qpoints=restart_qpoints),
-        ),
+        "aiida_epw.workflows.prep.validate_parent_ph_inputs",
+        lambda _folder, _structure: restart_qpoints,
     )
 
     process = SimpleNamespace(
@@ -253,6 +271,45 @@ def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
 
     assert process.ctx.qpoints == restart_qpoints
     assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [10, 10, 10]
+
+
+def test_generate_reciprocal_points_rejects_invalid_parent_folder_ph(
+    generate_structure,
+    fixture_localhost,
+    generate_remote_data,
+    monkeypatch,
+):
+    """Invalid phonon parents should fail before the workflow reaches EPW."""
+    restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+    reports = []
+
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.validate_parent_ph_inputs",
+        lambda _folder, _structure: (_ for _ in ()).throw(
+            ValueError("structure mismatch")
+        ),
+    )
+
+    process = SimpleNamespace(
+        inputs=AttributeDict(
+            {
+                "structure": generate_structure(),
+                "parent_folder_ph": restart_parent,
+                "qpoints_distance": orm.Float(0.3),
+                "kpoints_distance_scf": orm.Float(0.15),
+                "kpoints_factor_nscf": orm.Int(2),
+                "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+            }
+        ),
+        ctx=AttributeDict(),
+        report=reports.append,
+        exit_codes=EpwPrepWorkChain.exit_codes,
+    )
+
+    result = EpwPrepWorkChain.generate_reciprocal_points(process)
+
+    assert result == EpwPrepWorkChain.exit_codes.ERROR_INVALID_PARENT_FOLDER_PH
+    assert reports == ["structure mismatch"]
 
 
 def test_get_builder_from_protocol_builds_epw_bands_by_default(
@@ -320,10 +377,14 @@ def test_get_builder_from_protocol_builds_epw_bands_by_default(
         "aiida_epw.workflows.prep.EpwBaseWorkChain.get_builder_from_protocol",
         fake_epw_builder,
     )
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.validate_parent_ph_inputs",
+        lambda _folder, _structure: orm.KpointsData(),
+    )
 
     parent_folder_ph = generate_remote_data(fixture_localhost, "/remote/ph")
     builder = EpwPrepWorkChain.get_builder_from_protocol(
-        codes={"ph": fixture_code("quantumespresso.ph"), "epw": epw_code},
+        codes={"epw": epw_code},
         structure=generate_structure(),
         parent_folder_ph=parent_folder_ph,
     )
@@ -334,6 +395,7 @@ def test_get_builder_from_protocol_builds_epw_bands_by_default(
     assert builder.kpoints_factor_nscf.value == 2
     assert builder.parent_folder_ph == parent_folder_ph
     assert "epw_bands" in builder
+    assert "ph_base" not in builder
     assert "projwfc" not in builder.w90_bands
     assert "open_grid" not in builder.w90_bands
     assert "structure" not in builder.w90_bands

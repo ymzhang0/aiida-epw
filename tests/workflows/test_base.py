@@ -280,8 +280,8 @@ def test_validate_kpoints_uses_parent_folders(
     qfpoints = generate_kpoints_mesh([3, 3, 3])
 
     monkeypatch.setattr(
-        "aiida_epw.workflows.base.get_parent_folder_calculation",
-        lambda _: SimpleNamespace(inputs=SimpleNamespace(qpoints=qpoints)),
+        "aiida_epw.workflows.base.validate_parent_ph_inputs",
+        lambda _folder, _structure: qpoints,
     )
     monkeypatch.setattr(
         "aiida_epw.workflows.base.create_kpoints_from_distance",
@@ -326,12 +326,8 @@ def test_validate_kpoints_uses_parent_nscf_folder(
     qfpoints = generate_kpoints_mesh([3, 3, 3])
 
     monkeypatch.setattr(
-        "aiida_epw.workflows.base.get_parent_folder_calculation",
-        lambda folder: (
-            SimpleNamespace(inputs=SimpleNamespace(qpoints=qpoints))
-            if folder.uuid == parent_folder_ph.uuid
-            else folder.creator
-        ),
+        "aiida_epw.workflows.base.validate_parent_ph_inputs",
+        lambda _folder, _structure: qpoints,
     )
     monkeypatch.setattr(
         "aiida_epw.workflows.base.create_kpoints_from_distance",

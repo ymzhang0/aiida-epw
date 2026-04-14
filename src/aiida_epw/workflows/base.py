@@ -20,6 +20,8 @@ from aiida_epw.tools.kpoints import check_kpoints_qpoints_compatibility
 from aiida_epw.tools.workchain import (
     find_related_calculation,
     get_parent_folder_calculation,
+    get_parent_ph_qpoints,
+    validate_parent_ph_inputs,
 )
 
 EpwCalculation = CalculationFactory("epw.epw")
@@ -344,9 +346,12 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             if "qpoints" in self.inputs:
                 qpoints = self.inputs.qpoints
             elif "parent_folder_ph" in self.inputs:
-                qpoints = get_parent_folder_calculation(
-                    self.inputs.parent_folder_ph
-                ).inputs.qpoints
+                if "structure" in self.inputs:
+                    qpoints = validate_parent_ph_inputs(
+                        self.inputs.parent_folder_ph, self.inputs.structure
+                    )
+                else:
+                    qpoints = get_parent_ph_qpoints(self.inputs.parent_folder_ph)
             else:
                 self.report(
                     "Could not determine the coarse q-points from the inputs or the parent folder of the ph calculation."

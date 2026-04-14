@@ -480,6 +480,19 @@ def test_validate_inputs_accepts_direct_epw_wannierize_with_epw_bands():
     assert message is None
 
 
+def test_validate_inputs_accepts_parent_folder_ph_without_ph_base():
+    """A reusable phonon parent folder should make the phonon namespace optional."""
+    message = prep_module.validate_inputs(
+        {
+            "w90_bands": {},
+            "parent_folder_ph": object(),
+            "epw_base": {},
+        }
+    )
+
+    assert message is None
+
+
 def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
     fixture_localhost,
     generate_remote_data,
@@ -497,11 +510,8 @@ def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
     )
     monkeypatch.setattr(
         prep_module,
-        "get_parent_folder_calculation",
-        lambda _folder: SimpleNamespace(
-            process_label="PhCalculation",
-            inputs=SimpleNamespace(qpoints=restart_qpoints),
-        ),
+        "validate_parent_ph_inputs",
+        lambda _folder, _structure: restart_qpoints,
     )
 
     result = prep_module.generate_reciprocal_points._callable(
@@ -722,7 +732,6 @@ def test_build_task_inputs_uses_direct_pw_namespaces_for_epw_wannierize(
     """Direct EPW Wannierization should build standalone SCF/NSCF namespaces instead of `w90_bands`."""
     codes = {
         "pw": fixture_code("quantumespresso.pw"),
-        "ph": fixture_code("quantumespresso.ph"),
         "epw": fixture_code("epw.epw"),
     }
     structure = generate_structure()
@@ -921,19 +930,14 @@ def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchai
         },
     )
     monkeypatch.setattr(prep_module.PwBaseWorkChain, "get_builder_from_protocol", _fake_pw_builder)
-    monkeypatch.setattr(prep_module.PhBaseWorkChain, "get_builder_from_protocol", _fake_ph_builder)
     monkeypatch.setattr(prep_module.EpwBaseWorkChain, "get_builder_from_protocol", _fake_epw_builder)
     monkeypatch.setattr(
         prep_module,
-        "get_parent_folder_calculation",
-        lambda _folder: SimpleNamespace(
-            process_label="PhCalculation",
-            inputs=SimpleNamespace(qpoints=restart_qpoints),
-        ),
+        "validate_parent_ph_inputs",
+        lambda _folder, _structure: restart_qpoints,
     )
     monkeypatch.setattr(prep_module, "_apply_socket_overrides", lambda *args, **kwargs: None)
     monkeypatch.setattr(prep_module, "PwBaseTask", task(FakePwBaseRuntimeWorkChain))
-    monkeypatch.setattr(prep_module, "PhBaseTask", task(FakePhBaseRuntimeWorkChain))
     monkeypatch.setattr(prep_module, "EpwBaseTask", task(FakeEpwBaseRuntimeWorkChain))
 
     wg = prep_module.prep(
@@ -951,20 +955,18 @@ def test_prep_workgraph_runs_direct_epw_wannierize_with_fake_high_level_workchai
 
     scf_node = wg.tasks["scf"].process
     nscf_node = wg.tasks["nscf"].process
-    phonon_node = wg.tasks["ph_base"].process
     epw_node = wg.tasks["epw_base"].process
     epw_bands_node = wg.tasks["epw_bands"].process
     reciprocal_points_node = wg.tasks["generate_reciprocal_points"].process
 
     assert scf_node is not None
     assert nscf_node is not None
-    assert phonon_node is not None
     assert epw_node is not None
     assert epw_bands_node is not None
     assert reciprocal_points_node is not None
 
-    assert phonon_node.inputs.ph.parent_folder.uuid == parent_folder_ph.uuid
-    assert phonon_node.inputs.ph.qpoints.uuid == restart_qpoints.uuid
+    assert "ph_base" not in wg.tasks
+    assert epw_node.inputs.parent_folder_ph.uuid == parent_folder_ph.uuid
     assert epw_node.inputs.parent_folder_nscf.uuid == nscf_node.outputs.remote_folder.uuid
     assert "parent_folder_chk" not in epw_node.inputs
     assert reciprocal_points_node.outputs.qpoints.uuid == restart_qpoints.uuid
