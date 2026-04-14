@@ -249,8 +249,8 @@ def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
         fake_create_kpoints_from_distance,
     )
     monkeypatch.setattr(
-        "aiida_epw.workflows.prep.validate_parent_ph_inputs",
-        lambda _folder, _structure: restart_qpoints,
+        "aiida_epw.workflows.prep.get_parent_ph_qpoints",
+        lambda _folder: restart_qpoints,
     )
 
     process = SimpleNamespace(
@@ -273,43 +273,121 @@ def test_generate_reciprocal_points_prefers_restart_qpoints_from_parent_ph(
     assert process.ctx.kpoints_nscf.get_kpoints_mesh()[0] == [10, 10, 10]
 
 
-def test_generate_reciprocal_points_rejects_invalid_parent_folder_ph(
+def test_validate_parent_folder_ph_rejects_invalid_parent_folder_ph(
     generate_structure,
     fixture_localhost,
     generate_remote_data,
     monkeypatch,
 ):
-    """Invalid phonon parents should fail before the workflow reaches EPW."""
+    """Invalid phonon parents should fail in the dedicated validation step."""
     restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
     reports = []
+    structure = generate_structure()
+    kpoints_scf = orm.KpointsData()
+    kpoints_scf.set_kpoints_mesh([4, 4, 4])
+    parameters = orm.Dict({"SYSTEM": {"ecutwfc": 50}})
+    pseudo = orm.Dict({"name": "Si.upf"})
 
     monkeypatch.setattr(
         "aiida_epw.workflows.prep.validate_parent_ph_inputs",
-        lambda _folder, _structure: (_ for _ in ()).throw(
-            ValueError("structure mismatch")
-        ),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("structure mismatch")),
     )
 
     process = SimpleNamespace(
         inputs=AttributeDict(
             {
-                "structure": generate_structure(),
+                "structure": structure,
                 "parent_folder_ph": restart_parent,
-                "qpoints_distance": orm.Float(0.3),
-                "kpoints_distance_scf": orm.Float(0.15),
-                "kpoints_factor_nscf": orm.Int(2),
-                "epw_base": {"parameters": {"INPUTEPW": {"wannierize": True}}},
+                "w90_bands": AttributeDict(
+                    {
+                        "scf": AttributeDict(
+                            {
+                                "pw": AttributeDict(
+                                    {
+                                        "parameters": parameters,
+                                        "pseudos": {"Si": pseudo},
+                                    }
+                                )
+                            }
+                        )
+                    }
+                ),
             }
         ),
-        ctx=AttributeDict(),
+        ctx=AttributeDict({"kpoints_scf": kpoints_scf}),
         report=reports.append,
         exit_codes=EpwPrepWorkChain.exit_codes,
     )
 
-    result = EpwPrepWorkChain.generate_reciprocal_points(process)
+    result = EpwPrepWorkChain.validate_parent_folder_ph(process)
 
     assert result == EpwPrepWorkChain.exit_codes.ERROR_INVALID_PARENT_FOLDER_PH
     assert reports == ["structure mismatch"]
+
+
+def test_validate_parent_folder_ph_uses_current_scf_inputs(
+    generate_structure,
+    fixture_localhost,
+    generate_remote_data,
+    monkeypatch,
+):
+    """The dedicated validation step should compare against the current SCF inputs."""
+    restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+    structure = generate_structure()
+    kpoints_scf = orm.KpointsData()
+    kpoints_scf.set_kpoints_mesh([4, 4, 4])
+    qpoints = orm.KpointsData()
+    qpoints.set_kpoints_mesh([2, 2, 2])
+    parameters = orm.Dict({"SYSTEM": {"ecutwfc": 50}})
+    pseudo = orm.Dict({"name": "Si.upf"})
+    captured = {}
+
+    def fake_validate(parent_folder_ph, structure, **kwargs):
+        captured["parent_folder_ph"] = parent_folder_ph
+        captured["structure"] = structure
+        captured.update(kwargs)
+        return qpoints
+
+    monkeypatch.setattr(
+        "aiida_epw.workflows.prep.validate_parent_ph_inputs",
+        fake_validate,
+    )
+
+    process = SimpleNamespace(
+        inputs=AttributeDict(
+            {
+                "structure": structure,
+                "parent_folder_ph": restart_parent,
+                "w90_bands": AttributeDict(
+                    {
+                        "scf": AttributeDict(
+                            {
+                                "pw": AttributeDict(
+                                    {
+                                        "parameters": parameters,
+                                        "pseudos": {"Si": pseudo},
+                                    }
+                                )
+                            }
+                        )
+                    }
+                ),
+            }
+        ),
+        ctx=AttributeDict({"kpoints_scf": kpoints_scf}),
+        report=lambda *_args, **_kwargs: None,
+        exit_codes=EpwPrepWorkChain.exit_codes,
+    )
+
+    result = EpwPrepWorkChain.validate_parent_folder_ph(process)
+
+    assert result is None
+    assert process.ctx.qpoints == qpoints
+    assert captured["parent_folder_ph"] == restart_parent
+    assert captured["structure"] == structure
+    assert captured["scf_kpoints"] == kpoints_scf
+    assert captured["scf_parameters"] == parameters
+    assert captured["scf_pseudos"] == {"Si": pseudo}
 
 
 def test_get_builder_from_protocol_builds_epw_bands_by_default(
@@ -359,7 +437,7 @@ def test_get_builder_from_protocol_builds_epw_bands_by_default(
     monkeypatch.setattr(
         EpwPrepWorkChain,
         "get_builder",
-        classmethod(lambda cls: AttributeDict()),
+        classmethod(lambda cls: AttributeDict({"ph_base": AttributeDict()})),
     )
     monkeypatch.setattr(
         "aiida_epw.workflows.prep.Wannier90BandsWorkChain.get_builder_from_protocol",
@@ -641,17 +719,14 @@ def test_run_epw_skips_chk_parent_for_direct_wannierize(
     assert captured["inputs"]["parent_folder_nscf"] == process.ctx.parent_folder_nscf
 
 
-def test_run_ph_prefers_restart_qpoints_from_parent_folder_ph(
+def test_run_ph_uses_current_scf_parent_and_generated_qpoints(
     fixture_localhost,
     generate_remote_data,
-    monkeypatch,
 ):
-    """Restarting from an existing PhCalculation should reuse its q-points."""
-    restart_qpoints = orm.KpointsData()
-    restart_qpoints.set_kpoints_mesh([3, 3, 3])
+    """The phonon branch should always consume the current SCF parent and q-points."""
     generated_qpoints = orm.KpointsData()
     generated_qpoints.set_kpoints_mesh([5, 5, 5])
-    restart_parent = generate_remote_data(fixture_localhost, "/remote/ph-restart")
+    scf_parent = generate_remote_data(fixture_localhost, "/remote/scf")
 
     captured = {}
 
@@ -659,22 +734,11 @@ def test_run_ph_prefers_restart_qpoints_from_parent_folder_ph(
         captured["inputs"] = inputs
         return SimpleNamespace(pk=654)
 
-    monkeypatch.setattr(
-        "aiida_epw.workflows.prep.get_parent_folder_calculation",
-        lambda _folder: SimpleNamespace(
-            process_label="PhCalculation",
-            inputs=SimpleNamespace(qpoints=restart_qpoints),
-        ),
-    )
-
     process = SimpleNamespace(
-        inputs=AttributeDict({"parent_folder_ph": restart_parent}),
         ctx=AttributeDict(
             {
                 "qpoints": generated_qpoints,
-                "parent_folder_scf": generate_remote_data(
-                    fixture_localhost, "/remote/scf"
-                ),
+                "parent_folder_scf": scf_parent,
             }
         ),
         exposed_inputs=lambda *_args, **_kwargs: AttributeDict(
@@ -689,8 +753,7 @@ def test_run_ph_prefers_restart_qpoints_from_parent_folder_ph(
 
     EpwPrepWorkChain.run_ph(process)
 
-    assert captured["inputs"]["ph"]["parent_folder"] == restart_parent
-    assert captured["inputs"]["ph"]["qpoints"] == restart_qpoints
+    assert captured["inputs"]["ph"]["parent_folder"] == scf_parent
     assert captured["inputs"]["qpoints"] == generated_qpoints
 
 

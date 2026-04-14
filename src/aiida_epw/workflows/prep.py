@@ -27,7 +27,7 @@ from aiida_wannier90_workflows.workflows.bands import (
 
 from aiida_epw.tools.workchain import (
     format_subprocess_failure,
-    get_parent_folder_calculation,
+    get_parent_ph_qpoints,
     get_target_basepath,
     validate_parent_ph_inputs,
 )
@@ -83,6 +83,15 @@ def _validate_parent_folder_ph(parent_folder_ph, structure) -> None:
         return
 
     validate_parent_ph_inputs(parent_folder_ph, structure)
+
+
+def _get_current_scf_pw_inputs(inputs):
+    """Return the SCF ``pw`` namespace used by the current prep configuration."""
+    if should_epw_wannierize(inputs):
+        return inputs.scf.pw
+    if "w90_bands" in inputs:
+        return inputs.w90_bands.scf.pw
+    raise ValueError("Could not determine the current SCF inputs for validation.")
 
 
 def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-statements
@@ -268,6 +277,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         spec.outline(
             cls.generate_reciprocal_points,
+            cls.validate_parent_folder_ph,
             if_(cls.should_run_scf)(
                 cls.run_scf,
                 cls.inspect_scf,
@@ -284,7 +294,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 cls.run_ph,
                 cls.inspect_ph,
             ),
-            cls.setup_parent_folder_ph,
             cls.run_epw,
             cls.inspect_epw,
             if_(cls.should_run_epw_bands)(
@@ -455,6 +464,8 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ph_base.pop("qpoints_distance")
 
             builder.ph_base = ph_base
+        else:
+            builder.pop("ph_base", None)
 
         # TODO:
         # Here I have a loop for the epw builders for furture extension of another epw bands interpolation
@@ -492,9 +503,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         """Generate the qpoints and kpoints meshes for the `ph.x` and `pw.x` calculations."""
         if "parent_folder_ph" in self.inputs:
             try:
-                qpoints = validate_parent_ph_inputs(
-                    self.inputs.parent_folder_ph, self.inputs.structure
-                )
+                qpoints = get_parent_ph_qpoints(self.inputs.parent_folder_ph)
             except ValueError as exception:
                 self.report(str(exception))
                 return self.exit_codes.ERROR_INVALID_PARENT_FOLDER_PH
@@ -547,6 +556,29 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         
         self.ctx.kpoints_scf = kpoints_scf
         self.ctx.kpoints_nscf = kpoints_nscf
+
+    def validate_parent_folder_ph(self):
+        """Validate a reused phonon parent folder against the current prep inputs."""
+        if "parent_folder_ph" not in self.inputs:
+            return None
+
+        try:
+            scf_pw_inputs = _get_current_scf_pw_inputs(self.inputs)
+            qpoints = validate_parent_ph_inputs(
+                self.inputs.parent_folder_ph,
+                self.inputs.structure,
+                scf_kpoints=self.ctx.kpoints_scf,
+                scf_parameters=scf_pw_inputs.parameters,
+                scf_pseudos=getattr(scf_pw_inputs, "pseudos", None),
+            )
+        except ValueError as exception:
+            self.report(str(exception))
+            return self.exit_codes.ERROR_INVALID_PARENT_FOLDER_PH
+
+        self.ctx.qpoints = qpoints
+        self.ctx.parent_folder_ph = self.inputs.parent_folder_ph
+
+        return None
 
     def should_run_wannier90(self):
         """Check if the wannier90 workflow should be run."""
@@ -671,21 +703,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         inputs = AttributeDict(
             self.exposed_inputs(PhBaseWorkChain, namespace="ph_base")
         )
-
-        parent_folder_ph_calculation = None
-        if (
-            "parent_folder_ph" in self.inputs
-            and (
-                parent_folder_ph_calculation := get_parent_folder_calculation(
-                    self.inputs.parent_folder_ph
-                )
-            ).process_label
-            == "PhCalculation"
-        ):
-            inputs.ph.parent_folder = self.inputs.parent_folder_ph
-            inputs.ph.qpoints = parent_folder_ph_calculation.inputs.qpoints
-        else:
-            inputs.ph.parent_folder = self.ctx.parent_folder_scf
+        inputs.ph.parent_folder = self.ctx.parent_folder_scf
 
         inputs.qpoints = self.ctx.qpoints
 
@@ -704,11 +722,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             return self.exit_codes.ERROR_SUB_PROCESS_FAILED_PHONON
 
         self.ctx.parent_folder_ph = workchain.outputs.remote_folder
-
-    def setup_parent_folder_ph(self):
-        """Use the provided phonon parent folder when the phonon branch is skipped."""
-        if "parent_folder_ph" in self.inputs:
-            self.ctx.parent_folder_ph = self.inputs.parent_folder_ph
 
     def run_epw(self):
         """Run the `EpwBaseWorkChain`."""

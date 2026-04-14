@@ -106,5 +106,61 @@ def test_validate_parent_ph_inputs_checks_parent_pw_structure(generate_structure
     mismatched_structure.append_atom(position=(0.0, 0.0, 0.0), symbols="Si")
     mismatched_structure.append_atom(position=(3.0, 3.0, 3.0), symbols="Si")
 
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(ValueError, match="mismatched fields: structure"):
         validate_parent_ph_inputs(ph_parent_folder, mismatched_structure)
+
+
+def test_validate_parent_ph_inputs_checks_parent_pw_runtime_details(generate_structure):
+    """The phonon validation helper should compare SCF kpoints, parameters, and pseudos."""
+    from aiida import orm
+
+    qpoints = orm.KpointsData()
+    qpoints.set_kpoints_mesh([2, 2, 2])
+    scf_kpoints = orm.KpointsData()
+    scf_kpoints.set_kpoints_mesh([4, 4, 4])
+    parameters = orm.Dict({"SYSTEM": {"ecutwfc": 50}})
+    pseudo = SimpleNamespace(
+        base=SimpleNamespace(repository=SimpleNamespace(hash=lambda: "pseudo-hash"))
+    )
+    ph_parent_folder = SimpleNamespace(
+        creator=SimpleNamespace(
+            process_label="PhCalculation",
+            inputs=SimpleNamespace(
+                qpoints=qpoints,
+                parent_folder=SimpleNamespace(
+                    creator=SimpleNamespace(
+                        process_label="PwCalculation",
+                        inputs=SimpleNamespace(
+                            structure=generate_structure(),
+                            kpoints=scf_kpoints,
+                            parameters=parameters,
+                            pseudos={"Si": pseudo},
+                        ),
+                    )
+                ),
+            ),
+        )
+    )
+
+    assert (
+        validate_parent_ph_inputs(
+            ph_parent_folder,
+            generate_structure(),
+            scf_kpoints=scf_kpoints,
+            scf_parameters=parameters,
+            scf_pseudos={"Si": pseudo},
+        )
+        is qpoints
+    )
+
+    wrong_kpoints = orm.KpointsData()
+    wrong_kpoints.set_kpoints_mesh([6, 6, 6])
+
+    with pytest.raises(ValueError, match="SCF kpoints"):
+        validate_parent_ph_inputs(
+            ph_parent_folder,
+            generate_structure(),
+            scf_kpoints=wrong_kpoints,
+            scf_parameters=parameters,
+            scf_pseudos={"Si": pseudo},
+        )

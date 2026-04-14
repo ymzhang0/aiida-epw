@@ -17,6 +17,64 @@ def _normalize_structure_component(value):
     return value
 
 
+def _as_plain_mapping(value):
+    """Return an AiiDA or Python mapping as a plain dictionary."""
+    if value is None:
+        return {}
+    if hasattr(value, "get_dict"):
+        return value.get_dict()
+    if isinstance(value, dict):
+        return value
+    return dict(value)
+
+
+def _kpoints_signature(kpoints):
+    """Return a normalized signature for a ``KpointsData`` node."""
+    try:
+        mesh, offset = kpoints.get_kpoints_mesh()
+    except AttributeError:
+        points, weights = kpoints.get_kpoints(also_weights=True)
+        return {
+            "mode": "explicit",
+            "points": _normalize_structure_component(points.tolist()),
+            "weights": _normalize_structure_component(weights.tolist()),
+            "labels": _normalize_structure_component(getattr(kpoints, "labels", None)),
+        }
+
+    return {
+        "mode": "mesh",
+        "mesh": tuple(int(value) for value in mesh),
+        "offset": _normalize_structure_component(offset),
+    }
+
+
+def kpoints_match(left, right) -> bool:
+    """Return whether two ``KpointsData`` nodes describe the same grid."""
+    return _kpoints_signature(left) == _kpoints_signature(right)
+
+
+def _pseudo_signature(pseudo):
+    """Return a stable pseudo signature suitable for compatibility checks."""
+    try:
+        repository_hash = pseudo.base.repository.hash()
+    except Exception:  # pragma: no cover - repository access should usually work
+        repository_hash = None
+
+    filename = None
+    if hasattr(pseudo, "filename"):
+        filename = pseudo.filename
+
+    return repository_hash or filename or getattr(pseudo, "uuid", None)
+
+
+def _pseudos_signature(pseudos):
+    """Return a normalized pseudo mapping signature."""
+    return {
+        key: _pseudo_signature(value)
+        for key, value in sorted(_as_plain_mapping(pseudos).items())
+    }
+
+
 def structures_match(left, right) -> bool:
     """Return whether two ``StructureData`` nodes describe the same structure."""
     left_signature = {
@@ -72,8 +130,15 @@ def get_parent_ph_qpoints(parent_folder_ph):
     return qpoints
 
 
-def validate_parent_ph_inputs(parent_folder_ph, structure):
-    """Validate a phonon parent folder against the target EPW structure."""
+def validate_parent_ph_inputs(
+    parent_folder_ph,
+    structure,
+    *,
+    scf_kpoints=None,
+    scf_parameters=None,
+    scf_pseudos=None,
+):
+    """Validate a phonon parent folder against the target EPW inputs."""
     qpoints = get_parent_ph_qpoints(parent_folder_ph)
     ph_calculation = get_parent_ph_calculation(parent_folder_ph)
 
@@ -85,6 +150,13 @@ def validate_parent_ph_inputs(parent_folder_ph, structure):
         )
 
     parent_pw_calculation = get_parent_folder_calculation(parent_pw_folder)
+    if parent_pw_calculation.process_label != "PwCalculation":
+        raise ValueError(
+            "`parent_folder_ph` must trace back to a `PwCalculation` through "
+            f"`PhCalculation.inputs.parent_folder`, got "
+            f"`{parent_pw_calculation.process_label}`."
+        )
+
     parent_structure = getattr(parent_pw_calculation.inputs, "structure", None)
     if parent_structure is None:
         raise ValueError(
@@ -92,10 +164,42 @@ def validate_parent_ph_inputs(parent_folder_ph, structure):
             "`structure`."
         )
 
+    mismatches = []
+
     if not structures_match(parent_structure, structure):
+        mismatches.append("structure")
+
+    if scf_kpoints is not None:
+        parent_kpoints = getattr(parent_pw_calculation.inputs, "kpoints", None)
+        if parent_kpoints is None:
+            mismatches.append("missing SCF kpoints on the parent PwCalculation")
+        elif not kpoints_match(parent_kpoints, scf_kpoints):
+            mismatches.append(
+                "SCF kpoints "
+                f"(parent={_kpoints_signature(parent_kpoints)}, "
+                f"current={_kpoints_signature(scf_kpoints)})"
+            )
+
+    if scf_parameters is not None:
+        parent_parameters = getattr(parent_pw_calculation.inputs, "parameters", None)
+        if parent_parameters is None:
+            mismatches.append("missing SCF pw.parameters on the parent PwCalculation")
+        elif _normalize_structure_component(parent_parameters.get_dict()) != (
+            _normalize_structure_component(_as_plain_mapping(scf_parameters))
+        ):
+            mismatches.append("SCF pw.parameters")
+
+    if scf_pseudos is not None:
+        parent_pseudos = getattr(parent_pw_calculation.inputs, "pseudos", None)
+        if parent_pseudos is None:
+            mismatches.append("missing SCF pseudos on the parent PwCalculation")
+        elif _pseudos_signature(parent_pseudos) != _pseudos_signature(scf_pseudos):
+            mismatches.append("SCF pseudos")
+
+    if mismatches:
         raise ValueError(
-            "The structure used to generate `parent_folder_ph` does not match the "
-            "current `EpwPrepWorkChain.structure`."
+            "`parent_folder_ph` is incompatible with the current prep inputs; "
+            f"mismatched fields: {', '.join(mismatches)}."
         )
 
     return qpoints
