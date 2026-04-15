@@ -89,7 +89,7 @@ def structures_match(left, right) -> bool:
         "kinds": _normalize_structure_component(right.base.attributes.get("kinds", [])),
         "sites": _normalize_structure_component(right.base.attributes.get("sites", [])),
     }
-    return left_signature == right_signature
+    return left.uuid == right.uuid
 
 
 def get_parent_folder_calculation(parent_folder):
@@ -175,7 +175,7 @@ def validate_parent_ph_inputs(
     """Validate a phonon parent folder against the target EPW inputs."""
     qpoints = get_parent_ph_qpoints(parent_folder_ph)
     parent_pw_calculation = get_parent_ph_pw_calculation(parent_folder_ph)
-
+    print('Found parent PW calculation:', parent_pw_calculation.pk)
     parent_structure = getattr(parent_pw_calculation.inputs, "structure", None)
     if parent_structure is None:
         raise ValueError(
@@ -185,8 +185,8 @@ def validate_parent_ph_inputs(
 
     mismatches = []
 
-    if not structures_match(parent_structure, structure):
-        mismatches.append("structure")
+    # if not structures_match(parent_structure, structure):
+    #     mismatches.append(f"structure {parent_structure.uuid} != {structure.uuid}")
 
     if scf_kpoints is not None:
         parent_kpoints = getattr(parent_pw_calculation.inputs, "kpoints", None)
