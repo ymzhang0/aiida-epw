@@ -25,6 +25,8 @@ from aiida_epw.data import (
     ProjectedSpectrumData,
 )
 
+from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
+
 def _lowercase_dict(dictionary, dict_name):
     return _case_transform_dict(dictionary, dict_name, '_lowercase_dict', str.lower)
 
@@ -250,6 +252,11 @@ class EpwCalculation(NamelistsCalculation):
             314,
             "ERROR_PARAMETERS_NOT_VALID",
             message="The parameters are not valid.",
+        )
+        spec.exit_code(
+            320,
+            "ERROR_CANNOT_BRACKET_EF",
+            message="Internal error, cannot bracket Ef.",
         )
 
     @classmethod
@@ -582,20 +589,6 @@ class EpwCalculation(NamelistsCalculation):
 
         return retrieve_list
 
-    def get_parent_ph_qpoint_count(self, settings):
-        """Return the number of irreducible q-points that need to be staged from `ph.x`."""
-        if "NUMBER_OF_QPOINTS" in settings:
-            return settings.pop("NUMBER_OF_QPOINTS")
-
-        qibz_ar = []
-        for key, value in sorted(
-            self.inputs.parent_folder_ph.creator.outputs.output_parameters.get_dict().items()
-        ):
-            if key.startswith("dynamical_matrix_"):
-                qibz_ar.append(value["q_point"])
-
-        return len(qibz_ar)
-
     @staticmethod
     def get_parent_folder_path(parent_folder):
         """Return the filesystem path for a remote or stashed parent folder."""
@@ -656,7 +649,10 @@ class EpwCalculation(NamelistsCalculation):
         parent_folder_ph = self.inputs.parent_folder_ph
         folder.get_subfolder(self._FOLDER_SAVE, create=True)
 
-        nqpt = self.get_parent_ph_qpoint_count(settings)
+        if "NUMBER_OF_QPOINTS" in settings:
+            nqpt = settings.pop("NUMBER_OF_QPOINTS")
+        else:
+            nqpt = get_parent_ph_qpoint_ibz_count(parent_folder_ph)
 
         prefix = self._PREFIX
         outdir = PhCalculation._OUTPUT_SUBFOLDER

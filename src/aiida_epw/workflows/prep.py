@@ -227,6 +227,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ),
             namespace_options={
                 "required": False,
+                "populate_defaults": False,
                 "help": "Inputs for the `PhBaseWorkChain` that does the `ph.x` calculation."
             },
         )
@@ -733,6 +734,18 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         # The update of epw parameters according to the wannier parameters
         # and the file copying and conversion
         # is now handled by the EpwBaseWorkChain.
+
+        parameters = inputs.parameters.get_dict()
+
+        if 'workchain_scf' in self.ctx:
+            parameters["INPUTEPW"]["efermi_read"] = True
+            parameters["INPUTEPW"]["fermi_energy"] = self.ctx.workchain_scf.outputs.output_parameters.get('fermi_energy')
+        elif 'workchain_w90_bands' in self.ctx:
+            parameters["INPUTEPW"]["efermi_read"] = True
+            parameters["INPUTEPW"]["fermi_energy"] = self.ctx.workchain_w90_bands.outputs.scf.output_parameters.get('fermi_energy')
+        else:
+            self.report("No scf or w90_bands subprocess found in the context. The fermi energy will be calculated by epw.x.")
+        inputs.parameters = orm.Dict(dict=parameters)
 
         inputs.metadata.call_link_label = "epw_base"
 

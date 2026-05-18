@@ -531,6 +531,50 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report_error_handled(calculation, action)
         return ProcessHandlerReport(True)
 
+    @process_handler(
+        priority=620,
+        exit_codes=[EpwCalculation.exit_codes.ERROR_CANNOT_BRACKET_EF],
+    )
+    def handle_cannot_bracket_ef(self, calculation):
+        """Handle the `cannot bracket Ef` error by explicitly setting the Fermi energy.
+        
+        This handler retrieves the Fermi energy from the parent NSCF calculation
+        and injects it into the INPUTEPW parameters for the restart.
+        """
+        action = "Cannot bracket Fermi energy. Setting `fermi_energy` manually from parent calculation and restarting..."
+        self.report_error_handled(calculation, action)
+
+        # 1. 提取当前的输入参数
+        parameters = self.ctx.inputs.parameters.get_dict()
+
+        # 2. 尝试从父代计算（NSCF）中提取 Fermi Energy
+        fermi_energy = None
+        if "parent_folder_nscf" in self.inputs:
+            try:
+                # 追溯到生成 nscf remote folder 的原计算节点
+                nscf_calc = get_parent_folder_calculation(self.inputs.parent_folder_nscf)
+                # 从 NSCF 的输出参数字典中读取 fermi_energy (单位是 eV)
+                fermi_energy = nscf_calc.outputs.output_parameters.dict.fermi_energy
+            except (AttributeError, KeyError):
+                self.report("Could not extract `fermi_energy` from parent NSCF outputs. Aborting...")
+                return ProcessHandlerReport(True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE)
+        else:
+            self.report("No `parent_folder_nscf` found in inputs to extract `fermi_energy`. Aborting...")
+            return ProcessHandlerReport(True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE)
+
+        if fermi_energy is None:
+            self.report("The extracted `fermi_energy` is None. Aborting...")
+            return ProcessHandlerReport(True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE)
+
+        self.report(f"Extracted Fermi energy: {fermi_energy} eV. Updating parameters...")
+
+        # 3. 将 fermi_energy 注入到 EPW 参数中
+        parameters["INPUTEPW"]["fermi_energy"] = fermi_energy
+        self.ctx.inputs.parameters = orm.Dict(parameters)
+
+        # 4. 指示 WorkChain 使用更新后的参数自动重启
+        return ProcessHandlerReport(True)
+
     @process_handler(priority=500)
     def handle_unrecoverable_failure(self, calculation):
         """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""

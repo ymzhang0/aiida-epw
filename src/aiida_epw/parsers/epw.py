@@ -35,6 +35,7 @@ class EpwParser(BaseParser):
 
     class_error_map = {
         "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
+        "internal error, cannot bracket Ef": "ERROR_CANNOT_BRACKET_EF",
     }
 
     @staticmethod

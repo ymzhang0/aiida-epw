@@ -1,5 +1,30 @@
 """Helpers for tracing workflow parent folders."""
 
+def _filter_essential_parameters(params):
+    """
+    Only keep essential physical parameters for strict comparison.
+    Ignores all other differences (e.g., max_seconds, tprnfor, etc.).
+    """
+    # 这里定义你认为必须绝对一致的参数（白名单）
+    essential_keys = {
+        'SYSTEM': ['smearing', 'degauss', 'ecutwfc', 'ecutrho'],
+        'ELECTRONS': ['conv_thr']
+    }
+    
+    filtered = {}
+    for namelist, keys in essential_keys.items():
+        if namelist in params:
+            # 如果原字典中存在这个 namelist，我们就提取关心的 key
+            extracted_namelist = {}
+            for key in keys:
+                if key in params[namelist]:
+                    extracted_namelist[key] = params[namelist][key]
+            
+            # 只有当提取出实质内容时，才放入最终的比对字典中
+            if extracted_namelist:
+                filtered[namelist] = extracted_namelist
+                
+    return filtered
 
 def _normalize_structure_component(value):
     """Normalize nested structure data for tolerant equality checks."""
@@ -94,32 +119,55 @@ def structures_match(left, right) -> bool:
 
 def get_parent_folder_calculation(parent_folder):
     """Return the calculation that produced a remote or stashed parent folder."""
-    creator = parent_folder.creator
-    if creator is None:
-        raise ValueError("The provided parent folder does not have a creator.")
+    current_node = parent_folder
 
-    if creator.process_label == "move_stash":
-        creator = creator.inputs.stash_data.creator
+    while True:
+        creator = current_node.creator
+        if creator is None:
+            raise ValueError(f"The provided node {current_node} does not have a creator.")
 
-    return creator
+        if creator.process_label == "move_stash":
+            current_node = creator.inputs.stash_data
+        else:
+            return creator
 
 
 def get_parent_ph_calculation(parent_folder_ph):
-    """Return the ``PhCalculation`` that produced a phonon parent folder."""
+    """Return the original ``PhCalculation`` that produced a phonon parent folder."""
     calculation = get_parent_folder_calculation(parent_folder_ph)
+    visited = set()
 
-    if calculation.process_label != "PhCalculation":
-        raise ValueError(
-            "`parent_folder_ph` must be created by a `PhCalculation` or its stashed "
-            f"remote folder, got `{calculation.process_label}`."
-        )
+    while True:
+        if calculation.process_label != "PhCalculation":
+            raise ValueError(
+                "`parent_folder_ph` must be created by a `PhCalculation` or its stashed "
+                f"remote folder, got `{calculation.process_label}`."
+            )
 
-    return calculation
+        identifier = getattr(calculation, "uuid", id(calculation))
+        if identifier in visited:
+            raise ValueError(
+                "Detected a cycle while tracing `parent_folder_ph` back to the original `PhCalculation`."
+            )
+        visited.add(identifier)
+
+        parent_folder = getattr(calculation.inputs, "parent_folder", None)
+        if parent_folder is None:
+            return calculation
+
+        parent_calculation = get_parent_folder_calculation(parent_folder)
+        if parent_calculation.process_label == "PwCalculation":
+            return calculation
+
+        if parent_calculation.process_label != "PhCalculation":
+            return calculation
+
+        calculation = parent_calculation
 
 
 def get_parent_ph_qpoints(parent_folder_ph):
     """Return the q-point mesh associated with a phonon parent folder."""
-    calculation = get_parent_ph_calculation(parent_folder_ph)
+    calculation = get_parent_folder_calculation(parent_folder_ph)
     qpoints = getattr(calculation.inputs, "qpoints", None)
 
     if qpoints is None:
@@ -129,39 +177,39 @@ def get_parent_ph_qpoints(parent_folder_ph):
 
     return qpoints
 
+def get_parent_ph_qpoint_ibz_count(parent_folder_ph):
+    """Return the number of irreducible q-points that need to be staged from `ph.x`."""
+
+    calculation = get_parent_folder_calculation(parent_folder_ph)
+    qibz_ar = []
+    for key, value in sorted(
+        calculation.outputs.output_parameters.get_dict().items()
+    ):
+        if key.startswith("dynamical_matrix_"):
+            qibz_ar.append(value["q_point"])
+
+    return len(qibz_ar)
 
 def get_parent_ph_pw_calculation(parent_folder_ph):
     """Return the original ``PwCalculation`` behind a phonon parent folder."""
     calculation = get_parent_ph_calculation(parent_folder_ph)
-    visited = set()
 
-    while True:
-        identifier = getattr(calculation, "uuid", id(calculation))
-        if identifier in visited:
-            raise ValueError(
-                "Detected a cycle while tracing `parent_folder_ph` back to the "
-                "original `PwCalculation`."
-            )
-        visited.add(identifier)
+    parent_folder = getattr(calculation.inputs, "parent_folder", None)
+    if parent_folder is None:
+        raise ValueError(
+            "The provided `parent_folder_ph` does not expose the parent folder "
+            "needed to validate its SCF provenance."
+        )
 
-        parent_folder = getattr(calculation.inputs, "parent_folder", None)
-        if parent_folder is None:
-            raise ValueError(
-                "The provided `parent_folder_ph` does not expose the parent folder "
-                "needed to validate its SCF provenance."
-            )
+    parent_calculation = get_parent_folder_calculation(parent_folder)
 
-        parent_calculation = get_parent_folder_calculation(parent_folder)
-        if parent_calculation.process_label == "PwCalculation":
-            return parent_calculation
+    if parent_calculation.process_label != "PwCalculation":
+        raise ValueError(
+            "`parent_folder_ph` must trace back through `PhCalculation` restarts "
+            f"to a `PwCalculation`, got `{parent_calculation.process_label}`."
+        )
 
-        if parent_calculation.process_label != "PhCalculation":
-            raise ValueError(
-                "`parent_folder_ph` must trace back through `PhCalculation` restarts "
-                f"to a `PwCalculation`, got `{parent_calculation.process_label}`."
-            )
-
-        calculation = parent_calculation
+    return parent_calculation
 
 
 def validate_parent_ph_inputs(
@@ -203,10 +251,20 @@ def validate_parent_ph_inputs(
         parent_parameters = getattr(parent_pw_calculation.inputs, "parameters", None)
         if parent_parameters is None:
             mismatches.append("missing SCF pw.parameters on the parent PwCalculation")
-        elif _normalize_structure_component(parent_parameters.get_dict()) != (
-            _normalize_structure_component(_as_plain_mapping(scf_parameters))
-        ):
-            mismatches.append("SCF pw.parameters")
+        else:
+            # 1. 提取父计算的白名单参数
+            parent_dict = _filter_essential_parameters(
+                _normalize_structure_component(parent_parameters.get_dict())
+            )
+            # 2. 提取当前准备传入的白名单参数
+            current_dict = _filter_essential_parameters(
+                _normalize_structure_component(_as_plain_mapping(scf_parameters))
+            )
+            
+            # 3. 只比对这些核心物理量
+            if parent_dict != current_dict:
+                # 为了后续排错方便，我们甚至可以把不一样的地方打印出来
+                mismatches.append(f"SCF pw.parameters mismatch in essential keys (Parent: {parent_dict} vs Current: {current_dict})")
 
     if scf_pseudos is not None:
         parent_pseudos = getattr(parent_pw_calculation.inputs, "pseudos", None)
