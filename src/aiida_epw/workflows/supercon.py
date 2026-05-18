@@ -1,22 +1,26 @@
 """Work chain for computing the critical temperature based on an `EpwWorkChain`."""
 
-from scipy.interpolate import interp1d
-
 from aiida import orm
-from aiida.common import AttributeDict
-from aiida.engine import WorkChain, while_, if_, append_
-
+from aiida.common import AttributeDict, exceptions
+from aiida.engine import (
+    WorkChain,
+    append_,
+    calcfunction,
+    if_,
+    while_,
+)
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
+from aiida_epw.tools.workchain import (
+    find_related_calculation,
+    format_subprocess_failure,
+)
 from aiida_epw.workflows.base import EpwBaseWorkChain
-
-from aiida.engine import calcfunction
 
 
 @calcfunction
 def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
     """Convert a ``RemoteStashFolderData`` into a ``RemoteData``."""
-
     if stash_data.get_attribute("stash_mode") != "copy":
         raise NotImplementedError("Only the `copy` stash mode is supported.")
 
@@ -31,88 +35,66 @@ def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
 
 @calcfunction
 def split_list(list_node: orm.List) -> dict:
+    """Split a list into a dictionary of floats."""
     return {f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())}
 
 
-@calcfunction
-def calculate_tc(max_eigenvalue: orm.XyData) -> orm.Float:
-    me_array = max_eigenvalue.get_array("max_eigenvalue")
-    try:
-        return orm.Float(float(interp1d(me_array[:, 1], me_array[:, 0])(1.0)))
-    except ValueError:
-        return orm.Float(40.0)
+def get_restart_parent_folder(node):
+    """Return the most robust restart folder exposed by an EPW process node."""
+    for output_label in ("epw_folder", "remote_stash", "remote_folder"):
+        try:
+            return getattr(node.outputs, output_label)
+        except AttributeError:
+            continue
+
+    raise ValueError(
+        f"Could not determine a restart folder from `{node.process_label}` outputs."
+    )
 
 
 class SuperConWorkChain(ProtocolMixin, WorkChain):
     """This workchain will run a series of `EpwBaseWorkChain`s in interpolation mode to converge
     the Allen-Dynes Tc according to the interpolation distance, if converged or forced by `always_run_final`,
     it will then run the final isotropic and anisotropic `EpwBaseWorkChain`s to compute the
-    critical temperature solving the isotropic and anisotropic Migdal-Eliashberg equations."""
+    critical temperature solving the isotropic and anisotropic Migdal-Eliashberg equations.
+    """
 
     @classmethod
     def define(cls, spec):
         """Define the work chain specification."""
         super().define(spec)
 
-        spec.input(
-            "structure",
-            valid_type=orm.StructureData,
-            help=(
-                "Structure used for this `SuperConWorkChain`. Should match the structure "
-                "used in the parent `EpwBaseWorkChain` or `EpwPrepWorkChain` that "
-                "produced `parent_folder_epw`."
-            )
-        )
+        spec.input("structure", valid_type=orm.StructureData)
         spec.input(
             "clean_workdir",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(False),
-            help=(
-                "Whether the remote working directories of all child calculations "
-                "will be cleaned up after the workchain terminates."
-            )
         )
         spec.input(
             "parent_folder_epw",
             valid_type=(orm.RemoteData, orm.RemoteStashFolderData),
-            help=(
-                "Remote folder with outputs from a previous `epw.x` run (typically from "
-                "`EpwBaseWorkChain` or `EpwPrepWorkChain`). Must contain files such as "
-                "`out/prefix.epmatwp`, `crystal.fmt`, `dmedata.fmt`, `vmedata.fmt`, etc., "
-                "needed by the next `EpwBaseWorkChain` calculations."
-            )
         )
-        spec.input(
-            "interpolation_distance",
-            valid_type=(orm.Float, orm.List),
-            help=(
-                "Distance (or list of distances) between q-points in the fine mesh used "
-                "to converge the Allen-Dynes critical temperature."
-            )
-        )
-        spec.input(
-            "convergence_threshold",
-            valid_type=orm.Float,
-            required=False,
-            help=(
-                "Stopping threshold for the Allen-Dynes critical temperature: the loop "
-                "stops when consecutive values differ by less than this amount."
-            )
-        )
+        spec.input("interpolation_distance", valid_type=(orm.Float, orm.List))
+        spec.input("kfpoints_factor", valid_type=orm.Int, default=lambda: orm.Int(1))
+        spec.input("convergence_threshold", valid_type=orm.Float, required=False)
         spec.input(
             "always_run_final",
             valid_type=orm.Bool,
             default=lambda: orm.Bool(False),
-            help=(
-                "Run the final isotropic and anisotropic `EpwBaseWorkChain`s even if the "
-                "Allen-Dynes temperature has not yet converged."
-            )
         )
+
+        # TODO: We can choose how we solve the Migdal-Eliashberg equations.
+        # We can have another input port `do_fbw` such that if we want to do a full-bandwidth calculation,
+        # we can set it to true.
+
+        # We can have another input port `do_ir` such that if we want to do solve it in the
+        # intermediate representation space, we can set it to true.
 
         spec.expose_inputs(
             EpwBaseWorkChain,
             namespace="epw_interp",
             exclude=(
+                "structure",
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
@@ -121,16 +103,14 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "kfpoints",
             ),
             namespace_options={
-                "help": (
-                    "Inputs forwarded to `EpwBaseWorkChain` for the `epw.x` runs used in "
-                    "the Allen-Dynes Tc convergence."
-                )
+                "help": "Inputs for the interpolation `EpwBaseWorkChain`s."
             },
         )
         spec.expose_inputs(
             EpwBaseWorkChain,
             namespace="epw_final_iso",
             exclude=(
+                "structure",
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
@@ -139,16 +119,14 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "kfpoints_factor",
             ),
             namespace_options={
-                "help": (
-                    "Inputs forwarded to the final `EpwBaseWorkChain` for the isotropic "
-                    "Migdal-Eliashberg calculation."
-                )
+                "help": "Inputs for the final isotropic `EpwBaseWorkChain`."
             },
         )
         spec.expose_inputs(
             EpwBaseWorkChain,
             namespace="epw_final_aniso",
             exclude=(
+                "structure",
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
@@ -157,10 +135,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "kfpoints_factor",
             ),
             namespace_options={
-                "help": (
-                    "Inputs forwarded to the final `EpwBaseWorkChain` for the anisotropic "
-                    "Migdal-Eliashberg calculation."
-                )
+                "help": "Inputs for the final anisotropic `EpwBaseWorkChain`."
             },
         )
         spec.outline(
@@ -177,22 +152,24 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             ),
             cls.results,
         )
-        spec.output(
-            "parameters",
-            valid_type=orm.Dict,
-            help="The `output_parameters` output node of the final EPW calculation.",
+        spec.expose_outputs(
+            EpwBaseWorkChain,
+            namespace="epw_final_a2f",
         )
-        spec.output(
-            "max_eigenvalue",
-            valid_type=orm.XyData,
-            help="The temperature dependence of the max eigenvalue for the final EPW.",
+        spec.expose_outputs(
+            EpwBaseWorkChain,
+            namespace="epw_final_iso",
+            namespace_options={
+                "required": False,
+            },
         )
-        spec.output(
-            "a2f",
-            valid_type=orm.XyData,
-            help="The contents of the `.a2f` file for the final EPW.",
+        spec.expose_outputs(
+            EpwBaseWorkChain,
+            namespace="epw_final_aniso",
+            namespace_options={
+                "required": False,
+            },
         )
-        spec.output("Tc_iso", valid_type=orm.Float, help="The critical temperature.")
 
         spec.exit_code(
             401,
@@ -219,6 +196,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
     def get_protocol_filepath(cls):
         """Return ``pathlib.Path`` to the ``.yaml`` file that defines the protocols."""
         from importlib_resources import files
+
         from . import protocols
 
         return files(protocols) / "supercon.yaml"
@@ -254,19 +232,21 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             raise ValueError(f"Invalid parent_epw process: {parent_epw.process_label}")
 
         if parent_folder_epw is None:
-            if (
-                epw_source.inputs.epw.code.computer.hostname
-                != epw_code.computer.hostname
-            ):
+            parent_folder_epw = get_restart_parent_folder(parent_epw)
+
+            if parent_folder_epw.computer.hostname != epw_code.computer.hostname:
                 raise ValueError(
                     "The `epw_code` must be configured on the same computer as that where the `parent_epw` was run."
                 )
-            parent_folder_epw = parent_epw.outputs.epw_folder
         else:
             # TODO: Add check to make sure parent_folder_epw is on same computer as epw_code
             pass
 
-        for epw_namespace in ("epw_interp", "epw_final_iso", "epw_final_aniso"):
+        for epw_namespace in (
+            "epw_interp",
+            "epw_final_iso",
+            "epw_final_aniso",
+        ):
             epw_inputs = inputs.get(epw_namespace, None)
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
@@ -292,12 +272,15 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         if isinstance(inputs["interpolation_distance"], float):
             builder.interpolation_distance = orm.Float(inputs["interpolation_distance"])
         if isinstance(inputs["interpolation_distance"], list):
+            # qpoints_distance = parent_epw.inputs.qpoints_distance
+            # interpolation_distance = [v for v in inputs['interpolation_distance'] if v < qpoints_distance / 2]
             builder.interpolation_distance = orm.List(inputs["interpolation_distance"])
 
         builder.convergence_threshold = orm.Float(inputs["convergence_threshold"])
         builder.always_run_final = orm.Bool(inputs.get("always_run_final", False))
         builder.structure = parent_epw.inputs.structure
         builder.parent_folder_epw = parent_folder_epw
+        builder.kfpoints_factor = orm.Int(inputs.get("kfpoints_factor"))
         builder.clean_workdir = orm.Bool(inputs["clean_workdir"])
 
         return builder
@@ -322,16 +305,16 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         if "convergence_threshold" in self.inputs:
             try:
                 self.ctx.epw_interp[-3].outputs.output_parameters[
-                    "allen_dynes"
+                    "Allen_Dynes_Tc"
                 ]  # This is to check that we have at least 3 allen-dynes
                 prev_allen_dynes = self.ctx.epw_interp[-2].outputs.output_parameters[
-                    "allen_dynes"
+                    "Allen_Dynes_Tc"
                 ]
                 new_allen_dynes = self.ctx.epw_interp[-1].outputs.output_parameters[
-                    "allen_dynes"
+                    "Allen_Dynes_Tc"
                 ]
                 self.ctx.is_converged = (
-                    abs(prev_allen_dynes - new_allen_dynes)
+                    abs(prev_allen_dynes - new_allen_dynes) / new_allen_dynes
                     < self.inputs.convergence_threshold
                 )
                 self.report(
@@ -359,15 +342,15 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
 
     def run_conv(self):
         """Run the EpwBaseWorkChain in interpolation mode for the current interpolation distance."""
-
         self.ctx.iteration += 1
 
         inputs = AttributeDict(
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_interp")
         )
 
+        inputs.structure = self.inputs.structure
         inputs.parent_folder_epw = self.inputs.parent_folder_epw
-        inputs.kfpoints_factor = self.inputs.epw_interp.kfpoints_factor
+        inputs.kfpoints_factor = self.inputs.kfpoints_factor
         inputs.qfpoints_distance = self.ctx.interpolation_list.pop()
 
         if self.ctx.degaussq:
@@ -384,18 +367,17 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in a2f mode: convergence #{self.ctx.iteration}"
         )
 
-        return {'epw_interp': append_(workchain_node)}
+        return {"epw_interp": append_(workchain_node)}
 
     def inspect_conv(self):
         """Verify that the EpwBaseWorkChain in interpolation mode finished successfully."""
         workchain = self.ctx.epw_interp[-1]
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             self.ctx.epw_interp.pop()
         else:
+            # self.ctx.final_interp = workchain.inputs.qfpoints_distance
             try:
                 self.report(
                     f"Allen-Dynes: {workchain.outputs.output_parameters['Allen_Dynes_Tc']}"
@@ -406,11 +388,15 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 )
 
             if self.ctx.degaussq is None:
-                frequency = workchain.outputs.a2f.get_array("frequency")
+                frequency = workchain.outputs.a2f.get_frequency()
                 self.ctx.degaussq = frequency[-1] / 100
 
     def should_run_final(self):
         """Check if the final EpwBaseWorkChain should be run."""
+        # if not self.inputs.always_run_final and 'convergence_threshold' in self.inputs:
+        #     return self.ctx.is_converged
+        # if self.ctx.final_interp is None:
+        #     return False
         if self.ctx.is_converged or self.inputs.always_run_final.value:
             return True
         else:
@@ -423,10 +409,12 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_final_iso")
         )
 
-        parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
+        inputs.structure = self.inputs.structure
+        parent_folder_epw = get_restart_parent_folder(self.ctx.epw_interp[-1])
+        restart_calculation = find_related_calculation(parent_folder_epw)
         inputs.parent_folder_epw = parent_folder_epw
-        inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
-        inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
+        inputs.kfpoints = restart_calculation.inputs.kfpoints
+        inputs.qfpoints = restart_calculation.inputs.qfpoints
 
         if self.ctx.degaussq:
             parameters = inputs.parameters.get_dict()
@@ -440,16 +428,14 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in isotropic mode"
         )
 
-        return {'final_epw_iso': workchain_node}
+        return {"final_epw_iso": workchain_node}
 
     def inspect_final_epw_iso(self):
         """Verify that the final EpwBaseWorkChain in isotropic mode finished successfully."""
         workchain = self.ctx.final_epw_iso
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_ISO
 
     def run_final_epw_aniso(self):
@@ -458,10 +444,12 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_final_aniso")
         )
 
-        parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
+        inputs.structure = self.inputs.structure
+        parent_folder_epw = get_restart_parent_folder(self.ctx.epw_interp[-1])
+        restart_calculation = find_related_calculation(parent_folder_epw)
         inputs.parent_folder_epw = parent_folder_epw
-        inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
-        inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
+        inputs.kfpoints = restart_calculation.inputs.kfpoints
+        inputs.qfpoints = restart_calculation.inputs.qfpoints
 
         inputs.metadata.call_link_label = "epw_final_aniso"
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
@@ -469,24 +457,41 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in anisotropic mode"
         )
 
-        return {'final_epw_aniso': workchain_node}
+        return {"final_epw_aniso": workchain_node}
 
     def inspect_final_epw_aniso(self):
         """Verify that the final EpwBaseWorkChain in anisotropic mode finished successfully."""
         workchain = self.ctx.final_epw_aniso
 
         if not workchain.is_finished_ok:
-            self.report(
-                f"EpwBaseWorkChain<{workchain.pk}> failed with exit status {workchain.exit_status}"
-            )
+            self.report(format_subprocess_failure(workchain, "EpwBaseWorkChain"))
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_ANISO
 
     def results(self):
-        """TODO"""
-        self.out("Tc_iso", calculate_tc(self.ctx.final_epw_iso.outputs.max_eigenvalue))
-        self.out("parameters", self.ctx.final_epw_iso.outputs.output_parameters)
-        self.out("max_eigenvalue", self.ctx.final_epw_iso.outputs.max_eigenvalue)
-        self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
+        """Add the most important results to the outputs of the work chain."""
+        self.out_many(
+            self.exposed_outputs(
+                self.ctx.epw_interp[-1],
+                EpwBaseWorkChain,
+                namespace="epw_final_a2f",
+            )
+        )
+        if "final_epw_iso" in self.ctx:
+            self.out_many(
+                self.exposed_outputs(
+                    self.ctx.final_epw_iso,
+                    EpwBaseWorkChain,
+                    namespace="epw_final_iso",
+                )
+            )
+        if "final_epw_aniso" in self.ctx:
+            self.out_many(
+                self.exposed_outputs(
+                    self.ctx.final_epw_aniso,
+                    EpwBaseWorkChain,
+                    namespace="epw_final_aniso",
+                )
+            )
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""
@@ -503,7 +508,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 try:
                     called_descendant.outputs.remote_folder._clean()  # pylint: disable=protected-access
                     cleaned_calcs.append(called_descendant.pk)
-                except (IOError, OSError, KeyError):
+                except (OSError, exceptions.NotExistentAttributeError):
                     pass
 
         if cleaned_calcs:

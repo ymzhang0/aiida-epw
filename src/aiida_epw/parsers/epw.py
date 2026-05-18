@@ -1,11 +1,31 @@
+"""Parser for the EPW calculations."""
+
 import re
+from pathlib import Path
 
-from aiida import orm
 import numpy
-
-from aiida_epw.calculations.epw import EpwCalculation
+from aiida import orm
 from aiida_quantumespresso.parsers.base import BaseParser
 from aiida_quantumespresso.utils.mapping import get_logging_container
+from packaging.version import Version
+
+from aiida_epw.calculations.epw import EpwCalculation
+from aiida_epw.data import (
+    A2fData,
+    GapFunctionData,
+    LambdaFSData,
+    LambdaKPairsData,
+    ProjectedSpectrumData,
+)
+from aiida_epw.tools.parsers import (
+    parse_epw_a2f,
+    parse_epw_a2f_proj,
+    parse_epw_imag_aniso_gap0,
+    parse_epw_imag_iso,
+    parse_epw_lambda_fs,
+    parse_epw_lambda_k_pairs,
+    parse_epw_phdos_proj,
+)
 
 
 class EpwParser(BaseParser):
@@ -13,52 +33,171 @@ class EpwParser(BaseParser):
 
     success_string = "EPW.bib"
 
+    class_error_map = {
+        "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
+        "internal error, cannot bracket Ef": "ERROR_CANNOT_BRACKET_EF",
+    }
+
+    @staticmethod
+    def is_scheduler_out_of_memory(stderr):
+        """Return whether scheduler stderr indicates an out-of-memory kill."""
+        if not stderr:
+            return False
+
+        stderr_lower = stderr.lower()
+        return any(
+            marker in stderr_lower
+            for marker in (
+                "oom_kill",
+                "out of memory",
+                "oom killed",
+                "exceeded memory limit",
+            )
+        )
+
+    @staticmethod
+    def get_parser_settings_key():
+        """Return the settings key reserved for parser-specific options."""
+        return "parser_options"
+
+    def get_retrieved_content(self, *filenames):
+        """Return the content of the first retrieved file that exists."""
+        for filename in filenames:
+            try:
+                return self.retrieved.base.repository.get_object_content(filename)
+            except FileNotFoundError:
+                continue
+
+        return None
+
+    def get_retrieved_contents_matching(self, pattern):
+        """Return retrieved file contents whose names match a compiled regex pattern."""
+        return {
+            filename: self.retrieved.base.repository.get_object_content(filename)
+            for filename in self.retrieved.base.repository.list_object_names()
+            if pattern.match(filename)
+        }
+
     def parse(self, **kwargs):
         """Parse the retrieved files of a completed ``EpwCalculation`` into output nodes."""
         logs = get_logging_container()
 
         stdout, parsed_data, logs = self.parse_stdout_from_retrieved(logs)
+        scheduler_stderr = self.node.get_scheduler_stderr()
+
+        # Preserve scheduler walltime failures instead of overriding them with parser-side stdout errors.
+        if self.node.exit_status == self.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status:
+            return self.exit(logs=logs)
+
+        if (
+            self.node.exit_status
+            == self.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY.status
+        ):
+            return self.exit(logs=logs)
+
+        if self.is_scheduler_out_of_memory(scheduler_stderr):
+            return self.exit(self.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY, logs)
 
         base_exit_code = self.check_base_errors(logs)
         if base_exit_code:
             return self.exit(base_exit_code, logs)
 
-        parsed_epw, logs = self.parse_stdout(stdout, logs)
+        parsed_epw, logs = self.parse_stdout(
+            stdout, logs, code_version=Version(parsed_data["code_version"])
+        )
         parsed_data.update(parsed_epw)
 
-        if (
-            EpwCalculation._output_elbands_file
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            elbands_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._output_elbands_file
+        elbands_contents = self.get_retrieved_content(EpwCalculation._output_elbands_file)
+        if elbands_contents is not None:
+            self.out(
+                "el_band_structure",
+                self.parse_bands(
+                    elbands_contents, getattr(self.node.inputs, "kfpoints", None), "eV"
+                ),
             )
-            self.out("el_band_structure", self.parse_bands(elbands_contents))
 
-        if (
-            EpwCalculation._output_phbands_file
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            phbands_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._output_phbands_file
+        phbands_contents = self.get_retrieved_content(EpwCalculation._output_phbands_file)
+        if phbands_contents is not None:
+            self.out(
+                "ph_band_structure",
+                self.parse_bands(
+                    phbands_contents, getattr(self.node.inputs, "qfpoints", None), "meV"
+                ),
             )
-            self.out("ph_band_structure", self.parse_bands(phbands_contents))
 
-        if (
-            EpwCalculation._OUTPUT_A2F_FILE
-            in self.retrieved.base.repository.list_object_names()
-        ):
-            a2f_contents = self.retrieved.base.repository.get_object_content(
-                EpwCalculation._OUTPUT_A2F_FILE
-            )
-            a2f_xydata, parsed_a2f = self.parse_a2f(a2f_contents)
-            self.out("a2f", a2f_xydata)
+        a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
+        if a2f_contents is not None:
+            a2f_data, parsed_a2f = self.parse_a2f(a2f_contents)
+            self.out("a2f", a2f_data)
             parsed_data.update(parsed_a2f)
+
+        dos_contents = self.get_retrieved_content(
+            EpwCalculation._OUTPUT_DOS_FILE,
+            Path(EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE).as_posix(),
+        )
+        if dos_contents is not None:
+            self.out("dos", self.parse_dos(dos_contents))
+
+        phdos_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_PHDOS_FILE)
+        if phdos_contents is not None:
+            self.out("phdos", self.parse_phdos(phdos_contents))
+
+        phdos_proj_contents = self.get_retrieved_content(
+            EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
+        )
+        if phdos_proj_contents is not None:
+            self.out("phdos_proj", self.parse_phdos_proj(phdos_proj_contents))
+
+        a2f_proj_contents = self.get_retrieved_content(
+            EpwCalculation._OUTPUT_A2F_PROJ_FILE
+        )
+        if a2f_proj_contents is not None:
+            self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
+
+        lambda_FS_contents = self.get_retrieved_content(
+            EpwCalculation._OUTPUT_LAMBDA_FS_FILE
+        )
+        if lambda_FS_contents is not None:
+            self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
+
+        lambda_k_pairs_contents = self.get_retrieved_content(
+            EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
+        )
+        if lambda_k_pairs_contents is not None:
+            self.out(
+                "lambda_k_pairs",
+                self.parse_lambda_k_pairs(lambda_k_pairs_contents),
+            )
+
+        iso_gap_filecontents = self.get_retrieved_contents_matching(
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
+        )
+        if iso_gap_filecontents:
+            self.out(
+                "iso_gap_functions",
+                self.parse_iso_gap_functions(iso_gap_filecontents),
+            )
+
+        aniso_gap_filecontents = self.get_retrieved_contents_matching(
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_aniso_gap0_\d+\.\d+$")
+        )
+        if aniso_gap_filecontents:
+            self.out(
+                "aniso_gap_functions",
+                self.parse_aniso_gap_functions(aniso_gap_filecontents),
+            )
 
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
 
+        if "Allen_Dynes_Tc" in parsed_data:
+            parsed_data.setdefault("allen_dynes", parsed_data["Allen_Dynes_Tc"])
+
         self.out("output_parameters", orm.Dict(parsed_data))
+
+        for exit_code in list(self.get_error_map().values()):
+            if exit_code in logs.error:
+                return self.exit(self.exit_codes.get(exit_code), logs)
 
         if "ERROR_OUTPUT_STDOUT_INCOMPLETE" in logs.error:
             return self.exit(
@@ -68,7 +207,7 @@ class EpwParser(BaseParser):
         return self.exit(logs=logs)
 
     @staticmethod
-    def parse_stdout(stdout, logs):
+    def parse_stdout(stdout, logs, code_version):
         """Parse the ``stdout``."""
 
         def parse_max_eigenvalue(stdout_block):
@@ -85,18 +224,149 @@ class EpwParser(BaseParser):
             )
             return max_eigenvalue_array
 
-        data_type_regex = (
-            (
-                "allen_dynes",
-                float,
-                re.compile(r"\s+Estimated Allen-Dynes Tc =\s+([\d\.]+) K"),
-            ),
-            (
-                "fermi_energy_coarse",
-                float,
-                re.compile(r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"),
-            ),
-        )
+        if code_version < Version("5.9"):
+            data_type_regex = (
+                (
+                    "Allen_Dynes_Tc",
+                    float,
+                    re.compile(r"\s+Estimated Allen-Dynes Tc =\s+([\d\.]+) K"),
+                ),
+                (
+                    "fermi_energy_coarse",
+                    float,
+                    re.compile(r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"),
+                ),
+            )
+        else:
+            data_type_regex = (
+                ("nbndsub", int, re.compile(r"nbndsub\s*=\s*(\d+)")),
+                (
+                    "ws_vectors_electrons",
+                    int,
+                    re.compile(r"^\s*Number of WS vectors for electrons\s+(\d+)"),
+                ),
+                (
+                    "ws_vectors_phonons",
+                    int,
+                    re.compile(r"^\s*Number of WS vectors for phonons\s+(\d+)"),
+                ),
+                (
+                    "ws_vectors_electron_phonon",
+                    int,
+                    re.compile(r"^\s*Number of WS vectors for electron-phonon\s+(\d+)"),
+                ),
+                (
+                    "max_cores_parallelization",
+                    int,
+                    re.compile(
+                        r"^\s*Maximum number of cores for efficient parallelization\s+(\d+)"
+                    ),
+                ),
+                ("ibndmin", int, re.compile(r"ibndmin\s*=\s*(\d+)")),
+                (
+                    "ebndmin",
+                    float,
+                    re.compile(r"ebndmin\s*=\s*([+-]?[\d\.]+)"),
+                ),
+                ("ibndmax", int, re.compile(r"ibndmax\s*=\s*(\d+)")),
+                (
+                    "ebndmax",
+                    float,
+                    re.compile(r"ebndmax\s*=\s*([+-]?[\d\.]+)"),
+                ),
+                # ('nbnd_skip', int, re.compile(r'^\s*Skipping the first\s+(\d+)\s+bands:')),
+                (
+                    "nbnd_skip",
+                    int,
+                    re.compile(r"^\s*Skipping\s+(\d+)\s+occupied bands:"),
+                ),
+                (
+                    "fermi_energy_coarse",
+                    float,
+                    re.compile(r"^\s*Fermi energy coarse grid =\s*([+-]?[\d\.]+)\s+eV"),
+                ),
+                (
+                    "fermi_energy_fine",
+                    float,
+                    re.compile(
+                        r"^\s*Fermi energy is calculated from the fine k-mesh: Ef =\s*([+-]?[\d\.]+)\s+eV"
+                    ),
+                ),
+                (
+                    "fine_q_mesh",
+                    lambda m: [int(x) for x in m.split()],
+                    re.compile(r"^\s*Using uniform q-mesh:\s+((?:\d+\s*)+)"),
+                ),
+                (
+                    "fine_k_mesh",
+                    lambda m: [int(x) for x in m.split()],
+                    re.compile(r"^\s*Using uniform k-mesh:\s+((?:\d+\s*)+)"),
+                ),
+                (
+                    "fermi_level",
+                    lambda s: float(s.replace("D", "E").replace("d", "E")),
+                    re.compile(r"Fermi level \(eV\)\s*=\s*([\d\.D+-]+)"),
+                ),
+                (
+                    "DOS",
+                    lambda s: float(s.replace("D", "E").replace("d", "E")),
+                    re.compile(r"DOS\(states/spin/eV/Unit Cell\)\s*=\s*([\d\.D+-]+)"),
+                ),
+                (
+                    "electron_smearing",
+                    lambda s: float(s.replace("D", "E").replace("d", "E")),
+                    re.compile(r"Electron smearing \(eV\)\s*=\s*([\d\.D+-]+)"),
+                ),
+                (
+                    "fermi_window",
+                    lambda s: float(s.replace("D", "E").replace("d", "E")),
+                    re.compile(r"Fermi window \(eV\)\s*=\s*([\d\.D+-]+)"),
+                ),
+                (
+                    "lambda",
+                    float,
+                    re.compile(r"Electron-phonon coupling strength\s*=\s*([\d\.]+)"),
+                ),
+                # For EPW > 6.0
+                # ('Allen_Dynes_Tc', float, re.compile(r'Estimated Allen-Dynes Tc\s*=\s*([\d\.]+) K for muc')),
+                (
+                    "McMillan_Tc",
+                    float,
+                    re.compile(
+                        r"Estimated Tc using McMillan expression\s*=\s*([\d\.]+) K for muc"
+                    ),
+                ),
+                (
+                    "Allen_Dynes_Tc",
+                    float,
+                    re.compile(
+                        r"Estimated Tc using Allen-Dynes modified McMillan expression\s*=\s*([\d\.]+) K"
+                    ),
+                ),
+                (
+                    "SISSO_Tc",
+                    float,
+                    re.compile(
+                        r"Estimated Tc using SISSO machine learning model\s*=\s*([\d\.]+) K"
+                    ),
+                ),
+                ("muc", float, re.compile(r"for muc\s*=\s*([\d\.]+)")),
+                # ('w_log', float, re.compile(r'Estimated w_log in Allen-Dynes Tc\s*=\s*([\d\.]+) meV')),
+                (
+                    "w_log",
+                    float,
+                    re.compile(r"Estimated w_log\s*=\s*([\d\.]+) meV"),
+                ),
+                # ('BCS_gap', float, re.compile(r'Estimated BCS superconducting gap\s*=\s*([\d\.]+) meV')),
+                (
+                    "BCS_gap",
+                    float,
+                    re.compile(
+                        r"Estimated BCS superconducting gap using McMillan Tc\s*=\s*([\d\.]+) meV"
+                    ),
+                ),
+                # ('ML_tc', float, re.compile(r'Estimated Tc from machine learning model\s*=\s*([\d\.]+) K')),
+            )
         data_block_marker_parser = (
             (
                 "max_eigenvalue",
@@ -113,7 +383,11 @@ class EpwParser(BaseParser):
                 if match:
                     parsed_data[data_key] = type(match.group(1))
 
-            for data_key, data_marker, block_parser in data_block_marker_parser:
+            for (
+                data_key,
+                data_marker,
+                block_parser,
+            ) in data_block_marker_parser:
                 if data_marker in line:
                     parsed_data[data_key] = block_parser(stdout[line_number:])
 
@@ -122,59 +396,67 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_a2f(content):
         """Parse the contents of the `.a2f` file."""
-        a2f_array = numpy.array(
-            [line.split() for line in content.splitlines()[1:501]], dtype=float
+        parsed_a2f = parse_epw_a2f(content)
+
+        a2f_data = A2fData()
+        a2f_data.set_a2f_data(
+            frequency=parsed_a2f["frequency"],
+            spectrum=parsed_a2f["a2f"],
+            lambda_values=parsed_a2f["lambda"],
+            phonon_smearing=parsed_a2f["phonon_smearing"],
+            electron_smearing=parsed_a2f.get("electron_smearing"),
+            fermi_window=parsed_a2f.get("fermi_window"),
+            summed_elph_coupling=parsed_a2f.get("summed_elph_coupling"),
         )
 
-        a2f_xydata = orm.XyData()
-        a2f_xydata.set_array("frequency", a2f_array[:, 0])
-        a2f_xydata.set_array("a2f", a2f_array[:, 1:])
-        a2f_xydata.set_array(
-            "lambda",
-            numpy.array(
-                [
-                    value
-                    for value in re.search(
-                        r"Integrated el-ph coupling\n\s+\#\s+([\d\.\s]+)", content
-                    )
-                    .groups()[0]
-                    .split()
-                ],
-                dtype=float,
-            ),
-        )
-        a2f_xydata.set_array(
-            "degaussq",
-            numpy.array(
-                [
-                    value
-                    for value in re.search(
-                        r"Phonon smearing \(meV\)\n\s+\#\s+([\d\.\s]+)", content
-                    )
-                    .groups()[0]
-                    .split()
-                ],
-                dtype=float,
-            ),
-        )
         parsed_data = {
-            "degaussw": float(
-                re.search(r"Electron smearing \(eV\)\s+([\d\.]+)", content).groups()[0]
-            ),
-            "fsthick": float(
-                re.search(r"Fermi window \(eV\)\s+([\d\.]+)", content).groups()[0]
-            ),
+            "degaussw": parsed_a2f["electron_smearing"],
+            "fsthick": parsed_a2f["fermi_window"],
         }
-        return a2f_xydata, parsed_data
+        return a2f_data, parsed_data
 
     @staticmethod
-    def parse_bands(content):
+    def parse_iso_gap_functions(file_contents):
+        """Parse isotropic gap-function files into a typed datatype."""
+        gap_functions = parse_epw_imag_iso(file_contents, prefix=EpwCalculation._PREFIX)
+        gap_function_data = GapFunctionData()
+        gap_function_data.set_gap_functions(gap_functions, kind="iso")
+        return gap_function_data
+
+    @staticmethod
+    def parse_aniso_gap_functions(file_contents):
+        """Parse anisotropic gap-function files into a typed datatype."""
+        gap_functions = parse_epw_imag_aniso_gap0(
+            file_contents, prefix=EpwCalculation._PREFIX
+        )
+        gap_function_data = GapFunctionData()
+        gap_function_data.set_gap_functions(gap_functions, kind="aniso")
+        return gap_function_data
+
+    @staticmethod
+    def parse_a2f_proj(content):
+        """Parse the contents of the `.a2f_proj` file."""
+        parsed_spectrum = parse_epw_a2f_proj(content)
+        return EpwParser.create_projected_spectrum_data(
+            grid=parsed_spectrum["frequency"],
+            series=parsed_spectrum["a2f_proj"],
+            kind="a2f_proj",
+            grid_name="frequency",
+            series_name="a2f_proj",
+            total_label=parsed_spectrum["total_label"],
+            projected_label=parsed_spectrum["projected_label"],
+            legacy_grid_name="frequency",
+            legacy_series_name="a2f_proj",
+        )
+
+    @staticmethod
+    def parse_bands(content, kpoints_data, units):
         """Parse the contents of a band structure file."""
         nbnd, nks = (
             int(v)
             for v in re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content).groups()
         )
-        kpt_pattern = re.compile(r"\s([\s-][\d\.]+)" * 3)
+        kpt_pattern = re.compile(r"^\s*([-\d\.]+)\s+([-\d\.]+)\s+([-\d\.]+)\s*$")
         band_pattern = re.compile(r"\s+([-\d\.]+)" * nbnd)
 
         kpts = []
@@ -189,12 +471,127 @@ class EpwParser(BaseParser):
             if match_band and number % 2 == 0:
                 bands.append(list(match_band.groups()))
 
-        kpoints_data = orm.KpointsData()
-        kpoints_data.set_kpoints(numpy.array(kpts, dtype=float))
+        if kpoints_data is None:
+            if len(kpts) != nks:
+                raise ValueError(
+                    "Could not reconstruct the band k-points from the retrieved EPW file."
+                )
+
+            kpoints_data = orm.KpointsData()
+            kpoints_data.set_kpoints(numpy.array(kpts, dtype=float))
+
         bands = numpy.array(bands, dtype=float)
 
         bands_data = orm.BandsData()
+        # We should use the KpointsData from the inputs.
         bands_data.set_kpointsdata(kpoints_data)
-        bands_data.set_bands(bands, units="meV")
+        bands_data.set_bands(bands, units=units)
 
         return bands_data
+
+    @staticmethod
+    def parse_dos(content):
+        """Parse the contents of the `.dos` file."""
+        import io
+
+        dos_xydata = orm.XyData()
+        dos = numpy.loadtxt(io.StringIO(content), dtype=float, comments="#")
+
+        dos_xydata.set_array("Energy", dos[:, 0])
+        dos_xydata.set_array("EDOS", dos[:, 1])
+        if dos.shape[1] > 2:
+            dos_xydata.set_array("IDOS", dos[:, 2])
+
+        return dos_xydata
+
+    @staticmethod
+    def parse_phdos(content):
+        """Parse the contents of the `.phdos` file."""
+        import io
+
+        phdos_xydata = orm.XyData()
+        phdos = numpy.loadtxt(io.StringIO(content), dtype=float, skiprows=1)
+        phdos_xydata.set_array("Frequency", phdos[:, 0])
+        phdos_xydata.set_array("PHDOS", phdos[:, 1:])
+
+        return phdos_xydata
+
+    @staticmethod
+    def parse_phdos_proj(content):
+        """Parse the contents of the `.phdos_proj` file."""
+        parsed_spectrum = parse_epw_phdos_proj(content)
+        return EpwParser.create_projected_spectrum_data(
+            grid=parsed_spectrum["frequency"],
+            series=parsed_spectrum["phdos_proj"],
+            kind="phdos_proj",
+            grid_name="frequency",
+            series_name="phdos_proj",
+            total_label=parsed_spectrum["total_label"],
+            projected_label=parsed_spectrum["projected_label"],
+            legacy_grid_name="Frequency",
+            legacy_series_name="PHDOS_proj",
+        )
+
+    @staticmethod
+    def parse_lambda_FS(content):
+        """Parse the contents of the `.lambda_FS` file."""
+        parsed_lambda_fs = parse_epw_lambda_fs(content)
+        lambda_fs_data = LambdaFSData()
+        lambda_fs_data.set_lambda_fs(
+            kpoints=parsed_lambda_fs["kpoints"],
+            bands=parsed_lambda_fs["band"],
+            energies=parsed_lambda_fs["energy"],
+            couplings=parsed_lambda_fs["lambda"],
+            energy_units=parsed_lambda_fs["energy_units"],
+        )
+        return lambda_fs_data
+
+    @staticmethod
+    def parse_lambda_k_pairs(content):
+        """Parse the contents of the `.lambda_k_pairs` file."""
+        parsed_lambda_k_pairs = parse_epw_lambda_k_pairs(content)
+        lambda_k_pairs_data = LambdaKPairsData()
+        lambda_k_pairs_data.set_lambda_k_pairs(
+            lambda_nk=parsed_lambda_k_pairs["lambda_nk"],
+            rho=parsed_lambda_k_pairs["rho"],
+        )
+        return lambda_k_pairs_data
+
+    @staticmethod
+    def parse_gap_function(content, skiprows=0):
+        """Parse the contents of the `gap_function.dat` file."""
+        import io
+
+        gap_function = numpy.loadtxt(
+            io.StringIO(content), dtype=float, comments="#", skiprows=skiprows
+        )
+
+        return gap_function
+
+    @staticmethod
+    def create_projected_spectrum_data(
+        *,
+        grid,
+        series,
+        kind,
+        grid_name,
+        series_name,
+        total_label,
+        projected_label,
+        legacy_grid_name,
+        legacy_series_name,
+    ):
+        """Construct a typed projected spectrum from parsed arrays and labels."""
+        projected_spectrum = ProjectedSpectrumData()
+        projected_spectrum.set_projected_spectrum(
+            grid=grid,
+            series=series,
+            kind=kind,
+            grid_name=grid_name,
+            series_name=series_name,
+            total_label=total_label,
+            projected_label=projected_label,
+            legacy_grid_name=legacy_grid_name,
+            legacy_series_name=legacy_series_name,
+        )
+        return projected_spectrum

@@ -62,7 +62,9 @@ def test_parse_epw_a2f(files_path: Path, data_regression):
 
 def test_parse_epw_max_eigenvalue(files_path: Path, data_regression):
     """Parse the max eigenvalue table from a real ``aiida.out`` file."""
-    stdout_path = files_path / "tools" / "parsers" / "linearized_iso_eliashberg" / "aiida.out"
+    stdout_path = (
+        files_path / "tools" / "parsers" / "linearized_iso_eliashberg" / "aiida.out"
+    )
     content = stdout_path.read_text()
 
     parsed = parsers.parse_epw_max_eigenvalue(content)
@@ -109,12 +111,81 @@ def test_parse_epw_phdos(files_path: Path, data_regression):
     data_regression.check(regression_data)
 
 
+def test_parse_epw_a2f_proj(files_path: Path):
+    """Parse an existing ``aiida.a2f_proj`` file and validate the projected spectrum payload."""
+    a2f_proj_path = files_path / "tools" / "parsers" / "a2f" / "aiida.a2f_proj"
+    content = a2f_proj_path.read_text()
+
+    parsed = parsers.parse_epw_a2f_proj(content)
+
+    assert set(parsed) == {
+        "frequency",
+        "a2f_proj",
+        "total_label",
+        "projected_label",
+    }
+    assert parsed["frequency"].shape == (500,)
+    assert parsed["a2f_proj"].shape == (500, 4)
+    assert parsed["total_label"] == "a2f"
+    assert parsed["projected_label"] == "a2f_modeproj"
+
+
+def test_parse_epw_phdos_proj(files_path: Path):
+    """Parse an existing ``aiida.phdos_proj`` file and validate the projected spectrum payload."""
+    phdos_proj_path = files_path / "tools" / "parsers" / "a2f" / "aiida.phdos_proj"
+    content = phdos_proj_path.read_text()
+
+    parsed = parsers.parse_epw_phdos_proj(content)
+
+    assert set(parsed) == {
+        "frequency",
+        "phdos_proj",
+        "total_label",
+        "projected_label",
+    }
+    assert parsed["frequency"].shape == (500,)
+    assert parsed["phdos_proj"].shape == (500, 4)
+    assert parsed["total_label"] == "phdos[states/meV]"
+    assert parsed["projected_label"] == "phdos_modeproj[states/meV]"
+
+
+def test_parse_epw_lambda_fs():
+    """Parse a synthetic ``lambda_FS`` table."""
+    content = """# kx ky kz band Enk lambda
+ 0.0000 0.1000 0.2000 1 0.3000 0.9000
+ 0.5000 0.6000 0.7000 2 0.4000 1.1000
+"""
+
+    parsed = parsers.parse_epw_lambda_fs(content)
+
+    assert parsed["kpoints"].tolist() == [[0.0, 0.1, 0.2], [0.5, 0.6, 0.7]]
+    assert parsed["band"].tolist() == [1.0, 2.0]
+    assert parsed["energy"].tolist() == [0.3, 0.4]
+    assert parsed["lambda"].tolist() == [0.9, 1.1]
+    assert parsed["energy_units"] == "eV"
+
+
+def test_parse_epw_lambda_k_pairs():
+    """Parse a synthetic ``lambda_k_pairs`` table."""
+    content = """# lambda_nk rho
+ 0.1000 1.5000
+ 0.2000 2.5000
+"""
+
+    parsed = parsers.parse_epw_lambda_k_pairs(content)
+
+    assert parsed["lambda_nk"].tolist() == [0.1, 0.2]
+    assert parsed["rho"].tolist() == [1.5, 2.5]
+
+
 def test_parse_epw_imag_iso(files_path: Path, data_regression):
     """Parse isotropic ``imag_iso`` files from a folder mapping."""
     iso_dir = files_path / "tools" / "parsers" / "full_iso_eliashberg"
 
     file_contents = {
-        path.name: path.read_text() for path in sorted(iso_dir.iterdir()) if path.is_file()
+        path.name: path.read_text()
+        for path in sorted(iso_dir.iterdir())
+        if path.is_file()
     }
 
     parsed = parsers.parse_epw_imag_iso(file_contents, prefix="aiida")
@@ -141,6 +212,3 @@ def test_parse_epw_imag_aniso_gap0(files_path: Path, data_regression):
 
     regression_data = {T: parsed[T].tolist()[:10] for T in sorted(parsed.keys())}
     data_regression.check(regression_data)
-
-
-
