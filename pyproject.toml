@@ -33,6 +33,11 @@ plot = [
     "matplotlib",
     "scipy",
 ]
+docs = [
+    "myst-parser>=3.0.1",
+    "sphinx>=7.4.7",
+    "sphinx-book-theme>=1.1.4",
+]
 
 [dependency-groups]
 test = [
