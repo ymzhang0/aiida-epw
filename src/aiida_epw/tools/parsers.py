@@ -194,23 +194,64 @@ def parse_epw_phdos(file_content):
 
 def parse_epw_a2f_proj(file_content):
     """Parse the contents of the projected `.a2f_proj` file."""
-    parsed = _parse_epw_projected_spectrum(file_content)
+    lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("Projected a2F spectrum file is empty.")
+
+    # Check and extract footer
+    last_line = lines[-1]
+    lambda_int = None
+    lambda_sum = None
+    if "lambda_int" in last_line:
+        match = re.search(
+            r"lambda_int\s*=\s*([+-]?[\d\.]+)\s+lambda_sum\s*=\s*([+-]?[\d\.]+)",
+            last_line,
+        )
+        if match:
+            lambda_int = float(match.group(1))
+            lambda_sum = float(match.group(2))
+        lines = lines[:-1]
+
+    # Middle data lines (skipping header at lines[0])
+    data_lines = [line for line in lines[1:] if _is_numeric_table_row(line)]
+    if not data_lines:
+        raise ValueError(
+            "Malformed projected a2F spectrum: No numeric table rows found."
+        )
+
+    table = _load_numeric_table("\n".join(data_lines))
+    if table.shape[1] < 2:
+        raise ValueError(
+            "Malformed projected a2F spectrum: Expected at least 2 columns."
+        )
+
     return {
-        "frequency": parsed["grid"],
-        "a2f_proj": parsed["series"],
-        "total_label": parsed["total_label"],
-        "projected_label": parsed["projected_label"],
+        "frequency": table[:, 0],
+        "a2f": table[:, 1],
+        "projected_a2f": table[:, 2:],
+        "lambda_int": lambda_int,
+        "lambda_sum": lambda_sum,
     }
 
 
 def parse_epw_phdos_proj(file_content):
     """Parse the contents of the projected `.phdos_proj` file."""
-    parsed = _parse_epw_projected_spectrum(file_content)
+    lines = [line.strip() for line in file_content.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError("Projected phdos file is empty.")
+
+    data_lines = [line for line in lines[1:] if _is_numeric_table_row(line)]
+    if not data_lines:
+        raise ValueError("Malformed projected phdos: No numeric table rows found.")
+
+    table = _load_numeric_table("\n".join(data_lines))
+    if table.shape[1] < 2:
+        raise ValueError("Malformed projected phdos: Expected at least 2 columns.")
+
     return {
-        "frequency": parsed["grid"],
-        "phdos_proj": parsed["series"],
-        "total_label": parsed["total_label"],
-        "projected_label": parsed["projected_label"],
+        "frequency": table[:, 0],
+        "phdos": table[:, 1],
+        "projected_phdos": table[:, 2:],
     }
 
 
@@ -317,36 +358,6 @@ def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
             f"No files matching the template '{prefix}.imag_aniso_gap0_XXX.XX' were parsed successfully."
         )
     return parsed_data
-
-
-def _parse_epw_projected_spectrum(file_content):
-    """Parse a projected spectrum with one grid column and multiple series columns."""
-    lines = [line for line in file_content.splitlines() if line.strip()]
-    if not lines:
-        raise ValueError("Projected spectrum content is empty.")
-    header_tokens = lines[0].split()
-    data_lines = [line for line in lines[1:] if _is_numeric_table_row(line)]
-    if not data_lines:
-        raise ValueError("Malformed projected spectrum: No numeric table rows found.")
-
-    try:
-        table = _load_numeric_table("\n".join(data_lines))
-    except Exception as exc:
-        raise ValueError(
-            f"Malformed projected spectrum: Failed to parse numeric table: {exc}"
-        ) from exc
-
-    if table.shape[1] < 2:
-        raise ValueError(
-            "Malformed projected spectrum: Expected at least 2 columns (grid and one series column)."
-        )
-
-    return {
-        "grid": table[:, 0],
-        "series": table[:, 1:],
-        "total_label": header_tokens[1] if len(header_tokens) > 1 else None,
-        "projected_label": " ".join(header_tokens[2:]) or None,
-    }
 
 
 def _load_numeric_table(file_content, **kwargs):

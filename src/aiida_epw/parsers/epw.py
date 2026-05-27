@@ -16,7 +16,8 @@ from aiida_epw.data import (
     GapFunctionData,
     LambdaFSData,
     LambdaKPairsData,
-    ProjectedSpectrumData,
+    PA2fData,
+    PDosData,
 )
 from aiida_epw.parsers.schemas import REGEX_PATTERNS_LEGACY, REGEX_PATTERNS_MODERN
 
@@ -153,15 +154,13 @@ class EpwParser(BaseParser):
             EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
         )
         if phdos_proj_contents is not None:
-            self.out(
-                "phdos_proj", ProjectedSpectrumData.from_phdos_proj(phdos_proj_contents)
-            )
+            self.out("phdos_proj", PDosData.from_string(phdos_proj_contents))
 
         a2f_proj_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_A2F_PROJ_FILE
         )
         if a2f_proj_contents is not None:
-            self.out("a2f_proj", ProjectedSpectrumData.from_a2f_proj(a2f_proj_contents))
+            self.out("a2f_proj", PA2fData.from_string(a2f_proj_contents))
 
         lambda_FS_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_LAMBDA_FS_FILE

@@ -14,6 +14,8 @@ from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
     DosData,
+    PA2fData,
+    PDosData,
 )
 from aiida_epw.parsers.epw import EpwParser
 
@@ -271,3 +273,51 @@ def test_epw_detects_scheduler_out_of_memory_from_stderr(aiida_localhost, tmp_pa
         calcfunction.exit_status
         == EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY.status
     )
+
+
+def test_epw_reads_projected_outputs(aiida_localhost, files_path):
+    """Test that EpwParser correctly parses projected phdos and projected a2f files."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.store()
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_tree(
+        (files_path / "parsers" / "epw" / "default").as_posix()
+    )
+    retrieved.base.repository.put_object_from_file(
+        (files_path / "tools" / "parsers" / "a2f" / "aiida.phdos_proj").as_posix(),
+        "aiida.phdos_proj",
+    )
+    retrieved.base.repository.put_object_from_file(
+        (files_path / "tools" / "parsers" / "a2f" / "aiida.a2f_proj").as_posix(),
+        "aiida.a2f_proj",
+    )
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    results, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished_ok, calcfunction.exit_message
+    assert "phdos_proj" in results
+    assert isinstance(results["phdos_proj"], PDosData)
+    assert results["phdos_proj"].get_frequency().shape == (500,)
+    assert results["phdos_proj"].get_phdos().shape == (500,)
+    assert results["phdos_proj"].get_projected_phdos().shape == (500, 3)
+
+    assert "a2f_proj" in results
+    assert isinstance(results["a2f_proj"], PA2fData)
+    assert results["a2f_proj"].get_frequency().shape == (500,)
+    assert results["a2f_proj"].get_a2f().shape == (500,)
+    assert results["a2f_proj"].get_projected_a2f().shape == (500, 3)
+    assert results["a2f_proj"].lambda_int == pytest.approx(1.9917789)
+    assert results["a2f_proj"].lambda_sum == pytest.approx(1.9853134)

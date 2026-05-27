@@ -4,7 +4,7 @@ import pytest
 from aiida.common import exceptions
 from aiida.plugins import DataFactory
 
-from aiida_epw.data import DosData
+from aiida_epw.data import DosData, PDosData
 
 
 def test_dos_data_roundtrip():
@@ -92,3 +92,59 @@ def test_dos_serialization_factories(files_path):
     node_str = DosData.from_string(content)
     assert isinstance(node_str, DosData)
     assert node_str.get_energy().tolist() == node_file.get_energy().tolist()
+
+
+def test_pdos_data_roundtrip():
+    """Test storing and retrieving projected DOS data."""
+    node = PDosData()
+    node.set_pdos_data(
+        frequency=[0.1, 0.2],
+        phdos=[1.0, 2.0],
+        projected_phdos=[[0.1, 0.2], [0.3, 0.4]],
+    )
+
+    assert node.get_frequency().tolist() == [0.1, 0.2]
+    assert node.get_phdos().tolist() == [1.0, 2.0]
+    assert node.get_projected_phdos().tolist() == [[0.1, 0.2], [0.3, 0.4]]
+
+
+def test_pdos_data_validates_shape_contract():
+    """Test invalid PDosData shapes are rejected."""
+    node = PDosData()
+
+    with pytest.raises(exceptions.ValidationError):
+        node.set_pdos_data(
+            frequency=[0.1, 0.2],
+            phdos=[1.0],  # Mismatched length
+            projected_phdos=[[0.1, 0.2], [0.3, 0.4]],
+        )
+
+    with pytest.raises(exceptions.ValidationError):
+        node.set_pdos_data(
+            frequency=[0.1, 0.2],
+            phdos=[1.0, 2.0],
+            projected_phdos=[[0.1], [0.2], [0.3]],  # Mismatched length and shape
+        )
+
+
+def test_pdos_data_entry_point():
+    """Test that PDosData is registered under entry points."""
+    assert DataFactory("epw.pdos") is PDosData
+
+
+def test_pdos_data_serialization_factories(files_path):
+    """Test PDosData.from_file and from_string classmethods."""
+    phdos_proj_file = files_path / "tools" / "parsers" / "a2f" / "aiida.phdos_proj"
+
+    # Test from_file
+    node_file = PDosData.from_file(phdos_proj_file)
+    assert isinstance(node_file, PDosData)
+    assert node_file.get_frequency().shape == (500,)
+    assert node_file.get_phdos().shape == (500,)
+    assert node_file.get_projected_phdos().shape == (500, 3)
+
+    # Test from_string
+    content = phdos_proj_file.read_text(encoding="utf-8")
+    node_str = PDosData.from_string(content)
+    assert isinstance(node_str, PDosData)
+    assert node_str.get_frequency().tolist() == node_file.get_frequency().tolist()

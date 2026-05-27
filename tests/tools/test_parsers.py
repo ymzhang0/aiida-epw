@@ -8,6 +8,7 @@ their parsed output.
 from pathlib import Path
 
 import numpy
+import pytest
 
 from aiida_epw.tools import parsers
 
@@ -120,14 +121,16 @@ def test_parse_epw_a2f_proj(files_path: Path):
 
     assert set(parsed) == {
         "frequency",
-        "a2f_proj",
-        "total_label",
-        "projected_label",
+        "a2f",
+        "projected_a2f",
+        "lambda_int",
+        "lambda_sum",
     }
     assert parsed["frequency"].shape == (500,)
-    assert parsed["a2f_proj"].shape == (500, 4)
-    assert parsed["total_label"] == "a2f"
-    assert parsed["projected_label"] == "a2f_modeproj"
+    assert parsed["a2f"].shape == (500,)
+    assert parsed["projected_a2f"].shape == (500, 3)
+    assert parsed["lambda_int"] == pytest.approx(1.9917789)
+    assert parsed["lambda_sum"] == pytest.approx(1.9853134)
 
 
 def test_parse_epw_phdos_proj(files_path: Path):
@@ -139,14 +142,12 @@ def test_parse_epw_phdos_proj(files_path: Path):
 
     assert set(parsed) == {
         "frequency",
-        "phdos_proj",
-        "total_label",
-        "projected_label",
+        "phdos",
+        "projected_phdos",
     }
     assert parsed["frequency"].shape == (500,)
-    assert parsed["phdos_proj"].shape == (500, 4)
-    assert parsed["total_label"] == "phdos[states/meV]"
-    assert parsed["projected_label"] == "phdos_modeproj[states/meV]"
+    assert parsed["phdos"].shape == (500,)
+    assert parsed["projected_phdos"].shape == (500, 3)
 
 
 def test_parse_epw_lambda_fs():

@@ -1,5 +1,6 @@
 """Helpers for tracing workflow parent folders."""
 
+
 def _filter_essential_parameters(params):
     """
     Only keep essential physical parameters for strict comparison.
@@ -7,10 +8,10 @@ def _filter_essential_parameters(params):
     """
     # 这里定义你认为必须绝对一致的参数（白名单）
     essential_keys = {
-        'SYSTEM': ['smearing', 'degauss', 'ecutwfc', 'ecutrho'],
-        'ELECTRONS': ['conv_thr']
+        "SYSTEM": ["smearing", "degauss", "ecutwfc", "ecutrho"],
+        "ELECTRONS": ["conv_thr"],
     }
-    
+
     filtered = {}
     for namelist, keys in essential_keys.items():
         if namelist in params:
@@ -19,12 +20,13 @@ def _filter_essential_parameters(params):
             for key in keys:
                 if key in params[namelist]:
                     extracted_namelist[key] = params[namelist][key]
-            
+
             # 只有当提取出实质内容时，才放入最终的比对字典中
             if extracted_namelist:
                 filtered[namelist] = extracted_namelist
-                
+
     return filtered
+
 
 def _normalize_structure_component(value):
     """Normalize nested structure data for tolerant equality checks."""
@@ -102,18 +104,18 @@ def _pseudos_signature(pseudos):
 
 def structures_match(left, right) -> bool:
     """Return whether two ``StructureData`` nodes describe the same structure."""
-    left_signature = {
-        "cell": _normalize_structure_component(left.cell),
-        "pbc": tuple(bool(value) for value in left.pbc),
-        "kinds": _normalize_structure_component(left.base.attributes.get("kinds", [])),
-        "sites": _normalize_structure_component(left.base.attributes.get("sites", [])),
-    }
-    right_signature = {
-        "cell": _normalize_structure_component(right.cell),
-        "pbc": tuple(bool(value) for value in right.pbc),
-        "kinds": _normalize_structure_component(right.base.attributes.get("kinds", [])),
-        "sites": _normalize_structure_component(right.base.attributes.get("sites", [])),
-    }
+    # left_signature = {
+    #     "cell": _normalize_structure_component(left.cell),
+    #     "pbc": tuple(bool(value) for value in left.pbc),
+    #     "kinds": _normalize_structure_component(left.base.attributes.get("kinds", [])),
+    #     "sites": _normalize_structure_component(left.base.attributes.get("sites", [])),
+    # }
+    # right_signature = {
+    #     "cell": _normalize_structure_component(right.cell),
+    #     "pbc": tuple(bool(value) for value in right.pbc),
+    #     "kinds": _normalize_structure_component(right.base.attributes.get("kinds", [])),
+    #     "sites": _normalize_structure_component(right.base.attributes.get("sites", [])),
+    # }
     return left.uuid == right.uuid
 
 
@@ -124,7 +126,9 @@ def get_parent_folder_calculation(parent_folder):
     while True:
         creator = current_node.creator
         if creator is None:
-            raise ValueError(f"The provided node {current_node} does not have a creator.")
+            raise ValueError(
+                f"The provided node {current_node} does not have a creator."
+            )
 
         if creator.process_label == "move_stash":
             current_node = creator.inputs.stash_data
@@ -167,7 +171,7 @@ def get_parent_ph_calculation(parent_folder_ph):
 
 def get_parent_ph_qpoints(parent_folder_ph):
     """Return the q-point mesh associated with a phonon parent folder."""
-    calculation = get_parent_folder_calculation(parent_folder_ph)
+    calculation = get_parent_ph_calculation(parent_folder_ph)
     qpoints = getattr(calculation.inputs, "qpoints", None)
 
     if qpoints is None:
@@ -177,18 +181,18 @@ def get_parent_ph_qpoints(parent_folder_ph):
 
     return qpoints
 
+
 def get_parent_ph_qpoint_ibz_count(parent_folder_ph):
     """Return the number of irreducible q-points that need to be staged from `ph.x`."""
 
     calculation = get_parent_folder_calculation(parent_folder_ph)
     qibz_ar = []
-    for key, value in sorted(
-        calculation.outputs.output_parameters.get_dict().items()
-    ):
+    for key, value in sorted(calculation.outputs.output_parameters.get_dict().items()):
         if key.startswith("dynamical_matrix_"):
             qibz_ar.append(value["q_point"])
 
     return len(qibz_ar)
+
 
 def get_parent_ph_pw_calculation(parent_folder_ph):
     """Return the original ``PwCalculation`` behind a phonon parent folder."""
@@ -223,7 +227,7 @@ def validate_parent_ph_inputs(
     """Validate a phonon parent folder against the target EPW inputs."""
     qpoints = get_parent_ph_qpoints(parent_folder_ph)
     parent_pw_calculation = get_parent_ph_pw_calculation(parent_folder_ph)
-    print('Found parent PW calculation:', parent_pw_calculation.pk)
+    print("Found parent PW calculation:", getattr(parent_pw_calculation, "pk", None))
     parent_structure = getattr(parent_pw_calculation.inputs, "structure", None)
     if parent_structure is None:
         raise ValueError(
@@ -260,11 +264,13 @@ def validate_parent_ph_inputs(
             current_dict = _filter_essential_parameters(
                 _normalize_structure_component(_as_plain_mapping(scf_parameters))
             )
-            
+
             # 3. 只比对这些核心物理量
             if parent_dict != current_dict:
                 # 为了后续排错方便，我们甚至可以把不一样的地方打印出来
-                mismatches.append(f"SCF pw.parameters mismatch in essential keys (Parent: {parent_dict} vs Current: {current_dict})")
+                mismatches.append(
+                    f"SCF pw.parameters mismatch in essential keys (Parent: {parent_dict} vs Current: {current_dict})"
+                )
 
     if scf_pseudos is not None:
         parent_pseudos = getattr(parent_pw_calculation.inputs, "pseudos", None)
@@ -305,9 +311,11 @@ def format_subprocess_failure(node, process_label=None):
 
     return message
 
+
 def get_target_basepath(computer):
     """Set the target basepath for the stash folder."""
     from pathlib import Path
+
     if computer.transport_type == "core.local":
         target_basepath = Path(computer.get_workdir(), "stash").as_posix()
     elif computer.transport_type.startswith("core.ssh"):
@@ -317,13 +325,18 @@ def get_target_basepath(computer):
             if not username:
                 try:
                     from aiida.orm import User
+
                     auth_info = computer.get_authinfo(User.objects.get_default())
                     username = auth_info.get_auth_params().get("username")
                 except Exception:
                     pass
             if not username:
-                raise ValueError(f"Could not determine username to format workdir for computer '{computer.label}'")
-            target_basepath = Path(workdir.format(username=username), "stash").as_posix()
+                raise ValueError(
+                    f"Could not determine username to format workdir for computer '{computer.label}'"
+                )
+            target_basepath = Path(
+                workdir.format(username=username), "stash"
+            ).as_posix()
         else:
             target_basepath = Path(workdir, "stash").as_posix()
     else:

@@ -87,3 +87,73 @@ class DosData(orm.ArrayData):
 
         content = Path(filepath).read_text(encoding="utf-8")
         return cls.from_string(content)
+
+
+class PDosData(orm.ArrayData):
+    """Store the EPW projected DOS table with semantic getters."""
+
+    ARRAY_FREQUENCY = "frequency"
+    ARRAY_PHDOS = "phdos"
+    ARRAY_PROJECTED_PHDOS = "projected_phdos"
+
+    def set_pdos_data(self, frequency, phdos, projected_phdos):
+        """Store the projected DOS arrays."""
+        frequency = numpy.array(frequency, dtype=float)
+        phdos = numpy.array(phdos, dtype=float)
+        projected_phdos = numpy.array(projected_phdos, dtype=float)
+
+        if frequency.ndim != 1:
+            raise exceptions.ValidationError(
+                "`frequency` must be a one-dimensional array."
+            )
+        if phdos.ndim != 1:
+            raise exceptions.ValidationError("`phdos` must be a one-dimensional array.")
+        if projected_phdos.ndim != 2:
+            raise exceptions.ValidationError(
+                "`projected_phdos` must be a two-dimensional array."
+            )
+        if (
+            frequency.shape[0] != phdos.shape[0]
+            or frequency.shape[0] != projected_phdos.shape[0]
+        ):
+            raise exceptions.ValidationError(
+                "Arrays `frequency`, `phdos`, and `projected_phdos` must have the same length."
+            )
+
+        self.set_array(self.ARRAY_FREQUENCY, frequency)
+        self.set_array(self.ARRAY_PHDOS, phdos)
+        self.set_array(self.ARRAY_PROJECTED_PHDOS, projected_phdos)
+
+    def get_frequency(self):
+        """Return the frequency array."""
+        return self.get_array(self.ARRAY_FREQUENCY)
+
+    def get_phdos(self):
+        """Return the total phonon DOS array."""
+        return self.get_array(self.ARRAY_PHDOS)
+
+    def get_projected_phdos(self):
+        """Return the projected phonon DOS array."""
+        return self.get_array(self.ARRAY_PROJECTED_PHDOS)
+
+    @classmethod
+    def from_string(cls, content):
+        """Instantiate a `PDosData` node from `.phdos_proj` string content."""
+        from aiida_epw.tools.parsers import parse_epw_phdos_proj
+
+        parsed = parse_epw_phdos_proj(content)
+        node = cls()
+        node.set_pdos_data(
+            frequency=parsed["frequency"],
+            phdos=parsed["phdos"],
+            projected_phdos=parsed["projected_phdos"],
+        )
+        return node
+
+    @classmethod
+    def from_file(cls, filepath):
+        """Instantiate a `PDosData` node from a `.phdos_proj` file."""
+        from pathlib import Path
+
+        content = Path(filepath).read_text(encoding="utf-8")
+        return cls.from_string(content)
