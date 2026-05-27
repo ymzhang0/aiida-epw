@@ -17,6 +17,7 @@ from aiida_epw.data import (
     LambdaKPairsData,
     ProjectedSpectrumData,
 )
+from aiida_epw.parsers.schemas import REGEX_PATTERNS_LEGACY, REGEX_PATTERNS_MODERN
 
 
 class EpwParser(BaseParser):
@@ -222,162 +223,22 @@ class EpwParser(BaseParser):
         """Parse the ``stdout``."""
 
         def parse_max_eigenvalue(stdout_block):
-            re_pattern = re.compile(
-                r"\s+([\d\.]+)\s+([\d\.-]+)\s+\d+\s+[\d\.]+\s+\d+\n"
-            )
-            parsing_block = stdout_block.split(
-                "Finish: Solving (isotropic) linearized Eliashberg"
-            )[0]
+            from aiida_epw.tools.parsers import parse_epw_max_eigenvalue
+
+            parsed_max_ev = parse_epw_max_eigenvalue(stdout_block)
             max_eigenvalue_array = orm.XyData()
             max_eigenvalue_array.set_array(
                 "max_eigenvalue",
-                numpy.array(re_pattern.findall(parsing_block), dtype=float),
+                parsed_max_ev["max_eigenvalue"],
             )
             return max_eigenvalue_array
 
-        if code_version < Version("5.9"):
-            data_type_regex = (
-                (
-                    "Allen_Dynes_Tc",
-                    float,
-                    re.compile(r"\s+Estimated Allen-Dynes Tc =\s+([\d\.]+) K"),
-                ),
-                (
-                    "fermi_energy_coarse",
-                    float,
-                    re.compile(r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"),
-                ),
-            )
-        else:
-            data_type_regex = (
-                ("nbndsub", int, re.compile(r"nbndsub\s*=\s*(\d+)")),
-                (
-                    "ws_vectors_electrons",
-                    int,
-                    re.compile(r"^\s*Number of WS vectors for electrons\s+(\d+)"),
-                ),
-                (
-                    "ws_vectors_phonons",
-                    int,
-                    re.compile(r"^\s*Number of WS vectors for phonons\s+(\d+)"),
-                ),
-                (
-                    "ws_vectors_electron_phonon",
-                    int,
-                    re.compile(r"^\s*Number of WS vectors for electron-phonon\s+(\d+)"),
-                ),
-                (
-                    "max_cores_parallelization",
-                    int,
-                    re.compile(
-                        r"^\s*Maximum number of cores for efficient parallelization\s+(\d+)"
-                    ),
-                ),
-                ("ibndmin", int, re.compile(r"ibndmin\s*=\s*(\d+)")),
-                (
-                    "ebndmin",
-                    float,
-                    re.compile(r"ebndmin\s*=\s*([+-]?[\d\.]+)"),
-                ),
-                ("ibndmax", int, re.compile(r"ibndmax\s*=\s*(\d+)")),
-                (
-                    "ebndmax",
-                    float,
-                    re.compile(r"ebndmax\s*=\s*([+-]?[\d\.]+)"),
-                ),
-                # ('nbnd_skip', int, re.compile(r'^\s*Skipping the first\s+(\d+)\s+bands:')),
-                (
-                    "nbnd_skip",
-                    int,
-                    re.compile(r"^\s*Skipping\s+(\d+)\s+occupied bands:"),
-                ),
-                (
-                    "fermi_energy_coarse",
-                    float,
-                    re.compile(r"^\s*Fermi energy coarse grid =\s*([+-]?[\d\.]+)\s+eV"),
-                ),
-                (
-                    "fermi_energy_fine",
-                    float,
-                    re.compile(
-                        r"^\s*Fermi energy is calculated from the fine k-mesh: Ef =\s*([+-]?[\d\.]+)\s+eV"
-                    ),
-                ),
-                (
-                    "fine_q_mesh",
-                    lambda m: [int(x) for x in m.split()],
-                    re.compile(r"^\s*Using uniform q-mesh:\s+((?:\d+\s*)+)"),
-                ),
-                (
-                    "fine_k_mesh",
-                    lambda m: [int(x) for x in m.split()],
-                    re.compile(r"^\s*Using uniform k-mesh:\s+((?:\d+\s*)+)"),
-                ),
-                (
-                    "fermi_level",
-                    lambda s: float(s.replace("D", "E").replace("d", "E")),
-                    re.compile(r"Fermi level \(eV\)\s*=\s*([\d\.D+-]+)"),
-                ),
-                (
-                    "DOS",
-                    lambda s: float(s.replace("D", "E").replace("d", "E")),
-                    re.compile(r"DOS\(states/spin/eV/Unit Cell\)\s*=\s*([\d\.D+-]+)"),
-                ),
-                (
-                    "electron_smearing",
-                    lambda s: float(s.replace("D", "E").replace("d", "E")),
-                    re.compile(r"Electron smearing \(eV\)\s*=\s*([\d\.D+-]+)"),
-                ),
-                (
-                    "fermi_window",
-                    lambda s: float(s.replace("D", "E").replace("d", "E")),
-                    re.compile(r"Fermi window \(eV\)\s*=\s*([\d\.D+-]+)"),
-                ),
-                (
-                    "lambda",
-                    float,
-                    re.compile(r"Electron-phonon coupling strength\s*=\s*([\d\.]+)"),
-                ),
-                # For EPW > 6.0
-                # ('Allen_Dynes_Tc', float, re.compile(r'Estimated Allen-Dynes Tc\s*=\s*([\d\.]+) K for muc')),
-                (
-                    "McMillan_Tc",
-                    float,
-                    re.compile(
-                        r"Estimated Tc using McMillan expression\s*=\s*([\d\.]+) K for muc"
-                    ),
-                ),
-                (
-                    "Allen_Dynes_Tc",
-                    float,
-                    re.compile(
-                        r"Estimated Tc using Allen-Dynes modified McMillan expression\s*=\s*([\d\.]+) K"
-                    ),
-                ),
-                (
-                    "SISSO_Tc",
-                    float,
-                    re.compile(
-                        r"Estimated Tc using SISSO machine learning model\s*=\s*([\d\.]+) K"
-                    ),
-                ),
-                ("muc", float, re.compile(r"for muc\s*=\s*([\d\.]+)")),
-                # ('w_log', float, re.compile(r'Estimated w_log in Allen-Dynes Tc\s*=\s*([\d\.]+) meV')),
-                (
-                    "w_log",
-                    float,
-                    re.compile(r"Estimated w_log\s*=\s*([\d\.]+) meV"),
-                ),
-                # ('BCS_gap', float, re.compile(r'Estimated BCS superconducting gap\s*=\s*([\d\.]+) meV')),
-                (
-                    "BCS_gap",
-                    float,
-                    re.compile(
-                        r"Estimated BCS superconducting gap using McMillan Tc\s*=\s*([\d\.]+) meV"
-                    ),
-                ),
-                # ('ML_tc', float, re.compile(r'Estimated Tc from machine learning model\s*=\s*([\d\.]+) K')),
-            )
+        patterns = (
+            REGEX_PATTERNS_LEGACY
+            if code_version < Version("5.9")
+            else REGEX_PATTERNS_MODERN
+        )
+
         data_block_marker_parser = (
             (
                 "max_eigenvalue",
@@ -389,10 +250,10 @@ class EpwParser(BaseParser):
         stdout_lines = stdout.split("\n")
 
         for line_number, line in enumerate(stdout_lines):
-            for data_key, type, re_pattern in data_type_regex:
-                match = re.search(re_pattern, line)
+            for entry in patterns:
+                match = entry.pattern.search(line)
                 if match:
-                    parsed_data[data_key] = type(match.group(1))
+                    parsed_data[entry.key] = entry.type_func(match.group(1))
 
             for (
                 data_key,
@@ -400,7 +261,9 @@ class EpwParser(BaseParser):
                 block_parser,
             ) in data_block_marker_parser:
                 if data_marker in line:
-                    parsed_data[data_key] = block_parser(stdout[line_number:])
+                    parsed_data[data_key] = block_parser(
+                        "\n".join(stdout_lines[line_number:])
+                    )
 
         return parsed_data, logs
 
