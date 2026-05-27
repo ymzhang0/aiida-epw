@@ -61,3 +61,30 @@ def test_projected_spectrum_validates_shape_contract():
 def test_projected_spectrum_entry_point():
     """Test the datatype is registered through ``aiida.data``."""
     assert DataFactory("epw.projected_spectrum") is ProjectedSpectrumData
+
+
+def test_projected_spectrum_serialization_factories(files_path):
+    """Test ProjectedSpectrumData serialization methods."""
+    a2f_proj_file = files_path / "tools" / "parsers" / "a2f" / "aiida.a2f_proj"
+
+    # Test from_a2f_proj with file path
+    node_a2f = ProjectedSpectrumData.from_a2f_proj(a2f_proj_file)
+    assert isinstance(node_a2f, ProjectedSpectrumData)
+    assert node_a2f.kind == "a2f_proj"
+    assert node_a2f.get_grid().shape[0] == 500
+    assert node_a2f.get_series().shape == (500, 4)
+
+    phdos_proj_file = files_path / "tools" / "parsers" / "a2f" / "aiida.phdos_proj"
+
+    # Test from_phdos_proj with file path
+    node_phdos = ProjectedSpectrumData.from_phdos_proj(phdos_proj_file)
+    assert isinstance(node_phdos, ProjectedSpectrumData)
+    assert node_phdos.kind == "phdos_proj"
+    assert node_phdos.get_grid().shape[0] == 500
+    assert node_phdos.get_series().shape == (500, 4)
+
+    # Test generic from_string
+    content = a2f_proj_file.read_text(encoding="utf-8")
+    node_str = ProjectedSpectrumData.from_string(content, kind="a2f_proj")
+    assert node_str.kind == "a2f_proj"
+    assert node_str.get_grid().shape[0] == 500

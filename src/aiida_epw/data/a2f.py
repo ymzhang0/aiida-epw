@@ -40,13 +40,21 @@ class A2fData(orm.ArrayData):
             cumulative_lambda = numpy.array(cumulative_lambda, dtype=float)
 
         if frequency.ndim != 1:
-            raise exceptions.ValidationError("`frequency` must be a one-dimensional array.")
+            raise exceptions.ValidationError(
+                "`frequency` must be a one-dimensional array."
+            )
         if spectrum.ndim != 2:
-            raise exceptions.ValidationError("`spectrum` must be a two-dimensional array.")
+            raise exceptions.ValidationError(
+                "`spectrum` must be a two-dimensional array."
+            )
         if lambda_values.ndim != 1:
-            raise exceptions.ValidationError("`lambda_values` must be a one-dimensional array.")
+            raise exceptions.ValidationError(
+                "`lambda_values` must be a one-dimensional array."
+            )
         if phonon_smearing.ndim != 1:
-            raise exceptions.ValidationError("`phonon_smearing` must be a one-dimensional array.")
+            raise exceptions.ValidationError(
+                "`phonon_smearing` must be a one-dimensional array."
+            )
         if spectrum.shape[0] != frequency.shape[0]:
             raise exceptions.ValidationError(
                 "The first spectrum dimension must match the frequency grid length."
@@ -153,3 +161,30 @@ class A2fData(orm.ArrayData):
         """Delete an optional array if it exists."""
         if name in self.get_arraynames():
             self.delete_array(name)
+
+    @classmethod
+    def from_string(cls, content):
+        """Instantiate and populate an `A2fData` node directly from `.a2f` string content."""
+        from aiida_epw.tools.parsers import parse_epw_a2f
+
+        parsed = parse_epw_a2f(content)
+        node = cls()
+        node.set_a2f_data(
+            frequency=parsed["frequency"],
+            spectrum=parsed["a2f"],
+            lambda_values=parsed["lambda"],
+            phonon_smearing=parsed["phonon_smearing"],
+            cumulative_lambda=parsed.get("cumulative_lambda"),
+            electron_smearing=parsed.get("electron_smearing"),
+            fermi_window=parsed.get("fermi_window"),
+            summed_elph_coupling=parsed.get("summed_elph_coupling"),
+        )
+        return node
+
+    @classmethod
+    def from_file(cls, filepath):
+        """Instantiate and populate an `A2fData` node directly from a `.a2f` file."""
+        from pathlib import Path
+
+        content = Path(filepath).read_text(encoding="utf-8")
+        return cls.from_string(content)

@@ -69,3 +69,26 @@ def test_a2f_data_validates_shape_contract():
 def test_a2f_data_entry_point():
     """Test the datatype is registered through ``aiida.data``."""
     assert DataFactory("epw.a2f") is A2fData
+
+
+def test_a2f_data_serialization_factories(files_path):
+    """Test A2fData.from_file and from_string classmethods."""
+    a2f_file = files_path / "tools" / "parsers" / "a2f" / "aiida.a2f"
+
+    # Test from_file
+    node_file = A2fData.from_file(a2f_file)
+    assert isinstance(node_file, A2fData)
+    assert node_file.get_frequency().shape == (500,)
+    assert node_file.get_spectrum().shape == (500, 10)
+    assert node_file.get_cumulative_lambda().shape == (500, 10)
+    assert node_file.get_lambda().shape == (10,)
+    assert node_file.get_phonon_smearing().shape == (10,)
+    assert node_file.electron_smearing == pytest.approx(0.05)
+    assert node_file.fermi_window == pytest.approx(0.8)
+    assert node_file.summed_elph_coupling == pytest.approx(1.9853134)
+
+    # Test from_string
+    content = a2f_file.read_text(encoding="utf-8")
+    node_str = A2fData.from_string(content)
+    assert isinstance(node_str, A2fData)
+    assert node_str.get_frequency().tolist() == node_file.get_frequency().tolist()

@@ -17,15 +17,6 @@ from aiida_epw.data import (
     LambdaKPairsData,
     ProjectedSpectrumData,
 )
-from aiida_epw.tools.parsers import (
-    parse_epw_a2f,
-    parse_epw_a2f_proj,
-    parse_epw_imag_aniso_gap0,
-    parse_epw_imag_iso,
-    parse_epw_lambda_fs,
-    parse_epw_lambda_k_pairs,
-    parse_epw_phdos_proj,
-)
 
 
 class EpwParser(BaseParser):
@@ -86,7 +77,10 @@ class EpwParser(BaseParser):
         scheduler_stderr = self.node.get_scheduler_stderr()
 
         # Preserve scheduler walltime failures instead of overriding them with parser-side stdout errors.
-        if self.node.exit_status == self.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status:
+        if (
+            self.node.exit_status
+            == self.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status
+        ):
             return self.exit(logs=logs)
 
         if (
@@ -107,7 +101,9 @@ class EpwParser(BaseParser):
         )
         parsed_data.update(parsed_epw)
 
-        elbands_contents = self.get_retrieved_content(EpwCalculation._output_elbands_file)
+        elbands_contents = self.get_retrieved_content(
+            EpwCalculation._output_elbands_file
+        )
         if elbands_contents is not None:
             self.out(
                 "el_band_structure",
@@ -116,7 +112,9 @@ class EpwParser(BaseParser):
                 ),
             )
 
-        phbands_contents = self.get_retrieved_content(EpwCalculation._output_phbands_file)
+        phbands_contents = self.get_retrieved_content(
+            EpwCalculation._output_phbands_file
+        )
         if phbands_contents is not None:
             self.out(
                 "ph_band_structure",
@@ -127,13 +125,20 @@ class EpwParser(BaseParser):
 
         a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
         if a2f_contents is not None:
-            a2f_data, parsed_a2f = self.parse_a2f(a2f_contents)
+            a2f_data = A2fData.from_string(a2f_contents)
             self.out("a2f", a2f_data)
-            parsed_data.update(parsed_a2f)
+            parsed_data.update(
+                {
+                    "degaussw": a2f_data.electron_smearing,
+                    "fsthick": a2f_data.fermi_window,
+                }
+            )
 
         dos_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_DOS_FILE,
-            Path(EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE).as_posix(),
+            Path(
+                EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE
+            ).as_posix(),
         )
         if dos_contents is not None:
             self.out("dos", self.parse_dos(dos_contents))
@@ -146,19 +151,21 @@ class EpwParser(BaseParser):
             EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
         )
         if phdos_proj_contents is not None:
-            self.out("phdos_proj", self.parse_phdos_proj(phdos_proj_contents))
+            self.out(
+                "phdos_proj", ProjectedSpectrumData.from_phdos_proj(phdos_proj_contents)
+            )
 
         a2f_proj_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_A2F_PROJ_FILE
         )
         if a2f_proj_contents is not None:
-            self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
+            self.out("a2f_proj", ProjectedSpectrumData.from_a2f_proj(a2f_proj_contents))
 
         lambda_FS_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_LAMBDA_FS_FILE
         )
         if lambda_FS_contents is not None:
-            self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
+            self.out("lambda_FS", LambdaFSData.from_string(lambda_FS_contents))
 
         lambda_k_pairs_contents = self.get_retrieved_content(
             EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
@@ -166,7 +173,7 @@ class EpwParser(BaseParser):
         if lambda_k_pairs_contents is not None:
             self.out(
                 "lambda_k_pairs",
-                self.parse_lambda_k_pairs(lambda_k_pairs_contents),
+                LambdaKPairsData.from_string(lambda_k_pairs_contents),
             )
 
         iso_gap_filecontents = self.get_retrieved_contents_matching(
@@ -175,7 +182,9 @@ class EpwParser(BaseParser):
         if iso_gap_filecontents:
             self.out(
                 "iso_gap_functions",
-                self.parse_iso_gap_functions(iso_gap_filecontents),
+                GapFunctionData.from_files(
+                    iso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="iso"
+                ),
             )
 
         aniso_gap_filecontents = self.get_retrieved_contents_matching(
@@ -184,7 +193,9 @@ class EpwParser(BaseParser):
         if aniso_gap_filecontents:
             self.out(
                 "aniso_gap_functions",
-                self.parse_aniso_gap_functions(aniso_gap_filecontents),
+                GapFunctionData.from_files(
+                    aniso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="aniso"
+                ),
             )
 
         if "max_eigenvalue" in parsed_data:
@@ -394,62 +405,6 @@ class EpwParser(BaseParser):
         return parsed_data, logs
 
     @staticmethod
-    def parse_a2f(content):
-        """Parse the contents of the `.a2f` file."""
-        parsed_a2f = parse_epw_a2f(content)
-
-        a2f_data = A2fData()
-        a2f_data.set_a2f_data(
-            frequency=parsed_a2f["frequency"],
-            spectrum=parsed_a2f["a2f"],
-            lambda_values=parsed_a2f["lambda"],
-            phonon_smearing=parsed_a2f["phonon_smearing"],
-            electron_smearing=parsed_a2f.get("electron_smearing"),
-            fermi_window=parsed_a2f.get("fermi_window"),
-            summed_elph_coupling=parsed_a2f.get("summed_elph_coupling"),
-        )
-
-        parsed_data = {
-            "degaussw": parsed_a2f["electron_smearing"],
-            "fsthick": parsed_a2f["fermi_window"],
-        }
-        return a2f_data, parsed_data
-
-    @staticmethod
-    def parse_iso_gap_functions(file_contents):
-        """Parse isotropic gap-function files into a typed datatype."""
-        gap_functions = parse_epw_imag_iso(file_contents, prefix=EpwCalculation._PREFIX)
-        gap_function_data = GapFunctionData()
-        gap_function_data.set_gap_functions(gap_functions, kind="iso")
-        return gap_function_data
-
-    @staticmethod
-    def parse_aniso_gap_functions(file_contents):
-        """Parse anisotropic gap-function files into a typed datatype."""
-        gap_functions = parse_epw_imag_aniso_gap0(
-            file_contents, prefix=EpwCalculation._PREFIX
-        )
-        gap_function_data = GapFunctionData()
-        gap_function_data.set_gap_functions(gap_functions, kind="aniso")
-        return gap_function_data
-
-    @staticmethod
-    def parse_a2f_proj(content):
-        """Parse the contents of the `.a2f_proj` file."""
-        parsed_spectrum = parse_epw_a2f_proj(content)
-        return EpwParser.create_projected_spectrum_data(
-            grid=parsed_spectrum["frequency"],
-            series=parsed_spectrum["a2f_proj"],
-            kind="a2f_proj",
-            grid_name="frequency",
-            series_name="a2f_proj",
-            total_label=parsed_spectrum["total_label"],
-            projected_label=parsed_spectrum["projected_label"],
-            legacy_grid_name="frequency",
-            legacy_series_name="a2f_proj",
-        )
-
-    @staticmethod
     def parse_bands(content, kpoints_data, units):
         """Parse the contents of a band structure file."""
         nbnd, nks = (
@@ -517,47 +472,6 @@ class EpwParser(BaseParser):
         return phdos_xydata
 
     @staticmethod
-    def parse_phdos_proj(content):
-        """Parse the contents of the `.phdos_proj` file."""
-        parsed_spectrum = parse_epw_phdos_proj(content)
-        return EpwParser.create_projected_spectrum_data(
-            grid=parsed_spectrum["frequency"],
-            series=parsed_spectrum["phdos_proj"],
-            kind="phdos_proj",
-            grid_name="frequency",
-            series_name="phdos_proj",
-            total_label=parsed_spectrum["total_label"],
-            projected_label=parsed_spectrum["projected_label"],
-            legacy_grid_name="Frequency",
-            legacy_series_name="PHDOS_proj",
-        )
-
-    @staticmethod
-    def parse_lambda_FS(content):
-        """Parse the contents of the `.lambda_FS` file."""
-        parsed_lambda_fs = parse_epw_lambda_fs(content)
-        lambda_fs_data = LambdaFSData()
-        lambda_fs_data.set_lambda_fs(
-            kpoints=parsed_lambda_fs["kpoints"],
-            bands=parsed_lambda_fs["band"],
-            energies=parsed_lambda_fs["energy"],
-            couplings=parsed_lambda_fs["lambda"],
-            energy_units=parsed_lambda_fs["energy_units"],
-        )
-        return lambda_fs_data
-
-    @staticmethod
-    def parse_lambda_k_pairs(content):
-        """Parse the contents of the `.lambda_k_pairs` file."""
-        parsed_lambda_k_pairs = parse_epw_lambda_k_pairs(content)
-        lambda_k_pairs_data = LambdaKPairsData()
-        lambda_k_pairs_data.set_lambda_k_pairs(
-            lambda_nk=parsed_lambda_k_pairs["lambda_nk"],
-            rho=parsed_lambda_k_pairs["rho"],
-        )
-        return lambda_k_pairs_data
-
-    @staticmethod
     def parse_gap_function(content, skiprows=0):
         """Parse the contents of the `gap_function.dat` file."""
         import io
@@ -567,31 +481,3 @@ class EpwParser(BaseParser):
         )
 
         return gap_function
-
-    @staticmethod
-    def create_projected_spectrum_data(
-        *,
-        grid,
-        series,
-        kind,
-        grid_name,
-        series_name,
-        total_label,
-        projected_label,
-        legacy_grid_name,
-        legacy_series_name,
-    ):
-        """Construct a typed projected spectrum from parsed arrays and labels."""
-        projected_spectrum = ProjectedSpectrumData()
-        projected_spectrum.set_projected_spectrum(
-            grid=grid,
-            series=series,
-            kind=kind,
-            grid_name=grid_name,
-            series_name=series_name,
-            total_label=total_label,
-            projected_label=projected_label,
-            legacy_grid_name=legacy_grid_name,
-            legacy_series_name=legacy_series_name,
-        )
-        return projected_spectrum

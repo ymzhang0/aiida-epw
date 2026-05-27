@@ -32,3 +32,15 @@ def test_lambda_k_pairs_validates_shape_contract():
 def test_lambda_k_pairs_entry_point():
     """Test the datatype is registered through ``aiida.data``."""
     assert DataFactory("epw.lambda_k_pairs") is LambdaKPairsData
+
+
+def test_lambda_k_pairs_serialization_factories():
+    """Test LambdaKPairsData.from_file and from_string classmethods."""
+    content = """# lambda_nk rho
+ 0.1000 1.5000
+ 0.2000 2.5000
+"""
+    node = LambdaKPairsData.from_string(content)
+    assert isinstance(node, LambdaKPairsData)
+    assert node.get_lambda_nk().tolist() == [0.1, 0.2]
+    assert node.get_rho().tolist() == [1.5, 2.5]

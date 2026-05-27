@@ -13,10 +13,6 @@ from aiida.plugins.entry_point import (
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
-    GapFunctionData,
-    LambdaFSData,
-    LambdaKPairsData,
-    ProjectedSpectrumData,
 )
 from aiida_epw.parsers.epw import EpwParser
 
@@ -117,77 +113,6 @@ def test_epw_reads_dos_from_output_subfolder(aiida_localhost, files_path):
     assert "IDOS" in results["dos"].get_arraynames()
 
 
-def test_parse_a2f_supports_non_default_grid_lengths():
-    """Test that `.a2f` parsing does not assume a fixed number of spectral rows."""
-    content = """w[meV] a2f and integrated 2*a2f/w for   2 smearing values
-   0.1000000   1.0000000   2.0000000
-   0.2000000   3.0000000   4.0000000
- Integrated el-ph coupling
-  #            0.1000000   0.2000000
- Phonon smearing (meV)
-  #            0.5000000   0.6000000
-Electron smearing (eV)   0.0500000
-Fermi window (eV)   0.8000000
-"""
-
-    a2f, parsed = EpwParser.parse_a2f(content)
-
-    assert isinstance(a2f, A2fData)
-    assert a2f.get_array("frequency").tolist() == [0.1, 0.2]
-    assert a2f.get_array("a2f").tolist() == [[1.0, 2.0], [3.0, 4.0]]
-    assert a2f.get_array("lambda").tolist() == [0.1, 0.2]
-    assert a2f.get_array("degaussq").tolist() == [0.5, 0.6]
-    assert a2f.electron_smearing == pytest.approx(0.05)
-    assert a2f.fermi_window == pytest.approx(0.8)
-    assert parsed == {"degaussw": 0.05, "fsthick": 0.8}
-
-
-def test_parse_a2f_proj_returns_typed_data(files_path):
-    """Test the projected a2F parser returns `ProjectedSpectrumData`."""
-    content = (files_path / "tools" / "parsers" / "a2f" / "aiida.a2f_proj").read_text()
-
-    a2f_proj = EpwParser.parse_a2f_proj(content)
-
-    assert isinstance(a2f_proj, ProjectedSpectrumData)
-    assert a2f_proj.kind == "a2f_proj"
-    assert a2f_proj.grid_name == "frequency"
-    assert a2f_proj.series_name == "a2f_proj"
-    assert a2f_proj.total_label == "a2f"
-    assert a2f_proj.projected_label == "a2f_modeproj"
-    assert a2f_proj.get_grid().shape[0] == 500
-    assert a2f_proj.get_series().shape == (500, 4)
-    assert a2f_proj.get_total().shape == (500,)
-    assert a2f_proj.get_projected().shape == (500, 3)
-    assert a2f_proj.get_array("frequency").shape == (500,)
-    assert a2f_proj.get_array("a2f_proj").shape == (500, 4)
-
-
-def test_parse_phdos_proj_preserves_all_projection_columns():
-    """Test that the projected phonon DOS keeps every projected series."""
-    content = """w[meV] phdos[states/meV] phdos_modeproj[states/meV]
-   0.1000000   1.0000000   2.0000000   3.0000000
-   0.2000000   4.0000000   5.0000000   6.0000000
-"""
-
-    phdos_proj = EpwParser.parse_phdos_proj(content)
-
-    assert isinstance(phdos_proj, ProjectedSpectrumData)
-    assert phdos_proj.total_label == "phdos[states/meV]"
-    assert phdos_proj.projected_label == "phdos_modeproj[states/meV]"
-    assert phdos_proj.get_grid().tolist() == [0.1, 0.2]
-    assert phdos_proj.get_series().tolist() == [
-        [1.0, 2.0, 3.0],
-        [4.0, 5.0, 6.0],
-    ]
-    assert phdos_proj.get_total().tolist() == [1.0, 4.0]
-    assert phdos_proj.get_projected().tolist() == [[2.0, 3.0], [5.0, 6.0]]
-    assert phdos_proj.get_array("Frequency").tolist() == [0.1, 0.2]
-    assert phdos_proj.get_array("PHDOS_proj").tolist() == [
-        [1.0, 2.0, 3.0],
-        [4.0, 5.0, 6.0],
-    ]
-
-
 def test_parse_phdos_preserves_all_smearing_columns():
     """Test that the total phonon DOS keeps every smearing series."""
     content = """w[meV] phdos[states/meV] for   3 smearing values
@@ -202,43 +127,6 @@ def test_parse_phdos_preserves_all_smearing_columns():
         [1.0, 2.0, 3.0],
         [4.0, 5.0, 6.0],
     ]
-
-
-def test_parse_lambda_fs_returns_typed_data():
-    """Test that `lambda_FS` is parsed into `LambdaFSData`."""
-    content = """# kx ky kz band Enk lambda
- 0.0000 0.1000 0.2000 1 0.3000 0.9000
- 0.5000 0.6000 0.7000 2 0.4000 1.1000
-"""
-
-    lambda_fs = EpwParser.parse_lambda_FS(content)
-
-    assert isinstance(lambda_fs, LambdaFSData)
-    assert lambda_fs.energy_units == "eV"
-    assert lambda_fs.get_kpoints().tolist() == [
-        [0.0, 0.1, 0.2],
-        [0.5, 0.6, 0.7],
-    ]
-    assert lambda_fs.get_bands().tolist() == [1.0, 2.0]
-    assert lambda_fs.get_energies().tolist() == [0.3, 0.4]
-    assert lambda_fs.get_lambda().tolist() == [0.9, 1.1]
-    assert lambda_fs.get_array("Enk").tolist() == [0.3, 0.4]
-
-
-def test_parse_lambda_k_pairs_returns_typed_data():
-    """Test that `lambda_k_pairs` is parsed into `LambdaKPairsData`."""
-    content = """# lambda_nk rho
- 0.1000 1.5000
- 0.2000 2.5000
-"""
-
-    lambda_k_pairs = EpwParser.parse_lambda_k_pairs(content)
-
-    assert isinstance(lambda_k_pairs, LambdaKPairsData)
-    assert lambda_k_pairs.get_lambda_nk().tolist() == [0.1, 0.2]
-    assert lambda_k_pairs.get_rho().tolist() == [1.5, 2.5]
-    assert lambda_k_pairs.get_array("lambda_nk").tolist() == [0.1, 0.2]
-    assert lambda_k_pairs.get_array("rho").tolist() == [1.5, 2.5]
 
 
 def test_epw_calculation_registers_memory_exit_code():
@@ -284,7 +172,10 @@ def test_epw_out_of_walltime(aiida_localhost, tmp_path):
 
     assert calcfunction.is_finished
     assert calcfunction.is_failed
-    assert calcfunction.exit_status == EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME.status
+    assert (
+        calcfunction.exit_status
+        == EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME.status
+    )
     assert "output_parameters" in results
 
 
@@ -298,7 +189,9 @@ def test_epw_preserves_scheduler_out_of_walltime(aiida_localhost, tmp_path):
     )
     node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
     node.base.attributes.set("output_filename", "aiida.out")
-    node.set_exit_status(EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status)
+    node.set_exit_status(
+        EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status
+    )
     node.store()
 
     stdout_path = tmp_path / "aiida.out"
@@ -376,37 +269,3 @@ def test_epw_detects_scheduler_out_of_memory_from_stderr(aiida_localhost, tmp_pa
         calcfunction.exit_status
         == EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY.status
     )
-
-
-def test_parse_iso_gap_functions_returns_typed_data(files_path):
-    """Test isotropic gap-function files are wrapped in `GapFunctionData`."""
-    iso_dir = files_path / "tools" / "parsers" / "full_iso_eliashberg"
-    file_contents = {
-        path.name: path.read_text()
-        for path in sorted(iso_dir.iterdir())
-        if path.is_file()
-    }
-
-    gap_functions = EpwParser.parse_iso_gap_functions(file_contents)
-
-    assert isinstance(gap_functions, GapFunctionData)
-    assert gap_functions.kind == "iso"
-    assert gap_functions.get_temperatures().tolist() == [3.0, 4.0, 5.0]
-    assert gap_functions.get_gap_function(3.0).shape[1] == 3
-
-
-def test_parse_aniso_gap_functions_returns_typed_data(files_path):
-    """Test anisotropic gap-function files are wrapped in `GapFunctionData`."""
-    aniso_dir = files_path / "tools" / "parsers" / "fsr_aniso_eliashberg"
-    file_contents = {
-        path.name: path.read_text()
-        for path in sorted(aniso_dir.iterdir())
-        if path.is_file()
-    }
-
-    gap_functions = EpwParser.parse_aniso_gap_functions(file_contents)
-
-    assert isinstance(gap_functions, GapFunctionData)
-    assert gap_functions.kind == "aniso"
-    assert gap_functions.get_temperatures().tolist() == [3.0, 4.0, 5.0]
-    assert gap_functions.get_gap_function(3.0).shape[1] == 5

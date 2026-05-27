@@ -212,3 +212,40 @@ def test_parse_epw_imag_aniso_gap0(files_path: Path, data_regression):
 
     regression_data = {T: parsed[T].tolist()[:10] for T in sorted(parsed.keys())}
     data_regression.check(regression_data)
+
+
+def test_parser_robust_exception_handling():
+    """Test that robust parsing exception handling throws clear ValueError."""
+    import pytest
+
+    # 1. bands
+    with pytest.raises(ValueError, match="Malformed bands file"):
+        parsers.parse_epw_bands("invalid header content")
+
+    # 2. a2f
+    with pytest.raises(
+        ValueError,
+        match="Malformed .a2f file: Could not parse the number of smearing values",
+    ):
+        parsers.parse_epw_a2f("invalid content")
+
+    with pytest.raises(
+        ValueError, match="Malformed .a2f file: The a2F spectrum table is empty"
+    ):
+        parsers.parse_epw_a2f(
+            " w[meV] a2f and integrated 2*a2f/w for   10 smearing values\n Integrated el-ph coupling"
+        )
+
+    # 3. max_eigenvalue
+    with pytest.raises(
+        ValueError, match="Finish: Solving \\(isotropic\\) linearized Eliashberg"
+    ):
+        parsers.parse_epw_max_eigenvalue("some content")
+
+    # 4. eldos
+    with pytest.raises(ValueError, match="Malformed electronic DOS file"):
+        parsers.parse_epw_eldos("not float content")
+
+    # 5. phdos
+    with pytest.raises(ValueError, match="Malformed phonon DOS file"):
+        parsers.parse_epw_phdos("not float content")
