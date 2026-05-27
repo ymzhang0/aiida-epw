@@ -270,40 +270,18 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_bands(content, kpoints_data, units):
         """Parse the contents of a band structure file."""
-        nbnd, nks = (
-            int(v)
-            for v in re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content).groups()
-        )
-        kpt_pattern = re.compile(r"^\s*([-\d\.]+)\s+([-\d\.]+)\s+([-\d\.]+)\s*$")
-        band_pattern = re.compile(r"\s+([-\d\.]+)" * nbnd)
+        from aiida_epw.tools.parsers import parse_epw_bands
 
-        kpts = []
-        bands = []
-
-        for number, line in enumerate(content.splitlines()):
-            match_kpt = re.search(kpt_pattern, line)
-            if match_kpt and number % 2 == 1:
-                kpts.append(list(match_kpt.groups()))
-
-            match_band = re.search(band_pattern, line)
-            if match_band and number % 2 == 0:
-                bands.append(list(match_band.groups()))
+        parsed = parse_epw_bands(content)
 
         if kpoints_data is None:
-            if len(kpts) != nks:
-                raise ValueError(
-                    "Could not reconstruct the band k-points from the retrieved EPW file."
-                )
-
             kpoints_data = orm.KpointsData()
-            kpoints_data.set_kpoints(numpy.array(kpts, dtype=float))
-
-        bands = numpy.array(bands, dtype=float)
+            kpoints_data.set_kpoints(parsed["kpoints"])
 
         bands_data = orm.BandsData()
         # We should use the KpointsData from the inputs.
         bands_data.set_kpointsdata(kpoints_data)
-        bands_data.set_bands(bands, units=units)
+        bands_data.set_bands(parsed["bands"], units=units)
 
         return bands_data
 
