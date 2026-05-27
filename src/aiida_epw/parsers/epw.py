@@ -3,7 +3,6 @@
 import re
 from pathlib import Path
 
-import numpy
 from aiida import orm
 from aiida_quantumespresso.parsers.base import BaseParser
 from aiida_quantumespresso.utils.mapping import get_logging_container
@@ -288,22 +287,11 @@ class EpwParser(BaseParser):
     @staticmethod
     def parse_phdos(content):
         """Parse the contents of the `.phdos` file."""
-        import io
+        from aiida_epw.tools.parsers import parse_epw_phdos
 
+        parsed = parse_epw_phdos(content)
         phdos_xydata = orm.XyData()
-        phdos = numpy.loadtxt(io.StringIO(content), dtype=float, skiprows=1)
-        phdos_xydata.set_array("Frequency", phdos[:, 0])
-        phdos_xydata.set_array("PHDOS", phdos[:, 1:])
+        phdos_xydata.set_array("Frequency", parsed["frequency"])
+        phdos_xydata.set_array("PHDOS", parsed["phdos"])
 
         return phdos_xydata
-
-    @staticmethod
-    def parse_gap_function(content, skiprows=0):
-        """Parse the contents of the `gap_function.dat` file."""
-        import io
-
-        gap_function = numpy.loadtxt(
-            io.StringIO(content), dtype=float, comments="#", skiprows=skiprows
-        )
-
-        return gap_function
