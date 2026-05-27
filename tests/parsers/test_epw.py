@@ -13,6 +13,7 @@ from aiida.plugins.entry_point import (
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
+    DosData,
 )
 from aiida_epw.parsers.epw import EpwParser
 
@@ -109,6 +110,7 @@ def test_epw_reads_dos_from_output_subfolder(aiida_localhost, files_path):
 
     assert calcfunction.is_finished_ok, calcfunction.exit_message
     assert "dos" in results
+    assert isinstance(results["dos"], DosData)
     assert results["dos"].get_array("EDOS").shape == (160,)
     assert "IDOS" in results["dos"].get_arraynames()
 

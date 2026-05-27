@@ -19,6 +19,7 @@ from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
 from aiida_epw.data import (
     A2fData,
+    DosData,
     GapFunctionData,
     LambdaFSData,
     LambdaKPairsData,
@@ -27,11 +28,13 @@ from aiida_epw.data import (
 
 from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
 
+
 def _lowercase_dict(dictionary, dict_name):
-    return _case_transform_dict(dictionary, dict_name, '_lowercase_dict', str.lower)
+    return _case_transform_dict(dictionary, dict_name, "_lowercase_dict", str.lower)
+
 
 def _uppercase_dict(dictionary, dict_name):
-    return _case_transform_dict(dictionary, dict_name, '_uppercase_dict', str.upper)
+    return _case_transform_dict(dictionary, dict_name, "_uppercase_dict", str.upper)
 
 
 class EpwCalculation(NamelistsCalculation):
@@ -161,7 +164,7 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "dos",
-            valid_type=orm.XyData,
+            valid_type=DosData,
             required=False,
             help="The electron density of states.",
         )
@@ -636,7 +639,9 @@ class EpwCalculation(NamelistsCalculation):
         remote_list.append(
             (
                 parent_folder_chk.computer.uuid,
-                Path(parent_folder_chk.get_remote_path(), f"{self._PREFIX}.mmn").as_posix(),
+                Path(
+                    parent_folder_chk.get_remote_path(), f"{self._PREFIX}.mmn"
+                ).as_posix(),
                 f"{self._PREFIX}.wannier90.mmn",
             )
         )
@@ -720,16 +725,22 @@ class EpwCalculation(NamelistsCalculation):
                         epw_path,
                         f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
                     ).as_posix(),
-                    Path(
-                        f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
-                    ).as_posix(),
+                    Path(f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp").as_posix(),
                 )
             )
 
         if parameters["INPUTEPW"].get("eliashberg", False):
             if parameters["INPUTEPW"].get("ephwrite", True):
                 if parameters["INPUTEPW"].get("restart", False):
-                    file_list = [f"{self._PREFIX}.ukk", "crystal.fmt", "dmedata.fmt", "epwdata.fmt", "restart.fmt", "selecq.fmt", "vmedata.fmt"]
+                    file_list = [
+                        f"{self._PREFIX}.ukk",
+                        "crystal.fmt",
+                        "dmedata.fmt",
+                        "epwdata.fmt",
+                        "restart.fmt",
+                        "selecq.fmt",
+                        "vmedata.fmt",
+                    ]
                     remote_symlink_list.append(
                         (
                             parent_folder_epw.computer.uuid,
@@ -871,7 +882,10 @@ class EpwCalculation(NamelistsCalculation):
         calcinfo.retrieve_temporary_list = self._retrieve_temporary_list
         calcinfo.retrieve_singlefile_list = self._retrieve_singlefile_list
 
-        if "w90_chk_to_ukk_script" in self.inputs and "parent_folder_chk" in self.inputs:
+        if (
+            "w90_chk_to_ukk_script" in self.inputs
+            and "parent_folder_chk" in self.inputs
+        ):
             script = self.inputs.w90_chk_to_ukk_script.get_remote_path()
             command = (
                 f"{script} {self._PREFIX}.chk "

@@ -12,6 +12,7 @@ from packaging.version import Version
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
+    DosData,
     GapFunctionData,
     LambdaFSData,
     LambdaKPairsData,
@@ -142,7 +143,7 @@ class EpwParser(BaseParser):
             ).as_posix(),
         )
         if dos_contents is not None:
-            self.out("dos", self.parse_dos(dos_contents))
+            self.out("dos", DosData.from_string(dos_contents))
 
         phdos_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_PHDOS_FILE)
         if phdos_contents is not None:
@@ -306,21 +307,6 @@ class EpwParser(BaseParser):
         bands_data.set_bands(bands, units=units)
 
         return bands_data
-
-    @staticmethod
-    def parse_dos(content):
-        """Parse the contents of the `.dos` file."""
-        import io
-
-        dos_xydata = orm.XyData()
-        dos = numpy.loadtxt(io.StringIO(content), dtype=float, comments="#")
-
-        dos_xydata.set_array("Energy", dos[:, 0])
-        dos_xydata.set_array("EDOS", dos[:, 1])
-        if dos.shape[1] > 2:
-            dos_xydata.set_array("IDOS", dos[:, 2])
-
-        return dos_xydata
 
     @staticmethod
     def parse_phdos(content):
