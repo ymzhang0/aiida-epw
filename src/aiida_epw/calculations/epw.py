@@ -22,9 +22,9 @@ from aiida_epw.data import (
     PA2fData,
     DosData,
     PDosData,
+    PhDosData,
     GapFunctionData,
     LambdaFSData,
-    LambdaKPairsData,
 )
 
 from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
@@ -171,7 +171,7 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "phdos",
-            valid_type=orm.XyData,
+            valid_type=PhDosData,
             required=False,
             help="The phonon density of states.",
         )
@@ -207,7 +207,7 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "lambda_k_pairs",
-            valid_type=LambdaKPairsData,
+            valid_type=DosData,
             required=False,
             help="The density of the electron-phonon coupling on the k-points.",
         )

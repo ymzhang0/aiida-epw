@@ -11,12 +11,7 @@ from aiida.plugins.entry_point import (
 )
 
 from aiida_epw.calculations.epw import EpwCalculation
-from aiida_epw.data import (
-    A2fData,
-    DosData,
-    PA2fData,
-    PDosData,
-)
+from aiida_epw.data import A2fData, DosData, PA2fData, PDosData, PhDosData
 from aiida_epw.parsers.epw import EpwParser
 
 
@@ -113,24 +108,62 @@ def test_epw_reads_dos_from_output_subfolder(aiida_localhost, files_path):
     assert calcfunction.is_finished_ok, calcfunction.exit_message
     assert "dos" in results
     assert isinstance(results["dos"], DosData)
-    assert results["dos"].get_array("EDOS").shape == (160,)
-    assert "IDOS" in results["dos"].get_arraynames()
+    assert results["dos"].get_array("dos").shape == (160,)
+    assert "integrated_dos" in results["dos"].get_arraynames()
 
 
-def test_parse_phdos_preserves_all_smearing_columns():
+def test_phdos_from_string_preserves_all_smearing_columns():
     """Test that the total phonon DOS keeps every smearing series."""
     content = """w[meV] phdos[states/meV] for   3 smearing values
    0.1000000   1.0000000   2.0000000   3.0000000
    0.2000000   4.0000000   5.0000000   6.0000000
 """
 
-    phdos = EpwParser.parse_phdos(content)
+    phdos = PhDosData.from_string(content)
 
-    assert phdos.get_array("Frequency").tolist() == [0.1, 0.2]
-    assert phdos.get_array("PHDOS").tolist() == [
+    assert isinstance(phdos, PhDosData)
+    assert phdos.get_frequency().tolist() == [0.1, 0.2]
+    assert phdos.get_phdos().tolist() == [
         [1.0, 2.0, 3.0],
         [4.0, 5.0, 6.0],
     ]
+    assert phdos.num_smearings == 3
+
+
+def test_epw_reads_phdos_output(aiida_localhost, files_path):
+    """Test that EpwParser emits ``PhDosData`` for the total phonon DOS."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.store()
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_tree(
+        (files_path / "parsers" / "epw" / "default").as_posix()
+    )
+    retrieved.base.repository.put_object_from_file(
+        (files_path / "tools" / "parsers" / "a2f" / "aiida.phdos").as_posix(),
+        "aiida.phdos",
+    )
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    results, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished_ok, calcfunction.exit_message
+    assert "phdos" in results
+    assert isinstance(results["phdos"], PhDosData)
+    assert results["phdos"].get_frequency().shape == (500,)
+    assert results["phdos"].get_phdos().shape == (500, 10)
+    assert results["phdos"].num_smearings == 10
 
 
 def test_epw_calculation_registers_memory_exit_code():
@@ -321,3 +354,45 @@ def test_epw_reads_projected_outputs(aiida_localhost, files_path):
     assert results["a2f_proj"].get_projected_a2f().shape == (500, 3)
     assert results["a2f_proj"].lambda_int == pytest.approx(1.9917789)
     assert results["a2f_proj"].lambda_sum == pytest.approx(1.9853134)
+
+
+def test_epw_reads_lambda_k_pairs_as_dos(aiida_localhost, files_path):
+    """Test that ``lambda_k_pairs`` is exposed as a generic ``DosData`` node."""
+    parser_entry_point = get_entry_point_string_from_class(
+        class_module=EpwParser.__module__, class_name=EpwParser.__name__
+    )
+    calc_entry_point = format_entry_point_string(
+        group="aiida.calculations", name=parser_entry_point.split(":")[1]
+    )
+
+    node = orm.CalcJobNode(computer=aiida_localhost, process_type=calc_entry_point)
+    node.base.attributes.set("output_filename", "aiida.out")
+    node.store()
+
+    retrieved = orm.FolderData()
+    retrieved.base.repository.put_object_from_tree(
+        (files_path / "parsers" / "epw" / "default").as_posix()
+    )
+    retrieved.base.repository.put_object_from_file(
+        (
+            files_path
+            / "tools"
+            / "parsers"
+            / "fbw_aniso_eliashberg"
+            / "MgB2.lambda_k_pairs"
+        ).as_posix(),
+        "aiida.lambda_k_pairs",
+    )
+    retrieved.base.links.add_incoming(
+        node, link_type=LinkType.CREATE, link_label="retrieved"
+    )
+    retrieved.store()
+
+    results, calcfunction = EpwParser.parse_from_node(node, store_provenance=False)
+
+    assert calcfunction.is_finished_ok, calcfunction.exit_message
+    assert "lambda_k_pairs" in results
+    assert isinstance(results["lambda_k_pairs"], DosData)
+    assert results["lambda_k_pairs"].get_energy().shape == (197,)
+    assert results["lambda_k_pairs"].get_dos().shape == (197,)
+    assert results["lambda_k_pairs"].get_integrated_dos() is None

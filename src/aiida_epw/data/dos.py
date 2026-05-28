@@ -9,34 +9,27 @@ class DosData(orm.ArrayData):
     """Store the EPW electronic DOS table with explicit semantic getters."""
 
     ARRAY_ENERGY = "energy"
-    ARRAY_EDOS = "edos"
+    ARRAY_DOS = "dos"
     ARRAY_INTEGRATED_DOS = "integrated_dos"
 
-    # Legacy array keys for compatibility with generic XyData usages
-    LEGACY_ARRAY_ENERGY = "Energy"
-    LEGACY_ARRAY_EDOS = "EDOS"
-    LEGACY_ARRAY_INTEGRATED_DOS = "IDOS"
-
-    def set_dos_data(self, energy, edos, integrated_dos=None):
+    def set_dos_data(self, energy, dos, integrated_dos=None):
         """Store the electronic DOS arrays."""
         energy = numpy.array(energy, dtype=float)
-        edos = numpy.array(edos, dtype=float)
+        dos = numpy.array(dos, dtype=float)
 
         if energy.ndim != 1:
             raise exceptions.ValidationError(
                 "`energy` must be a one-dimensional array."
             )
-        if edos.ndim != 1:
-            raise exceptions.ValidationError("`edos` must be a one-dimensional array.")
-        if energy.shape[0] != edos.shape[0]:
+        if dos.ndim != 1:
+            raise exceptions.ValidationError("`dos` must be a one-dimensional array.")
+        if energy.shape[0] != dos.shape[0]:
             raise exceptions.ValidationError(
-                "`energy` and `edos` must have the same length."
+                "`energy` and `dos` must have the same length."
             )
 
         self.set_array(self.ARRAY_ENERGY, energy)
-        self.set_array(self.LEGACY_ARRAY_ENERGY, energy)
-        self.set_array(self.ARRAY_EDOS, edos)
-        self.set_array(self.LEGACY_ARRAY_EDOS, edos)
+        self.set_array(self.ARRAY_DOS, dos)
 
         if integrated_dos is not None:
             integrated_dos = numpy.array(integrated_dos, dtype=float)
@@ -49,15 +42,14 @@ class DosData(orm.ArrayData):
                     "`integrated_dos` must have the same length as `energy`."
                 )
             self.set_array(self.ARRAY_INTEGRATED_DOS, integrated_dos)
-            self.set_array(self.LEGACY_ARRAY_INTEGRATED_DOS, integrated_dos)
 
     def get_energy(self):
         """Return the energy array."""
         return self.get_array(self.ARRAY_ENERGY)
 
-    def get_edos(self):
+    def get_dos(self):
         """Return the electronic DOS array."""
-        return self.get_array(self.ARRAY_EDOS)
+        return self.get_array(self.ARRAY_DOS)
 
     def get_integrated_dos(self):
         """Return the integrated electronic DOS array, or None if not set."""
@@ -69,13 +61,18 @@ class DosData(orm.ArrayData):
     @classmethod
     def from_string(cls, content):
         """Instantiate and populate a `DosData` node directly from `.dos` string content."""
-        from aiida_epw.tools.parsers import parse_epw_eldos
+        from aiida_epw.tools.parsers import parse_epw_dos
 
-        parsed = parse_epw_eldos(content)
+        parsed = parse_epw_dos(content)
+        return cls.from_parsed(parsed)
+
+    @classmethod
+    def from_parsed(cls, parsed):
+        """Instantiate and populate a `DosData` node from a parsed mapping."""
         node = cls()
         node.set_dos_data(
             energy=parsed["energy"],
-            edos=parsed["edos"],
+            dos=parsed["dos"],
             integrated_dos=parsed.get("integrated_dos"),
         )
         return node
@@ -83,6 +80,83 @@ class DosData(orm.ArrayData):
     @classmethod
     def from_file(cls, filepath):
         """Instantiate and populate a `DosData` node directly from a `.dos` file."""
+        from pathlib import Path
+
+        content = Path(filepath).read_text(encoding="utf-8")
+        return cls.from_string(content)
+
+
+class PhDosData(orm.ArrayData):
+    """Store the EPW phonon DOS table together with the number of smearings."""
+
+    ARRAY_FREQUENCY = "frequency"
+    ARRAY_PHDOS = "phdos"
+    ATTRIBUTE_NUM_SMEARINGS = "num_smearings"
+
+    # Legacy array keys for compatibility with generic XyData usages
+    LEGACY_ARRAY_FREQUENCY = "Frequency"
+    LEGACY_ARRAY_PHDOS = "PHDOS"
+
+    def set_phdos_data(self, frequency, phdos, num_smearings=None):
+        """Store the phonon DOS arrays."""
+        frequency = numpy.array(frequency, dtype=float)
+        phdos = numpy.array(phdos, dtype=float)
+
+        if frequency.ndim != 1:
+            raise exceptions.ValidationError(
+                "`frequency` must be a one-dimensional array."
+            )
+        if phdos.ndim != 2:
+            raise exceptions.ValidationError("`phdos` must be a two-dimensional array.")
+        if frequency.shape[0] != phdos.shape[0]:
+            raise exceptions.ValidationError(
+                "The first phdos dimension must match the frequency grid length."
+            )
+
+        inferred_num_smearings = phdos.shape[1]
+        if num_smearings is None:
+            num_smearings = inferred_num_smearings
+        elif int(num_smearings) != inferred_num_smearings:
+            raise exceptions.ValidationError(
+                "`num_smearings` must match the number of phdos columns."
+            )
+
+        self.set_array(self.ARRAY_FREQUENCY, frequency)
+        self.set_array(self.LEGACY_ARRAY_FREQUENCY, frequency)
+        self.set_array(self.ARRAY_PHDOS, phdos)
+        self.set_array(self.LEGACY_ARRAY_PHDOS, phdos)
+        self.base.attributes.set(self.ATTRIBUTE_NUM_SMEARINGS, int(num_smearings))
+
+    def get_frequency(self):
+        """Return the frequency array."""
+        return self.get_array(self.ARRAY_FREQUENCY)
+
+    def get_phdos(self):
+        """Return the phonon DOS array for all smearings."""
+        return self.get_array(self.ARRAY_PHDOS)
+
+    @property
+    def num_smearings(self):
+        """Return the number of smearing values encoded in the file header."""
+        return self.base.attributes.get(self.ATTRIBUTE_NUM_SMEARINGS)
+
+    @classmethod
+    def from_string(cls, content):
+        """Instantiate and populate a `PhDosData` node directly from `.phdos` string content."""
+        from aiida_epw.tools.parsers import parse_epw_phdos
+
+        parsed = parse_epw_phdos(content)
+        node = cls()
+        node.set_phdos_data(
+            frequency=parsed["frequency"],
+            phdos=parsed["phdos"],
+            num_smearings=parsed["num_smearings"],
+        )
+        return node
+
+    @classmethod
+    def from_file(cls, filepath):
+        """Instantiate and populate a `PhDosData` node directly from a `.phdos` file."""
         from pathlib import Path
 
         content = Path(filepath).read_text(encoding="utf-8")

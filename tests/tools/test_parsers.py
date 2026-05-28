@@ -79,18 +79,18 @@ def test_parse_epw_max_eigenvalue(files_path: Path, data_regression):
     data_regression.check(regression_data)
 
 
-def test_parse_epw_eldos(files_path: Path, data_regression):
+def test_parse_epw_dos(files_path: Path, data_regression):
     """Parse an existing ``aiida.dos`` file and regress on the DOS arrays."""
     dos_path = files_path / "tools" / "parsers" / "a2f" / "aiida.dos"
     content = dos_path.read_text()
 
-    parsed = parsers.parse_epw_eldos(content)
+    parsed = parsers.parse_epw_dos(content)
 
-    assert set(parsed.keys()) == {"energy", "edos", "integrated_dos"}
+    assert set(parsed.keys()) == {"energy", "dos", "integrated_dos"}
 
     regression_data = {
         "energy": parsed["energy"].tolist()[:10],
-        "edos": parsed["edos"].tolist()[:10],
+        "dos": parsed["dos"].tolist()[:10],
         "integrated_dos": parsed["integrated_dos"].tolist()[:10],
     }
     data_regression.check(regression_data)
@@ -103,9 +103,10 @@ def test_parse_epw_phdos(files_path: Path, data_regression):
 
     parsed = parsers.parse_epw_phdos(content)
 
-    assert set(parsed.keys()) == {"frequency", "phdos"}
+    assert set(parsed.keys()) == {"frequency", "phdos", "num_smearings"}
 
     regression_data = {
+        "num_smearings": parsed["num_smearings"],
         "frequency": parsed["frequency"].tolist()[:10],
         "phdos": parsed["phdos"].tolist()[:10],
     }
@@ -175,8 +176,25 @@ def test_parse_epw_lambda_k_pairs():
 
     parsed = parsers.parse_epw_lambda_k_pairs(content)
 
-    assert parsed["lambda_nk"].tolist() == [0.1, 0.2]
-    assert parsed["rho"].tolist() == [1.5, 2.5]
+    assert parsed["energy"].tolist() == [0.1, 0.2]
+    assert parsed["dos"].tolist() == [1.5, 2.5]
+    assert parsed["integrated_dos"] is None
+
+
+def test_parse_epw_lambda_pairs(files_path: Path):
+    """Parse a real ``lambda_pairs`` file as a DOS-like distribution."""
+    lambda_pairs_path = (
+        files_path / "tools" / "parsers" / "fbw_aniso_eliashberg" / "MgB2.lambda_pairs"
+    )
+    content = lambda_pairs_path.read_text()
+
+    parsed = parsers.parse_epw_lambda_pairs(content)
+
+    assert parsed["energy"].shape == (599,)
+    assert parsed["dos"].shape == (599,)
+    assert parsed["integrated_dos"] is None
+    assert parsed["energy"][0] == pytest.approx(0.0)
+    assert parsed["dos"][0] == pytest.approx(0.029540468306)
 
 
 def test_parse_epw_imag_iso(files_path: Path, data_regression):
@@ -245,8 +263,14 @@ def test_parser_robust_exception_handling():
 
     # 4. eldos
     with pytest.raises(ValueError, match="Malformed electronic DOS file"):
-        parsers.parse_epw_eldos("not float content")
+        parsers.parse_epw_dos("not float content")
 
     # 5. phdos
     with pytest.raises(ValueError, match="Malformed phonon DOS file"):
         parsers.parse_epw_phdos("not float content")
+
+    with pytest.raises(
+        ValueError,
+        match="Could not parse the number of smearing values from the header",
+    ):
+        parsers.parse_epw_phdos("w[meV] phdos[states/meV]\n0.1 1.0")

@@ -147,7 +147,7 @@ def parse_epw_max_eigenvalue(file_content):
     return parsed_data
 
 
-def parse_epw_eldos(file_content):
+def parse_epw_dos(file_content):
     """Parse the contents of the electronic DOS file produced by EPW."""
     try:
         dos = numpy.loadtxt(io.StringIO(file_content), dtype=float, comments="#")
@@ -161,17 +161,28 @@ def parse_epw_eldos(file_content):
         dos = dos[numpy.newaxis, :]
     if dos.shape[1] < 2:
         raise ValueError(
-            "Malformed electronic DOS file: Expected at least 2 columns (Energy, EDOS)."
+            "Malformed electronic DOS file: Expected at least 2 columns (Energy, DOS)."
         )
     return {
         "energy": dos[:, 0],
-        "edos": dos[:, 1],
+        "dos": dos[:, 1],
         "integrated_dos": dos[:, 2] if dos.shape[1] > 2 else None,
     }
 
 
 def parse_epw_phdos(file_content):
     """Parse the contents of the phonon DOS file produced by EPW."""
+    lines = file_content.splitlines()
+    if not lines:
+        raise ValueError("Malformed phonon DOS file: The file is empty.")
+
+    smearing_match = re.search(r"for\s+(\d+)\s+smearing", lines[0])
+    if not smearing_match:
+        raise ValueError(
+            "Malformed phonon DOS file: Could not parse the number of smearing values from the header."
+        )
+    num_smearings = int(smearing_match.group(1))
+
     try:
         phdos = numpy.loadtxt(io.StringIO(file_content), dtype=float, skiprows=1)
     except Exception as exc:
@@ -186,9 +197,16 @@ def parse_epw_phdos(file_content):
         raise ValueError(
             "Malformed phonon DOS file: Expected at least 2 columns (Frequency, PHDOS)."
         )
+    expected_num_columns = 1 + num_smearings
+    if phdos.shape[1] != expected_num_columns:
+        raise ValueError(
+            "Malformed phonon DOS file: "
+            f"Expected {expected_num_columns} columns for {num_smearings} smearing values, got {phdos.shape[1]}."
+        )
     return {
         "frequency": phdos[:, 0],
         "phdos": phdos[:, 1:],
+        "num_smearings": num_smearings,
     }
 
 
@@ -278,19 +296,34 @@ def parse_epw_lambda_fs(file_content):
 
 def parse_epw_lambda_k_pairs(file_content):
     """Parse the contents of the `.lambda_k_pairs` file."""
+    return _parse_epw_lambda_distribution(
+        file_content, ".lambda_k_pairs", x_key="energy", y_key="dos"
+    )
+
+
+def parse_epw_lambda_pairs(file_content):
+    """Parse the contents of the `.lambda_pairs` file."""
+    return _parse_epw_lambda_distribution(
+        file_content, ".lambda_pairs", x_key="energy", y_key="dos"
+    )
+
+
+def _parse_epw_lambda_distribution(file_content, file_label, *, x_key, y_key):
+    """Parse lambda-distribution tables into a DOS-like two-column mapping."""
     try:
-        lambda_k_pairs = _load_numeric_table(file_content, comments="#")
+        table = _load_numeric_table(file_content, comments="#")
     except Exception as exc:
         raise ValueError(
-            f"Malformed .lambda_k_pairs file: Failed to parse numeric table: {exc}"
+            f"Malformed {file_label} file: Failed to parse numeric table: {exc}"
         ) from exc
-    if lambda_k_pairs.shape[1] < 2:
+    if table.shape[1] < 2:
         raise ValueError(
-            f"Malformed .lambda_k_pairs file: Expected at least 2 columns, got {lambda_k_pairs.shape[1]}."
+            f"Malformed {file_label} file: Expected at least 2 columns, got {table.shape[1]}."
         )
     return {
-        "lambda_nk": lambda_k_pairs[:, 0],
-        "rho": lambda_k_pairs[:, 1],
+        x_key: table[:, 0],
+        y_key: table[:, 1],
+        "integrated_dos": None,
     }
 
 

@@ -4,7 +4,7 @@ import pytest
 from aiida.common import exceptions
 from aiida.plugins import DataFactory
 
-from aiida_epw.data import DosData, PDosData
+from aiida_epw.data import DosData, PDosData, PhDosData
 
 
 def test_dos_data_roundtrip():
@@ -12,18 +12,13 @@ def test_dos_data_roundtrip():
     node = DosData()
     node.set_dos_data(
         energy=[10.0, 11.0, 12.0],
-        edos=[0.5, 1.2, 0.8],
+        dos=[0.5, 1.2, 0.8],
         integrated_dos=[0.05, 0.17, 0.25],
     )
 
     assert node.get_energy().tolist() == [10.0, 11.0, 12.0]
-    assert node.get_edos().tolist() == [0.5, 1.2, 0.8]
+    assert node.get_dos().tolist() == [0.5, 1.2, 0.8]
     assert node.get_integrated_dos().tolist() == [0.05, 0.17, 0.25]
-
-    # Test legacy aliases for compatibility with XyData usages
-    assert node.get_array("Energy").tolist() == [10.0, 11.0, 12.0]
-    assert node.get_array("EDOS").tolist() == [0.5, 1.2, 0.8]
-    assert node.get_array("IDOS").tolist() == [0.05, 0.17, 0.25]
 
 
 def test_dos_data_optional_integrated_dos():
@@ -31,16 +26,16 @@ def test_dos_data_optional_integrated_dos():
     node = DosData()
     node.set_dos_data(
         energy=[10.0, 11.0, 12.0],
-        edos=[0.5, 1.2, 0.8],
+        dos=[0.5, 1.2, 0.8],
     )
 
     assert node.get_energy().tolist() == [10.0, 11.0, 12.0]
-    assert node.get_edos().tolist() == [0.5, 1.2, 0.8]
+    assert node.get_dos().tolist() == [0.5, 1.2, 0.8]
     assert node.get_integrated_dos() is None
 
-    # Verify IDOS KeyError behaves compatibly with get_integrated_dos helper
+    # Verify the optional array is absent when not stored.
     with pytest.raises(KeyError):
-        node.get_array("IDOS")
+        node.get_array("integrated_dos")
 
 
 def test_dos_data_validates_shape_contract():
@@ -51,14 +46,14 @@ def test_dos_data_validates_shape_contract():
     with pytest.raises(exceptions.ValidationError):
         node.set_dos_data(
             energy=[10.0, 11.0],
-            edos=[0.5, 1.2, 0.8],
+            dos=[0.5, 1.2, 0.8],
         )
 
     # Inconsistent integrated_dos length
     with pytest.raises(exceptions.ValidationError):
         node.set_dos_data(
             energy=[10.0, 11.0, 12.0],
-            edos=[0.5, 1.2, 0.8],
+            dos=[0.5, 1.2, 0.8],
             integrated_dos=[0.05, 0.17],
         )
 
@@ -66,7 +61,7 @@ def test_dos_data_validates_shape_contract():
     with pytest.raises(exceptions.ValidationError):
         node.set_dos_data(
             energy=[[10.0]],
-            edos=[0.5],
+            dos=[0.5],
         )
 
 
@@ -83,7 +78,7 @@ def test_dos_serialization_factories(files_path):
     node_file = DosData.from_file(dos_file)
     assert isinstance(node_file, DosData)
     assert node_file.get_energy().shape == (160,)
-    assert node_file.get_edos().shape == (160,)
+    assert node_file.get_dos().shape == (160,)
     assert node_file.get_integrated_dos().shape == (160,)
     assert node_file.get_energy()[0] == pytest.approx(10.871190406)
 
@@ -92,6 +87,67 @@ def test_dos_serialization_factories(files_path):
     node_str = DosData.from_string(content)
     assert isinstance(node_str, DosData)
     assert node_str.get_energy().tolist() == node_file.get_energy().tolist()
+
+
+def test_phdos_data_roundtrip():
+    """Test storing and retrieving a phonon DOS dataset."""
+    node = PhDosData()
+    node.set_phdos_data(
+        frequency=[0.1, 0.2],
+        phdos=[[1.0, 2.0], [3.0, 4.0]],
+        num_smearings=2,
+    )
+
+    assert node.get_frequency().tolist() == [0.1, 0.2]
+    assert node.get_phdos().tolist() == [[1.0, 2.0], [3.0, 4.0]]
+    assert node.num_smearings == 2
+    assert node.get_array("Frequency").tolist() == [0.1, 0.2]
+    assert node.get_array("PHDOS").tolist() == [[1.0, 2.0], [3.0, 4.0]]
+
+
+def test_phdos_data_validates_shape_contract():
+    """Test invalid PhDosData payloads are rejected."""
+    node = PhDosData()
+
+    with pytest.raises(exceptions.ValidationError):
+        node.set_phdos_data(
+            frequency=[0.1, 0.2],
+            phdos=[1.0, 2.0],
+        )
+
+    with pytest.raises(exceptions.ValidationError):
+        node.set_phdos_data(
+            frequency=[0.1, 0.2],
+            phdos=[[1.0, 2.0]],
+        )
+
+    with pytest.raises(exceptions.ValidationError):
+        node.set_phdos_data(
+            frequency=[0.1, 0.2],
+            phdos=[[1.0, 2.0], [3.0, 4.0]],
+            num_smearings=3,
+        )
+
+
+def test_phdos_data_entry_point():
+    """Test that PhDosData is registered under entry points."""
+    assert DataFactory("epw.phdos") is PhDosData
+
+
+def test_phdos_data_serialization_factories(files_path):
+    """Test PhDosData.from_file and from_string classmethods."""
+    phdos_file = files_path / "tools" / "parsers" / "a2f" / "aiida.phdos"
+
+    node_file = PhDosData.from_file(phdos_file)
+    assert isinstance(node_file, PhDosData)
+    assert node_file.get_frequency().shape == (500,)
+    assert node_file.get_phdos().shape == (500, 10)
+    assert node_file.num_smearings == 10
+
+    content = phdos_file.read_text(encoding="utf-8")
+    node_str = PhDosData.from_string(content)
+    assert isinstance(node_str, PhDosData)
+    assert node_str.get_frequency().tolist() == node_file.get_frequency().tolist()
 
 
 def test_pdos_data_roundtrip():

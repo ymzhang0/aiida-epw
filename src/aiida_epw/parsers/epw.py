@@ -14,9 +14,9 @@ from aiida_epw.data import (
     DosData,
     GapFunctionData,
     LambdaFSData,
-    LambdaKPairsData,
     PA2fData,
     PDosData,
+    PhDosData,
 )
 from aiida_epw.parsers.schemas import REGEX_PATTERNS_LEGACY, REGEX_PATTERNS_MODERN
 
@@ -136,45 +136,42 @@ class EpwParser(BaseParser):
                 }
             )
 
-        dos_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_DOS_FILE,
-            Path(
-                EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE
-            ).as_posix(),
-        )
-        if dos_contents is not None:
-            self.out("dos", DosData.from_string(dos_contents))
-
-        phdos_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_PHDOS_FILE)
-        if phdos_contents is not None:
-            self.out("phdos", self.parse_phdos(phdos_contents))
-
-        phdos_proj_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
-        )
-        if phdos_proj_contents is not None:
-            self.out("phdos_proj", PDosData.from_string(phdos_proj_contents))
-
-        a2f_proj_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_A2F_PROJ_FILE
-        )
-        if a2f_proj_contents is not None:
-            self.out("a2f_proj", PA2fData.from_string(a2f_proj_contents))
-
-        lambda_FS_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_LAMBDA_FS_FILE
-        )
-        if lambda_FS_contents is not None:
-            self.out("lambda_FS", LambdaFSData.from_string(lambda_FS_contents))
-
-        lambda_k_pairs_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
-        )
-        if lambda_k_pairs_contents is not None:
-            self.out(
+        # Declarative specification for standard retrieved array output files
+        standard_outputs = [
+            (
+                [
+                    EpwCalculation._OUTPUT_DOS_FILE,
+                    Path(
+                        EpwCalculation._OUTPUT_SUBFOLDER,
+                        EpwCalculation._OUTPUT_DOS_FILE,
+                    ).as_posix(),
+                ],
+                "dos",
+                DosData.from_string,
+            ),
+            ([EpwCalculation._OUTPUT_PHDOS_FILE], "phdos", PhDosData.from_string),
+            (
+                [EpwCalculation._OUTPUT_PHDOS_PROJ_FILE],
+                "phdos_proj",
+                PDosData.from_string,
+            ),
+            ([EpwCalculation._OUTPUT_A2F_PROJ_FILE], "a2f_proj", PA2fData.from_string),
+            (
+                [EpwCalculation._OUTPUT_LAMBDA_FS_FILE],
+                "lambda_FS",
+                LambdaFSData.from_string,
+            ),
+            (
+                [EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE],
                 "lambda_k_pairs",
-                LambdaKPairsData.from_string(lambda_k_pairs_contents),
-            )
+                self.parse_lambda_k_pairs,
+            ),
+        ]
+
+        for paths, link_label, parser_func in standard_outputs:
+            contents = self.get_retrieved_content(*paths)
+            if contents is not None:
+                self.out(link_label, parser_func(contents))
 
         iso_gap_filecontents = self.get_retrieved_contents_matching(
             re.compile(rf"{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
@@ -285,13 +282,8 @@ class EpwParser(BaseParser):
         return bands_data
 
     @staticmethod
-    def parse_phdos(content):
-        """Parse the contents of the `.phdos` file."""
-        from aiida_epw.tools.parsers import parse_epw_phdos
+    def parse_lambda_k_pairs(content):
+        """Parse ``.lambda_k_pairs`` content into a generic DOS-style dataset."""
+        from aiida_epw.tools.parsers import parse_epw_lambda_k_pairs
 
-        parsed = parse_epw_phdos(content)
-        phdos_xydata = orm.XyData()
-        phdos_xydata.set_array("Frequency", parsed["frequency"])
-        phdos_xydata.set_array("PHDOS", parsed["phdos"])
-
-        return phdos_xydata
+        return DosData.from_parsed(parse_epw_lambda_k_pairs(content))
