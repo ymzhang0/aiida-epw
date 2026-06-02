@@ -393,6 +393,87 @@ def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
     return parsed_data
 
 
+def parse_aniso_FS(file_content):
+    """Parse the contents of the `imag_aniso_gap_FS` file.
+
+    :param file_content: the string content of the `imag_aniso_gap_FS` file.
+    :returns: dictionary containing arrays classified by the 4th column 'Band', and their units.
+    """
+    try:
+        data = _load_numeric_table(file_content, comments="#")
+    except Exception as exc:
+        raise ValueError(
+            f"Malformed imag_aniso_gap_FS file: Failed to parse numeric table: {exc}"
+        ) from exc
+
+    if data.shape[1] < 6:
+        raise ValueError(
+            f"Malformed imag_aniso_gap_FS file: Expected at least 6 columns, got {data.shape[1]}."
+        )
+
+    parsed_data = {}
+    bands = data[:, 3].astype(int)
+    unique_bands = numpy.unique(bands)
+
+    for band in unique_bands:
+        band_mask = bands == band
+        band_data = data[band_mask]
+        parsed_data[int(band)] = {
+            "kpoints": band_data[:, :3],
+            "energy": band_data[:, 4],
+            "delta": band_data[:, 5],
+        }
+
+    parsed_data["units"] = {
+        "kpoints": "crystal",
+        "energy": "eV",
+        "delta": "meV",
+    }
+    return parsed_data
+
+
+def parse_aniso(file_content):
+    """Parse the contents of the `imag_aniso` file.
+
+    :param file_content: the string content of the `imag_aniso` file.
+    :returns: dictionary containing arrays classified by the 1st column 'w', and their units.
+    """
+    try:
+        data = _load_numeric_table(file_content, comments="#")
+    except Exception as exc:
+        raise ValueError(
+            f"Malformed imag_aniso file: Failed to parse numeric table: {exc}"
+        ) from exc
+
+    if data.shape[1] < 5:
+        raise ValueError(
+            f"Malformed imag_aniso file: Expected at least 5 columns, got {data.shape[1]}."
+        )
+
+    parsed_data = {}
+    frequencies = data[:, 0]
+    unique_frequencies = numpy.unique(frequencies)
+
+    for w in unique_frequencies:
+        mask = frequencies == w
+        subset = data[mask]
+        parsed_data[float(w)] = {
+            "energy": subset[:, 1],
+            "znorm": subset[:, 2],
+            "delta": subset[:, 3],
+            "shift": subset[:, 4],
+        }
+
+    parsed_data["units"] = {
+        "frequency": "eV",
+        "energy": "eV",
+        "znorm": "",
+        "delta": "eV",
+        "shift": "eV",
+    }
+    return parsed_data
+
+
 def _load_numeric_table(file_content, **kwargs):
     """Load a numeric table from in-memory text and preserve 2D shape for single-row tables."""
     table = numpy.loadtxt(io.StringIO(file_content), dtype=float, **kwargs)

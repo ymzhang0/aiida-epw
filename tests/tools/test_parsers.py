@@ -233,6 +233,100 @@ def test_parse_epw_imag_aniso_gap0(files_path: Path, data_regression):
     data_regression.check(regression_data)
 
 
+def test_parse_aniso_FS(files_path: Path):
+    """Parse a real anisotropic gap FS file."""
+    gap_fs_path = (
+        files_path
+        / "tools"
+        / "parsers"
+        / "fbw_aniso_eliashberg"
+        / "MgB2.imag_aniso_gap_FS_015.00"
+    )
+    content = gap_fs_path.read_text()
+
+    parsed = parsers.parse_aniso_FS(content)
+
+    assert "units" in parsed
+    assert parsed["units"] == {
+        "kpoints": "crystal",
+        "energy": "eV",
+        "delta": "meV",
+    }
+
+    # Verify band 1 and band 2 are present
+    assert 1 in parsed
+    assert 2 in parsed
+
+    # Verify shapes
+    assert parsed[1]["kpoints"].ndim == 2
+    assert parsed[1]["kpoints"].shape[1] == 3
+    assert parsed[1]["energy"].ndim == 1
+    assert parsed[1]["delta"].ndim == 1
+
+    assert parsed[2]["kpoints"].ndim == 2
+    assert parsed[2]["kpoints"].shape[1] == 3
+    assert parsed[2]["energy"].ndim == 1
+    assert parsed[2]["delta"].ndim == 1
+
+    # Verify first row values for band 1
+    #     0.000000    0.000000    0.000000       1    0.347134      15.005356995134328
+    assert parsed[1]["kpoints"][0].tolist() == [0.0, 0.0, 0.0]
+    assert parsed[1]["energy"][0] == pytest.approx(0.347134)
+    assert parsed[1]["delta"][0] == pytest.approx(15.005356995134328)
+
+    # Verify first row values for band 2
+    #     0.000000    0.000000    0.000000       2    0.347134      15.005356995134328
+    assert parsed[2]["kpoints"][0].tolist() == [0.0, 0.0, 0.0]
+    assert parsed[2]["energy"][0] == pytest.approx(0.347134)
+    assert parsed[2]["delta"][0] == pytest.approx(15.005356995134328)
+
+
+def test_parse_aniso(files_path: Path):
+    """Parse a real anisotropic Eliashberg imag_aniso file."""
+    gap_path = (
+        files_path
+        / "tools"
+        / "parsers"
+        / "fbw_aniso_eliashberg"
+        / "MgB2.imag_aniso_015.00"
+    )
+    content = gap_path.read_text()
+
+    parsed = parsers.parse_aniso(content)
+
+    assert "units" in parsed
+    assert parsed["units"] == {
+        "frequency": "eV",
+        "energy": "eV",
+        "znorm": "",
+        "delta": "eV",
+        "shift": "eV",
+    }
+
+    # Verify a few frequency keys exist (e.g. the first one: 4.0608226305e-03)
+    f1 = 4.0608226305e-03
+    assert f1 in parsed
+
+    snapshot = parsed[f1]
+    assert snapshot["energy"].ndim == 1
+    assert snapshot["znorm"].ndim == 1
+    assert snapshot["delta"].ndim == 1
+    assert snapshot["shift"].ndim == 1
+
+    # Equal lengths
+    n_kpts = snapshot["energy"].shape[0]
+    assert snapshot["znorm"].shape[0] == n_kpts
+    assert snapshot["delta"].shape[0] == n_kpts
+    assert snapshot["shift"].shape[0] == n_kpts
+
+    # Verify first row values of f1
+    # 4.0608226305E-03    3.4713418718E-01    2.3199673459E+00    1.5005356995E-02    3.3472332952E-03
+    assert snapshot["energy"][0] == pytest.approx(0.34713418718)
+    assert snapshot["znorm"][0] == pytest.approx(2.3199673459)
+    assert snapshot["delta"][0] == pytest.approx(15.005356995e-3)
+    assert snapshot["shift"][0] == pytest.approx(3.3472332952e-3)
+
+
 def test_parser_robust_exception_handling():
     """Test that robust parsing exception handling throws clear ValueError."""
     import pytest
@@ -274,3 +368,11 @@ def test_parser_robust_exception_handling():
         match="Could not parse the number of smearing values from the header",
     ):
         parsers.parse_epw_phdos("w[meV] phdos[states/meV]\n0.1 1.0")
+
+    # 6. imag_aniso_gap_FS
+    with pytest.raises(ValueError, match="Malformed imag_aniso_gap_FS file"):
+        parsers.parse_aniso_FS("not float content")
+
+    # 7. imag_aniso
+    with pytest.raises(ValueError, match="Malformed imag_aniso file"):
+        parsers.parse_aniso("not float content")
