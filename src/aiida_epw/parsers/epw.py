@@ -28,7 +28,7 @@ from aiida_epw.tools.parsers import (
     parse_epw_max_eigenvalue,
     parse_epw_phdos,
     parse_epw_phdos_proj,
-    parse_aniso_FS,
+    parse_aniso_gap_FS,
     parse_aniso,
 )
 
@@ -162,17 +162,23 @@ class EpwParser(BaseParser):
                 self.parse_aniso_gap_functions(self.retrieved),
             )
 
-        aniso_gap_fs_contents = self.get_retrieved_content(
-            f"{EpwCalculation._PREFIX}.imag_aniso_gap_FS"
+        aniso_gap_fs_pattern = re.compile(
+            rf"^{EpwCalculation._PREFIX}\.imag_aniso_gap_FS_\d+\.\d+$"
         )
-        if aniso_gap_fs_contents is not None:
-            self.out("aniso_gap_FS", self.parse_aniso_gap_fs(aniso_gap_fs_contents))
+        if self.retrieved and any(
+            aniso_gap_fs_pattern.match(name)
+            for name in self.retrieved.list_object_names()
+        ):
+            self.out("aniso_gap_FS", self.parse_aniso_gap_fs(self.retrieved))
 
-        aniso_gap_imag_contents = self.get_retrieved_content(
-            f"{EpwCalculation._PREFIX}.imag_aniso"
+        aniso_imag_pattern = re.compile(
+            rf"^{EpwCalculation._PREFIX}\.imag_aniso_\d+\.\d+$"
         )
-        if aniso_gap_imag_contents is not None:
-            self.out("aniso_gap_imag", self.parse_aniso_imag(aniso_gap_imag_contents))
+        if self.retrieved and any(
+            aniso_imag_pattern.match(name)
+            for name in self.retrieved.list_object_names()
+        ):
+            self.out("aniso_gap_imag", self.parse_aniso_imag(self.retrieved))
 
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
@@ -412,36 +418,68 @@ class EpwParser(BaseParser):
         return gap_function_data
 
     @staticmethod
-    def parse_aniso_gap_fs(content):
-        """Parse the imag_aniso_gap_FS file contents into an ArrayData node."""
-        parsed = parse_aniso_FS(content)
+    def parse_aniso_gap_fs(folder):
+        """Parse the imag_aniso_gap_FS files into an ArrayData node."""
+        parsed_by_temp = parse_aniso_gap_FS(folder, prefix=EpwCalculation._PREFIX)
         array_data = orm.ArrayData()
-        bands = [int(k) for k in parsed.keys() if isinstance(k, int)]
-        for band in sorted(bands):
-            band_data = parsed[band]
-            array_data.set_array(f"band_{band}_kpoints", band_data["kpoints"])
-            array_data.set_array(f"band_{band}_energy", band_data["energy"])
-            array_data.set_array(f"band_{band}_delta", band_data["delta"])
-        array_data.base.attributes.set("bands", sorted(bands))
-        if "units" in parsed:
-            array_data.base.attributes.set("units", parsed["units"])
+        temperatures = sorted(parsed_by_temp.keys())
+        array_data.base.attributes.set("temperatures", temperatures)
+
+        for temp in temperatures:
+            parsed = parsed_by_temp[temp]
+            temp_str = f"{temp:.2f}".replace(".", "_")
+            bands = [int(k) for k in parsed.keys() if isinstance(k, int)]
+            for band in sorted(bands):
+                band_data = parsed[band]
+                array_data.set_array(
+                    f"temp_{temp_str}_band_{band}_kpoints", band_data["kpoints"]
+                )
+                array_data.set_array(
+                    f"temp_{temp_str}_band_{band}_energy", band_data["energy"]
+                )
+                array_data.set_array(
+                    f"temp_{temp_str}_band_{band}_delta", band_data["delta"]
+                )
+            array_data.base.attributes.set(f"temp_{temp_str}_bands", sorted(bands))
+            if "units" in parsed:
+                array_data.base.attributes.set(
+                    f"temp_{temp_str}_units", parsed["units"]
+                )
         return array_data
 
     @staticmethod
-    def parse_aniso_imag(content):
-        """Parse the imag_aniso file contents into an ArrayData node."""
-        parsed = parse_aniso(content)
+    def parse_aniso_imag(folder):
+        """Parse the imag_aniso files into an ArrayData node."""
+        parsed_by_temp = parse_aniso(folder, prefix=EpwCalculation._PREFIX)
         array_data = orm.ArrayData()
-        frequencies = sorted([float(k) for k in parsed.keys() if isinstance(k, float)])
-        for index, w in enumerate(frequencies):
-            w_data = parsed[w]
-            array_data.set_array(f"freq_{index}_energy", w_data["energy"])
-            array_data.set_array(f"freq_{index}_znorm", w_data["znorm"])
-            array_data.set_array(f"freq_{index}_delta", w_data["delta"])
-            array_data.set_array(f"freq_{index}_shift", w_data["shift"])
-        array_data.base.attributes.set("frequencies", frequencies)
-        if "units" in parsed:
-            array_data.base.attributes.set("units", parsed["units"])
+        temperatures = sorted(parsed_by_temp.keys())
+        array_data.base.attributes.set("temperatures", temperatures)
+
+        for temp in temperatures:
+            parsed = parsed_by_temp[temp]
+            temp_str = f"{temp:.2f}".replace(".", "_")
+            frequencies = sorted(
+                [float(k) for k in parsed.keys() if isinstance(k, float)]
+            )
+            for index, w in enumerate(frequencies):
+                w_data = parsed[w]
+                array_data.set_array(
+                    f"temp_{temp_str}_freq_{index}_energy", w_data["energy"]
+                )
+                array_data.set_array(
+                    f"temp_{temp_str}_freq_{index}_znorm", w_data["znorm"]
+                )
+                array_data.set_array(
+                    f"temp_{temp_str}_freq_{index}_delta", w_data["delta"]
+                )
+                array_data.set_array(
+                    f"temp_{temp_str}_freq_{index}_shift", w_data["shift"]
+                )
+            array_data.base.attributes.set(f"temp_{temp_str}_frequencies", frequencies)
+            if "units" in parsed:
+                array_data.base.attributes.set(
+                    f"temp_{temp_str}_units", parsed["units"]
+                )
         return array_data
 
     @staticmethod
