@@ -5,6 +5,7 @@ import numpy
 from aiida import orm
 from aiida_quantumespresso.parsers.base import BaseParser
 from aiida_quantumespresso.utils.mapping import get_logging_container
+from packaging.version import Version
 
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
@@ -31,12 +32,39 @@ from aiida_epw.tools.parsers import (
     parse_aniso_gap_FS,
     parse_aniso,
 )
+from aiida_epw.parsers.schemas import (
+    REGEX_PATTERNS_LEGACY,
+    REGEX_PATTERNS_MODERN,
+    parse_fortran_float,
+)
 
 
 class EpwParser(BaseParser):
     """``Parser`` implementation for the ``EpwCalculation`` calculation job."""
 
     success_string = "EPW.bib"
+
+    class_error_map = {
+        "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
+        "internal error, cannot bracket Ef": "ERROR_CANNOT_BRACKET_EF",
+    }
+
+    @staticmethod
+    def is_scheduler_out_of_memory(stderr):
+        """Return whether scheduler stderr indicates an out-of-memory kill."""
+        if not stderr:
+            return False
+
+        stderr_lower = stderr.lower()
+        return any(
+            marker in stderr_lower
+            for marker in (
+                "oom_kill",
+                "out of memory",
+                "oom killed",
+                "exceeded memory limit",
+            )
+        )
 
     @staticmethod
     def get_parser_settings_key():
@@ -66,12 +94,31 @@ class EpwParser(BaseParser):
         logs = get_logging_container()
 
         stdout, parsed_data, logs = self.parse_stdout_from_retrieved(logs)
+        scheduler_stderr = self.node.get_scheduler_stderr()
+
+        # Preserve scheduler walltime failures instead of overriding them with parser-side stdout errors.
+        if (
+            self.node.exit_status
+            == self.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME.status
+        ):
+            return self.exit(logs=logs)
+
+        if (
+            self.node.exit_status
+            == self.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY.status
+        ):
+            return self.exit(logs=logs)
+
+        if self.is_scheduler_out_of_memory(scheduler_stderr):
+            return self.exit(self.exit_codes.ERROR_SCHEDULER_OUT_OF_MEMORY, logs)
 
         base_exit_code = self.check_base_errors(logs)
         if base_exit_code:
             return self.exit(base_exit_code, logs)
 
-        parsed_epw, logs = self.parse_stdout(stdout, logs)
+        parsed_epw, logs = self.parse_stdout(
+            stdout, logs, code_version=Version(parsed_data["code_version"])
+        )
         parsed_data.update(parsed_epw)
 
         elbands_contents = self.get_retrieved_content(
@@ -208,7 +255,7 @@ class EpwParser(BaseParser):
         return self.exit(logs=logs)
 
     @staticmethod
-    def parse_stdout(stdout, logs):
+    def parse_stdout(stdout, logs, code_version):
         """Parse the ``stdout``."""
 
         def parse_max_eigenvalue(stdout_block):
@@ -220,110 +267,12 @@ class EpwParser(BaseParser):
             )
             return max_eigenvalue_array
 
-        def parse_transport_matrices(block):
-            """Parse transport tensor matrices from a text block."""
-            parsed = {}
-
-            def extract_matrix_pair(header_pattern, text):
-                start_match = re.search(header_pattern, text)
-                if not start_match:
-                    return None, None
-
-                lines_start = start_match.end()
-                lines = text[lines_start:].strip().split("\n")
-                # Take up to 3 lines
-                lines = lines[:3]
-
-                m1 = []
-                m2 = []
-                try:
-                    for line in lines:
-                        # Format " val1 val2 val3 | val4 val5 val6 " (approx)
-                        parts = line.split("|")
-                        if len(parts) < 2:
-                            continue
-
-                        # Handle Fortran D notation
-                        row1 = [
-                            float(x.replace("D", "E").replace("d", "e"))
-                            for x in parts[0].split()
-                        ]
-                        row2 = [
-                            float(x.replace("D", "E").replace("d", "e"))
-                            for x in parts[1].split()
-                        ]
-
-                        if len(row1) == 3 and len(row2) == 3:
-                            m1.append(row1)
-                            m2.append(row2)
-                except ValueError:
-                    pass
-
-                if len(m1) == 3 and len(m2) == 3:
-                    return m1, m2
-                return None, None
-
-            def extract_single_matrix(header_pattern, text):
-                start_match = re.search(header_pattern, text)
-                if not start_match:
-                    return None
-
-                lines_start = start_match.end()
-                lines = text[lines_start:].strip().split("\n")[:3]
-                m = []
-                try:
-                    for line in lines:
-                        # Just one set of 3 values
-                        row = [
-                            float(x.replace("D", "E").replace("d", "e"))
-                            for x in line.split()
-                        ]
-                        if len(row) == 3:
-                            m.append(row)
-                except ValueError:
-                    pass
-
-                if len(m) == 3:
-                    return m
-                return None
-
-            # 1. Conductivity
-            cond, cond_B = extract_matrix_pair(
-                r"Conductivity tensor without magnetic field\s*\|\s*with magnetic field \[Siemens/m\]",
-                block,
-            )
-            if cond:
-                parsed["conductivity"] = cond
-                parsed["conductivity_with_B"] = cond_B
-
-            # 2. Mobility
-            mob, hall_mob = extract_matrix_pair(
-                r"Mobility tensor without magnetic field\s*\|\s*(?:Hall mobility|with magnetic field) \[cm\^2/Vs\]",
-                block,
-            )
-            if mob:
-                parsed["mobility"] = mob
-                parsed["hall_mobility"] = hall_mob
-
-            # 3. Hall Factor
-            hall_fac = extract_single_matrix(r"Hall factor", block)
-            if hall_fac:
-                parsed["hall_factor"] = hall_fac
-
-            return parsed
-
-        data_type_regex = (
-            (
-                "allen_dynes",
-                float,
-                re.compile(r"\s+Estimated Allen-Dynes Tc =\s+([\d\.]+) K"),
-            ),
-            (
-                "fermi_energy_coarse",
-                float,
-                re.compile(r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"),
-            ),
+        patterns = (
+            REGEX_PATTERNS_LEGACY
+            if code_version < Version("5.9")
+            else REGEX_PATTERNS_MODERN
         )
+
         data_block_marker_parser = (
             (
                 "max_eigenvalue",
@@ -335,16 +284,25 @@ class EpwParser(BaseParser):
         stdout_lines = stdout.split("\n")
 
         for line_number, line in enumerate(stdout_lines):
-            for data_key, type, re_pattern in data_type_regex:
-                match = re_pattern.search(line)
+            for key, type_func, pattern in patterns:
+                match = pattern.search(line)
                 if match:
-                    parsed_data[data_key] = type(match.group(1))
+                    parsed_data[key] = type_func(match.group(1))
 
-            for data_key, data_marker, block_parser in data_block_marker_parser:
+            for (
+                data_key,
+                data_marker,
+                block_parser,
+            ) in data_block_marker_parser:
                 if data_marker in line:
-                    parsed_data[data_key] = block_parser(stdout[line_number:])
+                    parsed_data[data_key] = block_parser(
+                        "\n".join(stdout_lines[line_number:])
+                    )
 
         # Parse carrier mobility matrices (SERTA and iBTE)
+        from aiida_epw.tools.parsers import parse_transport_matrices
+        import numpy
+
         # Identify SERTA block
         serta_match = re.search(
             r"BTE in the self-energy relaxation time approximation \(SERTA\)", stdout
@@ -381,6 +339,211 @@ class EpwParser(BaseParser):
                 parsed_data["mobility_iBTE"] = (
                     numpy.trace(numpy.array(ibte_data["mobility"])) / 3.0
                 )
+
+        # Parse isotropic Eliashberg temperature blocks
+        eliashberg_marker = "Solve isotropic Eliashberg equations"
+        eliashberg_idx = stdout.find(eliashberg_marker)
+        if eliashberg_idx != -1:
+            eliashberg_content = stdout[eliashberg_idx:]
+            temp_pattern = re.compile(r"temp\(\s*\d+\s*\)\s*=\s*([\d\.]+)\s*K")
+            matches = list(temp_pattern.finditer(eliashberg_content))
+
+            blocks = []
+            for i, match in enumerate(matches):
+                start = match.start()
+                end = (
+                    matches[i + 1].start()
+                    if i + 1 < len(matches)
+                    else len(eliashberg_content)
+                )
+
+                unfolding_idx = eliashberg_content.find(
+                    "Unfolding on the coarse grid", start, end
+                )
+                if unfolding_idx != -1:
+                    end = unfolding_idx
+
+                block_text = eliashberg_content[start:end]
+                temp = float(match.group(1))
+
+                nsiw_match = re.search(
+                    r"Total number of frequency points nsiw\(\s*\d+\s*\)\s*=\s*(\d+)",
+                    block_text,
+                )
+                wscut_match = re.search(
+                    r"Cutoff frequency wscut\s*=\s*([\d\.]+)\s*eV", block_text
+                )
+                broyden_match = re.search(
+                    r"broyden mixing factor\s*=\s*([\d\.]+)", block_text
+                )
+                nsiter_match = re.search(
+                    r"Convergence was reached in nsiter\s*=\s*(\d+)", block_text
+                )
+                free_energy_match = re.search(
+                    r"Free energy\s*=\s*([\d\.-]+)\s*meV", block_text
+                )
+
+                block_data = {"temp": temp}
+                if nsiw_match:
+                    block_data["nsiw"] = int(nsiw_match.group(1))
+                if wscut_match:
+                    block_data["wscut"] = float(wscut_match.group(1))
+                if broyden_match:
+                    block_data["broyden_mixing_factor"] = float(broyden_match.group(1))
+                if nsiter_match:
+                    block_data["nsiter"] = int(nsiter_match.group(1))
+                if free_energy_match:
+                    block_data["free_energy"] = float(free_energy_match.group(1))
+
+                iw_match = re.search(
+                    r"startiw\s*=\s*(\d+),\s*lastiw\s*=\s*(\d+),\s*nsiw\(itemp\)\s*=\s*(\d+)",
+                    block_text,
+                )
+                if iw_match:
+                    block_data["startiw"] = int(iw_match.group(1))
+                    block_data["lastiw"] = int(iw_match.group(2))
+                    block_data["nsiw_itemp"] = int(iw_match.group(3))
+
+                iter_header = re.search(
+                    r"iter\s+ethr\s+znormi\s+deltai\s+\[meV\]", block_text
+                )
+                if iter_header:
+                    header_end = iter_header.end()
+                    remaining_text = block_text[header_end:]
+                    iterations = []
+                    row_pattern = re.compile(
+                        r"^\s*(\d+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s*$"
+                    )
+                    for line in remaining_text.split("\n"):
+                        row_match = row_pattern.match(line)
+                        if row_match:
+                            iterations.append(
+                                {
+                                    "iter": int(row_match.group(1)),
+                                    "ethr": parse_fortran_float(row_match.group(2)),
+                                    "znormi": parse_fortran_float(row_match.group(3)),
+                                    "deltai": parse_fortran_float(row_match.group(4)),
+                                }
+                            )
+                        elif iterations:
+                            break
+                    if iterations:
+                        block_data["iterations"] = iterations
+
+                blocks.append(block_data)
+
+            if blocks:
+                parsed_data["isotropic_eliashberg"] = blocks
+
+        # Parse anisotropic Eliashberg temperature blocks
+        anisotropic_marker = "anisotropic Eliashberg equations"
+        anisotropic_idx = stdout.find(anisotropic_marker)
+        if anisotropic_idx != -1:
+            anisotropic_content = stdout[anisotropic_idx:]
+            temp_pattern = re.compile(r"temp\(\s*\d+\s*\)\s*=\s*([\d\.]+)\s*K")
+            matches = list(temp_pattern.finditer(anisotropic_content))
+
+            blocks = []
+            for i, match in enumerate(matches):
+                start = match.start()
+                end = (
+                    matches[i + 1].start()
+                    if i + 1 < len(matches)
+                    else len(anisotropic_content)
+                )
+
+                unfolding_idx = anisotropic_content.find(
+                    "Unfolding on the coarse grid", start, end
+                )
+                if unfolding_idx != -1:
+                    end = unfolding_idx
+
+                block_text = anisotropic_content[start:end]
+                temp = float(match.group(1))
+
+                nsiw_match = re.search(
+                    r"Total number of frequency points nsiw\(\s*\d+\s*\)\s*=\s*(\d+)",
+                    block_text,
+                )
+                wscut_match = re.search(
+                    r"Cutoff frequency wscut\s*=\s*([\d\.]+)\s*eV", block_text
+                )
+                broyden_match = re.search(
+                    r"broyden mixing factor\s*=\s*([\d\.]+)", block_text
+                )
+                nsiter_match = re.search(
+                    r"Convergence was reached in nsiter\s*=\s*(\d+)", block_text
+                )
+                free_energy_match = re.search(
+                    r"Free energy\s*=\s*([\d\.-]+)\s*meV", block_text
+                )
+
+                block_data = {"temp": temp}
+                if nsiw_match:
+                    block_data["nsiw"] = int(nsiw_match.group(1))
+                if wscut_match:
+                    block_data["wscut"] = float(wscut_match.group(1))
+                if broyden_match:
+                    block_data["broyden_mixing_factor"] = float(broyden_match.group(1))
+                if nsiter_match:
+                    block_data["nsiter"] = int(nsiter_match.group(1))
+                if free_energy_match:
+                    block_data["free_energy"] = float(free_energy_match.group(1))
+
+                iw_match = re.search(
+                    r"startiw\s*=\s*(\d+),\s*lastiw\s*=\s*(\d+),\s*nsiw\(itemp\)\s*=\s*(\d+)",
+                    block_text,
+                )
+                if iw_match:
+                    block_data["startiw"] = int(iw_match.group(1))
+                    block_data["lastiw"] = int(iw_match.group(2))
+                    block_data["nsiw_itemp"] = int(iw_match.group(3))
+
+                gap_match = re.search(
+                    r"Min\.\s*/\s*Max\.\s*values\s*of\s*superconducting\s*gap\s*=\s*([\d\.-]+)\s+([\d\.-]+)\s*meV",
+                    block_text,
+                )
+                if gap_match:
+                    block_data["gap_min"] = float(gap_match.group(1))
+                    block_data["gap_max"] = float(gap_match.group(2))
+
+                iter_header = re.search(
+                    r"iter\s+ethr\s+znormi\s+deltai\s+\[meV\]", block_text
+                )
+                if iter_header:
+                    header_end = iter_header.end()
+                    remaining_text = block_text[header_end:]
+                    iterations = []
+                    row_pattern = re.compile(
+                        r"^\s*(\d+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)(?:\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+))?\s*$"
+                    )
+                    for line in remaining_text.split("\n"):
+                        row_match = row_pattern.match(line)
+                        if row_match:
+                            iter_data = {
+                                "iter": int(row_match.group(1)),
+                                "ethr": parse_fortran_float(row_match.group(2)),
+                                "znormi": parse_fortran_float(row_match.group(3)),
+                                "deltai": parse_fortran_float(row_match.group(4)),
+                            }
+                            if row_match.group(5) is not None:
+                                iter_data["shifti"] = parse_fortran_float(
+                                    row_match.group(5)
+                                )
+                            if row_match.group(6) is not None:
+                                iter_data["mu"] = parse_fortran_float(
+                                    row_match.group(6)
+                                )
+                            iterations.append(iter_data)
+                        elif iterations:
+                            break
+                    if iterations:
+                        block_data["iterations"] = iterations
+
+                blocks.append(block_data)
+
+            if blocks:
+                parsed_data["anisotropic_eliashberg"] = blocks
 
         return parsed_data, logs
 
