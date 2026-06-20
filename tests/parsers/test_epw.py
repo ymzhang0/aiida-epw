@@ -74,9 +74,7 @@ def test_epw(parse_from_files, data_regression, test_name):
 def test_epw_failed_broyden_factor(parse_from_files, data_regression):
     """Test a `epw.x` that failed due to an error in routine `mix_broyden`."""
     results, calcfunction = parse_from_files(EpwParser, "failed_broyden_factor")
-    expected_exit_status = (
-        EpwCalculation.exit_codes.ERROR_OUTPUT_STDOUT_INCOMPLETE.status
-    )
+    expected_exit_status = EpwCalculation.exit_codes.ERROR_FACTORIZATION.status
 
     assert calcfunction.is_failed
     assert calcfunction.exit_status == expected_exit_status

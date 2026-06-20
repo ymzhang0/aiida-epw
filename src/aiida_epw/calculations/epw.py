@@ -320,6 +320,11 @@ class EpwCalculation(NamelistsCalculation):
             "ERROR_CANNOT_BRACKET_EF",
             message="Internal error, cannot bracket Ef.",
         )
+        spec.exit_code(
+            321,
+            "ERROR_FACTORIZATION",
+            message="Error in routine mix_broyden (5): factorization.",
+        )
 
     @classmethod
     def normalize_parameters(cls, parameters):
