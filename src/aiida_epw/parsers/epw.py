@@ -411,25 +411,26 @@ class EpwParser(BaseParser):
                 if iter_header:
                     header_end = iter_header.end()
                     remaining_text = block_text[header_end:]
-                    iterations = []
+                    ethr_list = []
+                    znormi_list = []
+                    deltai_list = []
                     row_pattern = re.compile(
                         r"^\s*(\d+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s*$"
                     )
                     for line in remaining_text.split("\n"):
                         row_match = row_pattern.match(line)
                         if row_match:
-                            iterations.append(
-                                {
-                                    "iter": int(row_match.group(1)),
-                                    "ethr": parse_fortran_float(row_match.group(2)),
-                                    "znormi": parse_fortran_float(row_match.group(3)),
-                                    "deltai": parse_fortran_float(row_match.group(4)),
-                                }
-                            )
-                        elif iterations:
+                            ethr_list.append(parse_fortran_float(row_match.group(2)))
+                            znormi_list.append(parse_fortran_float(row_match.group(3)))
+                            deltai_list.append(parse_fortran_float(row_match.group(4)))
+                        elif ethr_list:
                             break
-                    if iterations:
-                        block_data["iterations"] = iterations
+                    if ethr_list:
+                        block_data["iterations"] = {
+                            "ethr": ethr_list,
+                            "znormi": znormi_list,
+                            "deltai": deltai_list,
+                        }
 
                 blocks.append(block_data)
 
@@ -514,31 +515,38 @@ class EpwParser(BaseParser):
                 if iter_header:
                     header_end = iter_header.end()
                     remaining_text = block_text[header_end:]
-                    iterations = []
+                    ethr_list = []
+                    znormi_list = []
+                    deltai_list = []
+                    shifti_list = []
+                    mu_list = []
                     row_pattern = re.compile(
                         r"^\s*(\d+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)(?:\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+))?\s*$"
                     )
                     for line in remaining_text.split("\n"):
                         row_match = row_pattern.match(line)
                         if row_match:
-                            iter_data = {
-                                "iter": int(row_match.group(1)),
-                                "ethr": parse_fortran_float(row_match.group(2)),
-                                "znormi": parse_fortran_float(row_match.group(3)),
-                                "deltai": parse_fortran_float(row_match.group(4)),
-                            }
+                            ethr_list.append(parse_fortran_float(row_match.group(2)))
+                            znormi_list.append(parse_fortran_float(row_match.group(3)))
+                            deltai_list.append(parse_fortran_float(row_match.group(4)))
                             if row_match.group(5) is not None:
-                                iter_data["shifti"] = parse_fortran_float(
-                                    row_match.group(5)
+                                shifti_list.append(
+                                    parse_fortran_float(row_match.group(5))
                                 )
                             if row_match.group(6) is not None:
-                                iter_data["mu"] = parse_fortran_float(
-                                    row_match.group(6)
-                                )
-                            iterations.append(iter_data)
-                        elif iterations:
+                                mu_list.append(parse_fortran_float(row_match.group(6)))
+                        elif ethr_list:
                             break
-                    if iterations:
+                    if ethr_list:
+                        iterations = {
+                            "ethr": ethr_list,
+                            "znormi": znormi_list,
+                            "deltai": deltai_list,
+                        }
+                        if shifti_list:
+                            iterations["shifti"] = shifti_list
+                        if mu_list:
+                            iterations["mu"] = mu_list
                         block_data["iterations"] = iterations
 
                 blocks.append(block_data)
