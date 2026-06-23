@@ -366,17 +366,21 @@ def _get_files_from_folder(folder):
         raise TypeError(f"Unsupported folder type: {type(folder)}")
 
 
-def parse_epw_imag_iso(folder, prefix="aiida"):
+def parse_epw_imag_iso(
+    folder, prefix="aiida", allowed_prefixes=("imag", "real", "pade", "acon")
+):
     """Parse the isotropic gap functions from EPW isotropic Eliashberg equation calculation.
 
     :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
     :param prefix: the prefix of the `imag_iso` files.
+    :param allowed_prefixes: list of allowed file prefixes (e.g. imag, real, pade, acon).
     :returns: dictionary containing the isotropic gap functions keyed by temperature.
     """
     if not folder:
         raise ValueError("No gap-function folder or dict provided.")
     parsed_data = {}
-    pattern_iso = re.compile(rf"^{prefix}\.imag_iso_(\d{{3}}\.\d{{2}})$")
+    prefix_pat = "|".join(allowed_prefixes)
+    pattern_iso = re.compile(rf"^{prefix}\.(?:{prefix_pat})_iso_(\d{{3}}\.\d{{2}})$")
 
     for filename, open_file in _get_files_from_folder(folder):
         match = pattern_iso.match(filename)
@@ -395,22 +399,28 @@ def parse_epw_imag_iso(folder, prefix="aiida"):
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_iso_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.{prefix_pat}_iso_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
-def parse_epw_imag_aniso_gap0(folder, prefix="aiida"):
+def parse_epw_imag_aniso_gap0(
+    folder, prefix="aiida", allowed_prefixes=("imag", "real", "pade", "acon")
+):
     """Parse the anisotropic gap functions from EPW anisotropic Eliashberg equation calculation.
 
     :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
     :param prefix: the prefix of the `imag_aniso_gap0` files.
+    :param allowed_prefixes: list of allowed file prefixes (e.g. imag, real, pade, acon).
     :returns: dictionary containing the anisotropic gap functions keyed by temperature.
     """
     if not folder:
         raise ValueError("No gap-function folder or dict provided.")
     parsed_data = {}
-    pattern_aniso_gap0 = re.compile(rf"^{prefix}\.imag_aniso_gap0_(\d{{3}}\.\d{{2}})$")
+    prefix_pat = "|".join(allowed_prefixes)
+    pattern_aniso_gap0 = re.compile(
+        rf"^{prefix}\.(?:{prefix_pat})_aniso_gap0_(\d{{3}}\.\d{{2}})$"
+    )
 
     for filename, open_file in _get_files_from_folder(folder):
         match = pattern_aniso_gap0.match(filename)
@@ -429,22 +439,28 @@ def parse_epw_imag_aniso_gap0(folder, prefix="aiida"):
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_aniso_gap0_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.{prefix_pat}_aniso_gap0_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
-def parse_aniso_gap_FS(folder, prefix="aiida"):
+def parse_aniso_gap_FS(
+    folder, prefix="aiida", allowed_prefixes=("imag", "real", "pade", "acon")
+):
     """Parse the anisotropic gap functions on Fermi surface from a folder mapping.
 
     :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
     :param prefix: prefix of the files.
+    :param allowed_prefixes: list of allowed file prefixes (e.g. imag, real, pade, acon).
     :returns: dictionary containing the parsed data keyed by temperature.
     """
     if not folder:
         raise ValueError("No folder or dict provided.")
     parsed_data = {}
-    pattern = re.compile(rf"^{prefix}\.imag_aniso_gap_FS_(\d{{3}}\.\d{{2}})$")
+    prefix_pat = "|".join(allowed_prefixes)
+    pattern = re.compile(
+        rf"^{prefix}\.(?:{prefix_pat})_aniso_gap_FS_(\d{{3}}\.\d{{2}})$"
+    )
 
     for filename, open_file in _get_files_from_folder(folder):
         match = pattern.match(filename)
@@ -485,17 +501,23 @@ def parse_aniso_gap_FS(folder, prefix="aiida"):
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_aniso_gap_FS_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.{prefix_pat}_aniso_gap_FS_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
-def parse_aniso(folder, prefix="aiida", restriction="fsr"):
+def parse_aniso(
+    folder,
+    prefix="aiida",
+    restriction="fsr",
+    allowed_prefixes=("imag", "real", "pade", "acon"),
+):
     """Parse the anisotropic gap functions from a folder mapping.
 
     :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
     :param prefix: prefix of the files.
     :param restriction: "fsr" (at least 4 columns) or "fbw" (at least 5 columns).
+    :param allowed_prefixes: list of allowed file prefixes (e.g. imag, real, pade, acon).
     :returns: dictionary containing the parsed data keyed by temperature.
     """
     if not folder:
@@ -503,7 +525,8 @@ def parse_aniso(folder, prefix="aiida", restriction="fsr"):
     if restriction not in ("fsr", "fbw"):
         raise ValueError(f"Invalid restriction: {restriction}. Must be 'fsr' or 'fbw'.")
     parsed_data = {}
-    pattern = re.compile(rf"^{prefix}\.imag_aniso_(\d{{3}}\.\d{{2}})$")
+    prefix_pat = "|".join(allowed_prefixes)
+    pattern = re.compile(rf"^{prefix}\.(?:{prefix_pat})_aniso_(\d{{3}}\.\d{{2}})$")
 
     for filename, open_file in _get_files_from_folder(folder):
         match = pattern.match(filename)
@@ -553,7 +576,7 @@ def parse_aniso(folder, prefix="aiida", restriction="fsr"):
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_aniso_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.{prefix_pat}_aniso_XXX.XX' were parsed successfully."
         )
     return parsed_data
 

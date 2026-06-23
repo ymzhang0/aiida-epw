@@ -118,7 +118,7 @@ class EpwParser(BaseParser):
             return self.exit(base_exit_code, logs)
 
         parsed_epw, logs = self.parse_stdout(
-            stdout, logs, code_version=Version(parsed_data["code_version"])
+            stdout, logs, code_version=Version(parsed_data.get("code_version", "5.9"))
         )
         parsed_data.update(parsed_epw)
 
@@ -144,97 +144,207 @@ class EpwParser(BaseParser):
                 ),
             )
 
-        a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
-        if a2f_contents is not None:
-            a2f_data, parsed_a2f = self.parse_a2f(a2f_contents)
-            self.out("a2f", a2f_data)
-            parsed_data.update(parsed_a2f)
+        # Determine whether Eliashberg is enabled and which files to parse
+        eliashberg_enabled = None
+        momentum_dependence = None
+        real_axis = None
+        analytical_continuation = None
 
-        dos_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_DOS_FILE,
-            Path(
-                EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE
-            ).as_posix(),
-        )
-        if dos_contents is not None:
-            self.out("dos", self.parse_dos(dos_contents))
+        # 1. Try to read from direct inputs
+        if any(
+            hasattr(self.node.inputs, f)
+            for f in (
+                "momentum_dependence",
+                "full_bandwidth",
+                "real_axis",
+                "analytical_continuation",
+            )
+        ):
+            eliashberg_enabled = True
 
-        phdos_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_PHDOS_FILE)
-        if phdos_contents is not None:
-            self.out("phdos", self.parse_phdos(phdos_contents))
-
-        phdos_proj_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
-        )
-        if phdos_proj_contents is not None:
-            self.out("phdos_proj", self.parse_phdos_proj(phdos_proj_contents))
-
-        a2f_proj_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_A2F_PROJ_FILE
-        )
-        if a2f_proj_contents is not None:
-            self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
-
-        lambda_FS_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_LAMBDA_FS_FILE
-        )
-        if lambda_FS_contents is not None:
-            self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
-
-        lambda_k_pairs_contents = self.get_retrieved_content(
-            EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
-        )
-        if lambda_k_pairs_contents is not None:
-            self.out(
-                "lambda_k_pairs",
-                self.parse_lambda_k_pairs(lambda_k_pairs_contents),
+            momentum_dependence_input = getattr(
+                self.node.inputs, "momentum_dependence", None
+            )
+            momentum_dependence = (
+                momentum_dependence_input.value
+                if momentum_dependence_input is not None
+                else False
             )
 
-        iso_gap_pattern = re.compile(rf"^{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
-        if self.retrieved and any(
-            iso_gap_pattern.match(name) for name in self.retrieved.list_object_names()
-        ):
-            self.out(
-                "iso_gap_functions",
-                self.parse_iso_gap_functions(self.retrieved),
-            )
+            real_axis_input = getattr(self.node.inputs, "real_axis", None)
+            real_axis = real_axis_input.value if real_axis_input is not None else False
 
-        aniso_gap_pattern = re.compile(
-            rf"^{EpwCalculation._PREFIX}\.imag_aniso_gap0_\d+\.\d+$"
-        )
-        if self.retrieved and any(
-            aniso_gap_pattern.match(name) for name in self.retrieved.list_object_names()
-        ):
-            self.out(
-                "aniso_gap_functions",
-                self.parse_aniso_gap_functions(self.retrieved),
+            analytical_continuation_input = getattr(
+                self.node.inputs, "analytical_continuation", None
             )
-
-        aniso_gap_fs_pattern = re.compile(
-            rf"^{EpwCalculation._PREFIX}\.imag_aniso_gap_FS_\d+\.\d+$"
-        )
-        if self.retrieved and any(
-            aniso_gap_fs_pattern.match(name)
-            for name in self.retrieved.list_object_names()
-        ):
-            self.out("aniso_gap_FS", self.parse_aniso_gap_fs(self.retrieved))
-
-        aniso_imag_pattern = re.compile(
-            rf"^{EpwCalculation._PREFIX}\.imag_aniso_\d+\.\d+$"
-        )
-        if self.retrieved and any(
-            aniso_imag_pattern.match(name)
-            for name in self.retrieved.list_object_names()
-        ):
-            fbw_enabled = False
-            if "parameters" in self.node.inputs:
-                params_dict = self.node.inputs.parameters.get_dict()
-                fbw_enabled = params_dict.get("INPUTEPW", {}).get("fbw", False)
-            restriction = "fbw" if fbw_enabled else "fsr"
-            self.out(
-                "aniso_gap_imag",
-                self.parse_aniso_imag(self.retrieved, restriction=restriction),
+            analytical_continuation = (
+                analytical_continuation_input.value
+                if analytical_continuation_input is not None
+                else None
             )
+        else:
+            # 2. Try to read from parameters
+            parameters = getattr(self.node.inputs, "parameters", None)
+            if parameters is not None:
+                inputepw = parameters.get_dict().get("INPUTEPW", {})
+                eliashberg_enabled = inputepw.get("eliashberg", False)
+                momentum_dependence = inputepw.get("laniso", False)
+                real_axis = inputepw.get("lreal", False)
+                if inputepw.get("lacon", False):
+                    analytical_continuation = "acon"
+                elif inputepw.get("lpade", False):
+                    analytical_continuation = "pade"
+
+        # 3. Fallback: If we still don't know (e.g. mock node without inputs in unit tests),
+        # check the retrieved folder for the existence of key files!
+        if eliashberg_enabled is None:
+            retrieved_files = self.retrieved.base.repository.list_object_names()
+            has_iso_files = any("iso" in name for name in retrieved_files)
+            has_aniso_files = any(
+                "aniso" in name or "lambda_FS" in name or "lambda_k_pairs" in name
+                for name in retrieved_files
+            )
+            has_a2f_files = any("a2f" in name for name in retrieved_files)
+
+            if has_iso_files or has_aniso_files or has_a2f_files:
+                eliashberg_enabled = True
+                momentum_dependence = has_aniso_files
+
+                # Check for real_axis based on retrieved files
+                has_real_files = any("real" in name for name in retrieved_files)
+                real_axis = has_real_files
+            else:
+                eliashberg_enabled = False
+
+        if eliashberg_enabled:
+            # Determine allowed prefixes based on inputs
+            allowed_prefixes = []
+            if real_axis is True:
+                allowed_prefixes.append("real")
+            elif real_axis is False:
+                allowed_prefixes.append("imag")
+                if analytical_continuation == "pade":
+                    allowed_prefixes.append("pade")
+                elif analytical_continuation == "acon":
+                    allowed_prefixes.append("acon")
+                else:
+                    allowed_prefixes.extend(["pade", "acon"])
+            else:
+                allowed_prefixes.extend(["imag", "real", "pade", "acon"])
+
+            prefix_pattern = "|".join(allowed_prefixes)
+
+            a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
+            if a2f_contents is not None:
+                a2f_data, parsed_a2f = self.parse_a2f(a2f_contents)
+                self.out("a2f", a2f_data)
+                parsed_data.update(parsed_a2f)
+
+            dos_contents = self.get_retrieved_content(
+                EpwCalculation._OUTPUT_DOS_FILE,
+                Path(
+                    EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE
+                ).as_posix(),
+            )
+            if dos_contents is not None:
+                self.out("dos", self.parse_dos(dos_contents))
+
+            phdos_contents = self.get_retrieved_content(
+                EpwCalculation._OUTPUT_PHDOS_FILE
+            )
+            if phdos_contents is not None:
+                self.out("phdos", self.parse_phdos(phdos_contents))
+
+            phdos_proj_contents = self.get_retrieved_content(
+                EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
+            )
+            if phdos_proj_contents is not None:
+                self.out("phdos_proj", self.parse_phdos_proj(phdos_proj_contents))
+
+            a2f_proj_contents = self.get_retrieved_content(
+                EpwCalculation._OUTPUT_A2F_PROJ_FILE
+            )
+            if a2f_proj_contents is not None:
+                self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
+
+            if momentum_dependence:
+                lambda_FS_contents = self.get_retrieved_content(
+                    EpwCalculation._OUTPUT_LAMBDA_FS_FILE
+                )
+                if lambda_FS_contents is not None:
+                    self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
+
+                lambda_k_pairs_contents = self.get_retrieved_content(
+                    EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
+                )
+                if lambda_k_pairs_contents is not None:
+                    self.out(
+                        "lambda_k_pairs",
+                        self.parse_lambda_k_pairs(lambda_k_pairs_contents),
+                    )
+
+                aniso_gap_pattern = re.compile(
+                    rf"{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_aniso_gap0_\d+\.\d+$"
+                )
+                if self.retrieved and any(
+                    aniso_gap_pattern.match(name)
+                    for name in self.retrieved.list_object_names()
+                ):
+                    self.out(
+                        "aniso_gap_functions",
+                        self.parse_aniso_gap_functions(
+                            self.retrieved, allowed_prefixes=allowed_prefixes
+                        ),
+                    )
+
+                aniso_gap_fs_pattern = re.compile(
+                    rf"^{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_aniso_gap_FS_\d+\.\d+$"
+                )
+                if self.retrieved and any(
+                    aniso_gap_fs_pattern.match(name)
+                    for name in self.retrieved.list_object_names()
+                ):
+                    self.out(
+                        "aniso_gap_FS",
+                        self.parse_aniso_gap_fs(
+                            self.retrieved, allowed_prefixes=allowed_prefixes
+                        ),
+                    )
+
+                aniso_imag_pattern = re.compile(
+                    rf"^{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_aniso_\d+\.\d+$"
+                )
+                if self.retrieved and any(
+                    aniso_imag_pattern.match(name)
+                    for name in self.retrieved.list_object_names()
+                ):
+                    fbw_enabled = False
+                    if "parameters" in self.node.inputs:
+                        params_dict = self.node.inputs.parameters.get_dict()
+                        fbw_enabled = params_dict.get("INPUTEPW", {}).get("fbw", False)
+                    restriction = "fbw" if fbw_enabled else "fsr"
+                    self.out(
+                        "aniso_gap_imag",
+                        self.parse_aniso_imag(
+                            self.retrieved,
+                            restriction=restriction,
+                            allowed_prefixes=allowed_prefixes,
+                        ),
+                    )
+            else:
+                iso_gap_pattern = re.compile(
+                    rf"^{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_iso_\d+\.\d+$"
+                )
+                if self.retrieved and any(
+                    iso_gap_pattern.match(name)
+                    for name in self.retrieved.list_object_names()
+                ):
+                    self.out(
+                        "iso_gap_functions",
+                        self.parse_iso_gap_functions(
+                            self.retrieved, allowed_prefixes=allowed_prefixes
+                        ),
+                    )
 
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
@@ -580,27 +690,40 @@ class EpwParser(BaseParser):
         return a2f_data, parsed_data
 
     @staticmethod
-    def parse_iso_gap_functions(file_contents):
+    def parse_iso_gap_functions(file_contents, allowed_prefixes=None):
         """Parse isotropic gap-function files into a typed datatype."""
-        gap_functions = parse_epw_imag_iso(file_contents, prefix=EpwCalculation._PREFIX)
+        kwargs = {}
+        if allowed_prefixes is not None:
+            kwargs["allowed_prefixes"] = allowed_prefixes
+        gap_functions = parse_epw_imag_iso(
+            file_contents, prefix=EpwCalculation._PREFIX, **kwargs
+        )
         gap_function_data = GapFunctionData()
         gap_function_data.set_gap_functions(gap_functions, kind="iso")
         return gap_function_data
 
     @staticmethod
-    def parse_aniso_gap_functions(file_contents):
+    def parse_aniso_gap_functions(file_contents, allowed_prefixes=None):
         """Parse anisotropic gap-function files into a typed datatype."""
+        kwargs = {}
+        if allowed_prefixes is not None:
+            kwargs["allowed_prefixes"] = allowed_prefixes
         gap_functions = parse_epw_imag_aniso_gap0(
-            file_contents, prefix=EpwCalculation._PREFIX
+            file_contents, prefix=EpwCalculation._PREFIX, **kwargs
         )
         gap_function_data = GapFunctionData()
         gap_function_data.set_gap_functions(gap_functions, kind="aniso")
         return gap_function_data
 
     @staticmethod
-    def parse_aniso_gap_fs(folder):
+    def parse_aniso_gap_fs(folder, allowed_prefixes=None):
         """Parse the imag_aniso_gap_FS files into an ArrayData node."""
-        parsed_by_temp = parse_aniso_gap_FS(folder, prefix=EpwCalculation._PREFIX)
+        kwargs = {}
+        if allowed_prefixes is not None:
+            kwargs["allowed_prefixes"] = allowed_prefixes
+        parsed_by_temp = parse_aniso_gap_FS(
+            folder, prefix=EpwCalculation._PREFIX, **kwargs
+        )
         array_data = orm.ArrayData()
         temperatures = sorted(parsed_by_temp.keys())
         array_data.base.attributes.set("temperatures", temperatures)
@@ -628,10 +751,13 @@ class EpwParser(BaseParser):
         return array_data
 
     @staticmethod
-    def parse_aniso_imag(folder, restriction="fsr"):
+    def parse_aniso_imag(folder, restriction="fsr", allowed_prefixes=None):
         """Parse the imag_aniso files into an ArrayData node."""
+        kwargs = {}
+        if allowed_prefixes is not None:
+            kwargs["allowed_prefixes"] = allowed_prefixes
         parsed_by_temp = parse_aniso(
-            folder, prefix=EpwCalculation._PREFIX, restriction=restriction
+            folder, prefix=EpwCalculation._PREFIX, restriction=restriction, **kwargs
         )
         array_data = orm.ArrayData()
         temperatures = sorted(parsed_by_temp.keys())
