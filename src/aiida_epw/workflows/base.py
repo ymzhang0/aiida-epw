@@ -20,7 +20,6 @@ from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 from aiida.orm.nodes.data.base import to_aiida_type
 
 from aiida_epw.tools.kpoints import check_kpoints_qpoints_compatibility
-from aiida_epw.common import RestartType
 
 EpwCalculation = CalculationFactory("epw.epw")
 
@@ -275,7 +274,6 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         full_bandwidth=None,
         real_axis=None,
         analytical_continuation=None,
-        restart_type=None,
         **_,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -304,33 +302,6 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         if overrides:
             parameter_overrides = overrides.get("parameters", {})
             parameters = recursive_merge(parameters, parameter_overrides)
-
-        if restart_type is not None:
-            type_check(restart_type, RestartType)
-            inputepw = parameters.setdefault("INPUTEPW", {})
-            if restart_type is RestartType.WANNIERIZE:
-                inputepw["wannierize"] = True
-                inputepw["epwread"] = False
-                inputepw["epwwrite"] = True
-                inputepw["restart"] = False
-                inputepw["ep_coupling"] = True
-                inputepw["elph"] = True
-            elif restart_type is RestartType.EPHWRITE:
-                inputepw["wannierize"] = False
-                inputepw["epwread"] = True
-                inputepw["epwwrite"] = False
-                inputepw["restart"] = False
-                inputepw["ep_coupling"] = True
-                inputepw["elph"] = True
-            elif restart_type is RestartType.EPHREAD:
-                inputepw["wannierize"] = False
-                inputepw["epwread"] = True
-                inputepw["restart"] = False
-                inputepw["ep_coupling"] = False
-                inputepw["elph"] = False
-                inputepw["ephwrite"] = False
-                if inputepw.get("scattering", False):
-                    inputepw["epmatkqread"] = True
 
         if options:
             inputs["options"] = recursive_merge(inputs["options"], options)

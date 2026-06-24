@@ -56,6 +56,26 @@ def serialize_calculation_type(value):
     raise TypeError(f"Cannot serialize {value} to EnumData of CalculationTypes")
 
 
+def serialize_restart_type(value):
+    """Serialize input parameter into an AiiDA EnumData for RestartType."""
+    from aiida.orm import EnumData
+    from aiida_epw.common.types import RestartType
+
+    if isinstance(value, EnumData):
+        return value
+    if isinstance(value, RestartType):
+        return EnumData(value)
+    if isinstance(value, str):
+        try:
+            return EnumData(RestartType(value.lower()))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid restart type '{value}'. Supported values: "
+                f"{[member.value for member in RestartType]}"
+            ) from exc
+    raise TypeError(f"Cannot serialize {value} to EnumData of RestartType")
+
+
 class EpwCalculation(NamelistsCalculation):
     """`CalcJob` implementation for the epw.x code of Quantum ESPRESSO."""
 
@@ -86,6 +106,14 @@ class EpwCalculation(NamelistsCalculation):
         ("INPUTEPW", "lacon"),
         ("INPUTEPW", "scattering"),
         ("INPUTEPW", "plrn"),
+        ("INPUTEPW", "wannierize"),
+        ("INPUTEPW", "epwread"),
+        ("INPUTEPW", "epwwrite"),
+        ("INPUTEPW", "restart"),
+        ("INPUTEPW", "ep_coupling"),
+        ("INPUTEPW", "elph"),
+        ("INPUTEPW", "ephwrite"),
+        ("INPUTEPW", "epmatkqread"),
     ]
 
     _use_kpoints = True
@@ -167,6 +195,13 @@ class EpwCalculation(NamelistsCalculation):
             required=False,
             serializer=to_aiida_type,
             help="Analytical continuation method: 'pade' or 'acon'.",
+        )
+        spec.input(
+            "restart_type",
+            valid_type=orm.EnumData,
+            required=False,
+            serializer=serialize_restart_type,
+            help="EPW restart type: Wannierize, ephwrite, or ephread.",
         )
         spec.input(
             "kpoints",
@@ -430,23 +465,56 @@ class EpwCalculation(NamelistsCalculation):
     @classmethod
     def validate_restart_inputs(cls, parameters, inputs):
         """Validate restart-related input combinations against the EPW parameters."""
-        inputepw = parameters["INPUTEPW"]
+        from aiida_epw.common import RestartType
 
-        if not inputepw.get("wannierize", False):
-            return
+        restart_type = None
+        if "restart_type" in inputs:
+            restart_node = inputs["restart_type"]
+            if hasattr(restart_node, "get_member"):
+                restart_type = restart_node.get_member()
+            elif hasattr(restart_node, "value"):
+                try:
+                    restart_type = RestartType(restart_node.value)
+                except Exception:
+                    pass
+            elif isinstance(restart_node, RestartType):
+                restart_type = restart_node
+            elif isinstance(restart_node, str):
+                try:
+                    restart_type = RestartType(restart_node.lower())
+                except ValueError:
+                    pass
 
-        for input_name in ("parent_folder_epw", "parent_folder_chk"):
-            if input_name in inputs:
+        is_wannierize = restart_type is RestartType.WANNIERIZE
+
+        if is_wannierize:
+            for input_name in ("parent_folder_epw", "parent_folder_chk"):
+                if input_name in inputs:
+                    raise exceptions.InputValidationError(
+                        f"`{input_name}` cannot be specified when "
+                        "doing wannierization (restart_type='wannierize')."
+                    )
+
+            if "parent_folder_nscf" not in inputs:
                 raise exceptions.InputValidationError(
-                    f"`{input_name}` cannot be specified when "
-                    "`parameters.INPUTEPW.wannierize` is true."
+                    "`parent_folder_nscf` must be specified when "
+                    "doing wannierization (restart_type='wannierize')."
                 )
-
-        if "parent_folder_nscf" not in inputs:
-            raise exceptions.InputValidationError(
-                "`parent_folder_nscf` must be specified when "
-                "`parameters.INPUTEPW.wannierize` is true."
-            )
+        else:
+            if restart_type in (RestartType.EPHWRITE, RestartType.EPHREAD):
+                if "parent_folder_epw" not in inputs:
+                    raise exceptions.InputValidationError(
+                        f"`parent_folder_epw` must be specified when "
+                        f"restart_type is '{restart_type.value}'."
+                    )
+            if "parent_folder_epw" in inputs and restart_type not in (
+                RestartType.EPHWRITE,
+                RestartType.EPHREAD,
+            ):
+                raise exceptions.InputValidationError(
+                    "`restart_type` must be specified and set to 'ephwrite' or 'ephread' "
+                    "when `parent_folder_epw` is provided."
+                )
 
     @staticmethod
     def has_manual_projections(inputepw):
@@ -469,7 +537,29 @@ class EpwCalculation(NamelistsCalculation):
         cls.validate_restart_inputs(parameters, inputs)
 
         inputepw = parameters["INPUTEPW"]
-        if inputepw.get("wannierize", False):
+        from aiida_epw.common import RestartType
+
+        restart_type = None
+        if "restart_type" in inputs:
+            restart_node = inputs["restart_type"]
+            if hasattr(restart_node, "get_member"):
+                restart_type = restart_node.get_member()
+            elif hasattr(restart_node, "value"):
+                try:
+                    restart_type = RestartType(restart_node.value)
+                except Exception:
+                    pass
+            elif isinstance(restart_node, RestartType):
+                restart_type = restart_node
+            elif isinstance(restart_node, str):
+                try:
+                    restart_type = RestartType(restart_node.lower())
+                except ValueError:
+                    pass
+
+        is_wannierize = restart_type is RestartType.WANNIERIZE
+
+        if is_wannierize:
             if inputepw.get("auto_projections", False):
                 raise exceptions.InputValidationError(
                     "`parameters.INPUTEPW.auto_projections` is not supported; "
@@ -491,7 +581,7 @@ class EpwCalculation(NamelistsCalculation):
             if not cls.has_manual_projections(inputepw):
                 raise exceptions.InputValidationError(
                     "Manual `proj` entries must be provided when "
-                    "`parameters.INPUTEPW.wannierize` is true."
+                    "doing wannierization (restart_type='wannierize')."
                 )
 
         # Validate Eliashberg parameters
@@ -776,6 +866,34 @@ class EpwCalculation(NamelistsCalculation):
                     inputepw_parameters["lacon"] = True
                 inputepw_parameters["limag"] = True
                 inputepw_parameters["lreal"] = False
+
+        if "restart_type" in self.inputs:
+            restart_val = self.inputs.restart_type.get_member()
+            from aiida_epw.common import RestartType
+
+            if restart_val is RestartType.WANNIERIZE:
+                inputepw_parameters["wannierize"] = True
+                inputepw_parameters["epwread"] = False
+                inputepw_parameters["epwwrite"] = True
+                inputepw_parameters["restart"] = False
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+            elif restart_val is RestartType.EPHWRITE:
+                inputepw_parameters["wannierize"] = False
+                inputepw_parameters["epwread"] = True
+                inputepw_parameters["epwwrite"] = False
+                inputepw_parameters["restart"] = False
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+            elif restart_val is RestartType.EPHREAD:
+                inputepw_parameters["wannierize"] = False
+                inputepw_parameters["epwread"] = True
+                inputepw_parameters["restart"] = False
+                inputepw_parameters["ep_coupling"] = False
+                inputepw_parameters["elph"] = False
+                inputepw_parameters["ephwrite"] = False
+                if inputepw_parameters.get("scattering", False):
+                    inputepw_parameters["epmatkqread"] = True
 
         inputepw_parameters["outdir"] = self._OUTPUT_SUBFOLDER
         inputepw_parameters["dvscf_dir"] = self._FOLDER_SAVE
