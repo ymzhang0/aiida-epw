@@ -36,6 +36,26 @@ def _lowercase_dict(dictionary, dict_name):
     return _case_transform_dict(dictionary, dict_name, "_lowercase_dict", str.lower)
 
 
+def serialize_calculation_type(value):
+    """Serialize input parameter into an AiiDA EnumData for CalculationTypes."""
+    from aiida.orm import EnumData
+    from aiida_epw.common.types import CalculationTypes
+
+    if isinstance(value, EnumData):
+        return value
+    if isinstance(value, CalculationTypes):
+        return EnumData(value)
+    if isinstance(value, str):
+        try:
+            return EnumData(CalculationTypes(value.lower()))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid calculation type '{value}'. Supported values: "
+                f"{[member.value for member in CalculationTypes]}"
+            ) from exc
+    raise TypeError(f"Cannot serialize {value} to EnumData of CalculationTypes")
+
+
 class EpwCalculation(NamelistsCalculation):
     """`CalcJob` implementation for the epw.x code of Quantum ESPRESSO."""
 
@@ -64,6 +84,8 @@ class EpwCalculation(NamelistsCalculation):
         ("INPUTEPW", "limag"),
         ("INPUTEPW", "lpade"),
         ("INPUTEPW", "lacon"),
+        ("INPUTEPW", "scattering"),
+        ("INPUTEPW", "plrn"),
     ]
 
     _use_kpoints = True
@@ -110,6 +132,13 @@ class EpwCalculation(NamelistsCalculation):
             "parameters",
             valid_type=orm.Dict,
             help="Parameters for the `epw.x` input file.",
+        )
+        spec.input(
+            "calculation_type",
+            valid_type=orm.EnumData,
+            required=False,
+            serializer=serialize_calculation_type,
+            help="EPW calculation type: Eliashberg, transport, or polaron.",
         )
         spec.input(
             "momentum_dependence",
@@ -470,6 +499,24 @@ class EpwCalculation(NamelistsCalculation):
         full_bandwidth = inputs.get("full_bandwidth", None)
         real_axis = inputs.get("real_axis", None)
         analytical_continuation = inputs.get("analytical_continuation", None)
+        calculation_type = inputs.get("calculation_type", None)
+
+        if calculation_type is not None:
+            calc_type = calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type != CalculationTypes.ELIASHBERG:
+                for f in (
+                    "momentum_dependence",
+                    "full_bandwidth",
+                    "real_axis",
+                    "analytical_continuation",
+                ):
+                    if f in inputs:
+                        raise exceptions.InputValidationError(
+                            f"Eliashberg parameter '{f}' cannot be specified when "
+                            f"calculation_type is '{calc_type.value}'."
+                        )
 
         if analytical_continuation is not None:
             ac_val = analytical_continuation.value
@@ -674,6 +721,24 @@ class EpwCalculation(NamelistsCalculation):
         inputepw_parameters = parameters["INPUTEPW"]
 
         self.cap_nstemp(inputepw_parameters)
+
+        # Override calculation type settings in parameters if calculation_type is specified
+        if "calculation_type" in self.inputs:
+            calc_type = self.inputs.calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type == CalculationTypes.ELIASHBERG:
+                inputepw_parameters["eliashberg"] = True
+                inputepw_parameters["scattering"] = False
+                inputepw_parameters["plrn"] = False
+            elif calc_type == CalculationTypes.TRANSPORT:
+                inputepw_parameters["eliashberg"] = False
+                inputepw_parameters["scattering"] = True
+                inputepw_parameters["plrn"] = False
+            elif calc_type == CalculationTypes.POLARON:
+                inputepw_parameters["eliashberg"] = False
+                inputepw_parameters["scattering"] = False
+                inputepw_parameters["plrn"] = True
 
         # Override Eliashberg settings in parameters if inputs are specified
         eliashberg_any = any(
