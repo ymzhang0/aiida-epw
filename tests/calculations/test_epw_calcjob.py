@@ -680,3 +680,26 @@ def test_epw_restart_type_parameter(
     assert "elph = .false." in input_contents
     assert "ephwrite = .false." in input_contents
     assert "epmatkqread = .true." in input_contents
+
+
+def test_epw_eliashberg_parameters_continuation_none(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that analytical_continuation='none' writes lpade/lacon as False."""
+    inputs = generate_inputs_epw(
+        momentum_dependence=orm.Bool(False),
+        full_bandwidth=orm.Bool(False),
+        real_axis=orm.Bool(True),
+        analytical_continuation=orm.Str("none"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .true." in input_contents
+    assert "laniso = .false." in input_contents
+    assert "liso = .true." in input_contents
+    assert "fbw = .false." in input_contents
+    assert "lreal = .true." in input_contents
+    assert "limag = .false." in input_contents
+    assert "lpade = .false." in input_contents
+    assert "lacon = .false." in input_contents
