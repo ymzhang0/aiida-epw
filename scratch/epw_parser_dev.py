@@ -18,10 +18,7 @@ from aiida_epw.data import (
     PDosData,
     PhDosData,
 )
-from aiida_epw.parsers.schemas import (
-    REGEX_PATTERNS_LEGACY,
-    REGEX_PATTERNS_MODERN,
-)
+from aiida_epw.parsers.schemas import REGEX_PATTERNS_LEGACY, REGEX_PATTERNS_MODERN
 
 
 class EpwParser(BaseParser):
@@ -32,7 +29,6 @@ class EpwParser(BaseParser):
     class_error_map = {
         "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
         "internal error, cannot bracket Ef": "ERROR_CANNOT_BRACKET_EF",
-        r"Error in routine mix_broyden \(\d+\):\s*factorization": "ERROR_FACTORIZATION",
     }
 
     @staticmethod
@@ -205,18 +201,7 @@ class EpwParser(BaseParser):
         if "Allen_Dynes_Tc" in parsed_data:
             parsed_data.setdefault("allen_dynes", parsed_data["Allen_Dynes_Tc"])
 
-        self.out("output_parameters", orm.Dict(self.clean_nans(parsed_data)))
-
-        if "ERROR_PADE_APPROXIMANTS" in logs.error:
-            return self.exit(self.exit_codes.get("ERROR_PADE_APPROXIMANTS"), logs)
-
-        if "ERROR_TEMPERATURE_OUT_OF_RANGE" in logs.error:
-            return self.exit(
-                self.exit_codes.get("ERROR_TEMPERATURE_OUT_OF_RANGE"), logs
-            )
-
-        if "ERROR_FACTORIZATION" in logs.error:
-            return self.exit(self.exit_codes.get("ERROR_FACTORIZATION"), logs)
+        self.out("output_parameters", orm.Dict(parsed_data))
 
         for exit_code in list(self.get_error_map().values()):
             if exit_code in logs.error:
@@ -228,23 +213,6 @@ class EpwParser(BaseParser):
             )
 
         return self.exit(logs=logs)
-
-    @staticmethod
-    def clean_nans(value):
-        """Recursively replace float('nan'), float('inf'), and float('-inf') in dictionaries/lists with None."""
-        import math
-
-        if isinstance(value, float):
-            if math.isnan(value) or math.isinf(value):
-                return None
-            return value
-        if isinstance(value, dict):
-            return {k: EpwParser.clean_nans(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [EpwParser.clean_nans(v) for v in value]
-        if isinstance(value, tuple):
-            return tuple(EpwParser.clean_nans(v) for v in value)
-        return value
 
     @staticmethod
     def parse_stdout(stdout, logs, code_version):
@@ -278,10 +246,10 @@ class EpwParser(BaseParser):
         stdout_lines = stdout.split("\n")
 
         for line_number, line in enumerate(stdout_lines):
-            for key, type_func, pattern in patterns:
-                match = pattern.search(line)
+            for entry in patterns:
+                match = entry.pattern.search(line)
                 if match:
-                    parsed_data[key] = type_func(match.group(1))
+                    parsed_data[entry.key] = entry.type_func(match.group(1))
 
             for (
                 data_key,
@@ -292,88 +260,6 @@ class EpwParser(BaseParser):
                     parsed_data[data_key] = block_parser(
                         "\n".join(stdout_lines[line_number:])
                     )
-
-        # Parse carrier mobility matrices (SERTA and iBTE)
-        from aiida_epw.tools.parsers import parse_transport_matrices
-        import numpy
-
-        # Identify SERTA block
-        serta_match = re.search(
-            r"BTE in the self-energy relaxation time approximation \(SERTA\)", stdout
-        )
-        # Identify BTE block (looking for standalone BTE header)
-        bte_match = re.search(r"\n\s+BTE\s*\n", stdout)
-
-        serta_idx = serta_match.start() if serta_match else -1
-        bte_idx = bte_match.start() if bte_match else -1
-
-        if serta_idx != -1:
-            end_serta = bte_idx if bte_idx > serta_idx else len(stdout)
-            serta_block = stdout[serta_idx:end_serta]
-            serta_data = parse_transport_matrices(serta_block)
-
-            for k, v in serta_data.items():
-                parsed_data[f"serta_{k}"] = v
-
-            # Maintain backward compatibility for mobility scalar
-            if "mobility" in serta_data:
-                parsed_data["mobility_SERTA"] = (
-                    numpy.trace(numpy.array(serta_data["mobility"])) / 3.0
-                )
-
-        if bte_idx != -1:
-            ibte_block = stdout[bte_idx:]
-            ibte_data = parse_transport_matrices(ibte_block)
-
-            for k, v in ibte_data.items():
-                parsed_data[f"ibte_{k}"] = v
-
-            # Maintain backward compatibility for mobility scalar
-            if "mobility" in ibte_data:
-                parsed_data["mobility_iBTE"] = (
-                    numpy.trace(numpy.array(ibte_data["mobility"])) / 3.0
-                )
-
-        # Parse Eliashberg temperature blocks
-        from aiida_epw.tools.parsers import parse_stdout_eliashberg
-
-        parsed_data.update(parse_stdout_eliashberg(stdout))
-
-        # Check for Pade approximation failure (NaN values under the pade table header)
-        pade_header_match = re.search(
-            r"pade\s+Re\[znorm\]\s+Re\[delta\]\s+\[meV\]\s+Re\[shift\]\s+\[meV\]",
-            stdout,
-        )
-        if pade_header_match:
-            start_idx = pade_header_match.end()
-            remaining = stdout[start_idx:].lstrip()
-            if remaining:
-                first_line = remaining.split("\n", 1)[0]
-                if "nan" in first_line.lower():
-                    logs.error.append("ERROR_PADE_APPROXIMANTS")
-
-        # Also check for NaN in any Eliashberg self-consistent solver iteration lines
-        if re.search(r"^\s*\d+\s+nan", stdout, re.MULTILINE | re.IGNORECASE):
-            logs.error.append("ERROR_PADE_APPROXIMANTS")
-
-        # Check for factorization / temperature out of range failure
-        if re.search(
-            r"Error in routine mix_broyden \(\d+\):\s*factorization",
-            stdout,
-            re.IGNORECASE,
-        ):
-            is_out_of_range = False
-            for eliashberg_key in ("isotropic_eliashberg", "anisotropic_eliashberg"):
-                if eliashberg_key in parsed_data:
-                    for temp_str, temp_data in parsed_data[eliashberg_key].items():
-                        deltai = temp_data.get("iterations", {}).get("deltai", [])
-                        if deltai and abs(deltai[-1]) < 1e-10:
-                            is_out_of_range = True
-                            break
-            if is_out_of_range:
-                logs.error.append("ERROR_TEMPERATURE_OUT_OF_RANGE")
-            else:
-                logs.error.append("ERROR_FACTORIZATION")
 
         return parsed_data, logs
 
