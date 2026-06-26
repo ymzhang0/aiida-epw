@@ -1,7 +1,8 @@
+"""Parser for the EPW calculations."""
+
 import re
 from pathlib import Path
 
-import numpy
 from aiida import orm
 from aiida_quantumespresso.parsers.base import BaseParser
 from aiida_quantumespresso.utils.mapping import get_logging_container
@@ -10,32 +11,16 @@ from packaging.version import Version
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
-    PA2fData,
     DosData,
-    PDosData,
-    PhDosData,
     GapFunctionData,
     LambdaFSData,
-)
-from aiida_epw.tools.parsers import (
-    parse_epw_a2f,
-    parse_epw_a2f_proj,
-    parse_epw_bands,
-    parse_epw_dos,
-    parse_epw_imag_aniso_gap0,
-    parse_epw_imag_iso,
-    parse_epw_lambda_fs,
-    parse_epw_lambda_k_pairs,
-    parse_epw_max_eigenvalue,
-    parse_epw_phdos,
-    parse_epw_phdos_proj,
-    parse_aniso_gap_FS,
-    parse_aniso,
+    PA2fData,
+    PDosData,
+    PhDosData,
 )
 from aiida_epw.parsers.schemas import (
     REGEX_PATTERNS_LEGACY,
     REGEX_PATTERNS_MODERN,
-    parse_fortran_float,
 )
 
 
@@ -118,7 +103,7 @@ class EpwParser(BaseParser):
             return self.exit(base_exit_code, logs)
 
         parsed_epw, logs = self.parse_stdout(
-            stdout, logs, code_version=Version(parsed_data.get("code_version", "5.9"))
+            stdout, logs, code_version=Version(parsed_data["code_version"])
         )
         parsed_data.update(parsed_epw)
 
@@ -144,207 +129,75 @@ class EpwParser(BaseParser):
                 ),
             )
 
-        # Determine whether Eliashberg is enabled and which files to parse
-        eliashberg_enabled = None
-        momentum_dependence = None
-        real_axis = None
-        analytical_continuation = None
-
-        # 1. Try to read from direct inputs
-        if any(
-            hasattr(self.node.inputs, f)
-            for f in (
-                "momentum_dependence",
-                "full_bandwidth",
-                "real_axis",
-                "analytical_continuation",
-            )
-        ):
-            eliashberg_enabled = True
-
-            momentum_dependence_input = getattr(
-                self.node.inputs, "momentum_dependence", None
-            )
-            momentum_dependence = (
-                momentum_dependence_input.value
-                if momentum_dependence_input is not None
-                else False
+        a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
+        if a2f_contents is not None:
+            a2f_data = A2fData.from_string(a2f_contents)
+            self.out("a2f", a2f_data)
+            parsed_data.update(
+                {
+                    "degaussw": a2f_data.electron_smearing,
+                    "fsthick": a2f_data.fermi_window,
+                }
             )
 
-            real_axis_input = getattr(self.node.inputs, "real_axis", None)
-            real_axis = real_axis_input.value if real_axis_input is not None else False
+        # Declarative specification for standard retrieved array output files
+        standard_outputs = [
+            (
+                [
+                    EpwCalculation._OUTPUT_DOS_FILE,
+                    Path(
+                        EpwCalculation._OUTPUT_SUBFOLDER,
+                        EpwCalculation._OUTPUT_DOS_FILE,
+                    ).as_posix(),
+                ],
+                "dos",
+                DosData.from_string,
+            ),
+            ([EpwCalculation._OUTPUT_PHDOS_FILE], "phdos", PhDosData.from_string),
+            (
+                [EpwCalculation._OUTPUT_PHDOS_PROJ_FILE],
+                "phdos_proj",
+                PDosData.from_string,
+            ),
+            ([EpwCalculation._OUTPUT_A2F_PROJ_FILE], "a2f_proj", PA2fData.from_string),
+            (
+                [EpwCalculation._OUTPUT_LAMBDA_FS_FILE],
+                "lambda_FS",
+                LambdaFSData.from_string,
+            ),
+            (
+                [EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE],
+                "lambda_k_pairs",
+                self.parse_lambda_k_pairs,
+            ),
+        ]
 
-            analytical_continuation_input = getattr(
-                self.node.inputs, "analytical_continuation", None
+        for paths, link_label, parser_func in standard_outputs:
+            contents = self.get_retrieved_content(*paths)
+            if contents is not None:
+                self.out(link_label, parser_func(contents))
+
+        iso_gap_filecontents = self.get_retrieved_contents_matching(
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
+        )
+        if iso_gap_filecontents:
+            self.out(
+                "iso_gap_functions",
+                GapFunctionData.from_files(
+                    iso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="iso"
+                ),
             )
-            analytical_continuation = (
-                analytical_continuation_input.value
-                if analytical_continuation_input is not None
-                else None
+
+        aniso_gap_filecontents = self.get_retrieved_contents_matching(
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_aniso_gap0_\d+\.\d+$")
+        )
+        if aniso_gap_filecontents:
+            self.out(
+                "aniso_gap_functions",
+                GapFunctionData.from_files(
+                    aniso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="aniso"
+                ),
             )
-        else:
-            # 2. Try to read from parameters
-            parameters = getattr(self.node.inputs, "parameters", None)
-            if parameters is not None:
-                inputepw = parameters.get_dict().get("INPUTEPW", {})
-                eliashberg_enabled = inputepw.get("eliashberg", False)
-                momentum_dependence = inputepw.get("laniso", False)
-                real_axis = inputepw.get("lreal", False)
-                if inputepw.get("lacon", False):
-                    analytical_continuation = "acon"
-                elif inputepw.get("lpade", False):
-                    analytical_continuation = "pade"
-
-        # 3. Fallback: If we still don't know (e.g. mock node without inputs in unit tests),
-        # check the retrieved folder for the existence of key files!
-        if eliashberg_enabled is None:
-            retrieved_files = self.retrieved.base.repository.list_object_names()
-            has_iso_files = any("iso" in name for name in retrieved_files)
-            has_aniso_files = any(
-                "aniso" in name or "lambda_FS" in name or "lambda_k_pairs" in name
-                for name in retrieved_files
-            )
-            has_a2f_files = any("a2f" in name for name in retrieved_files)
-
-            if has_iso_files or has_aniso_files or has_a2f_files:
-                eliashberg_enabled = True
-                momentum_dependence = has_aniso_files
-
-                # Check for real_axis based on retrieved files
-                has_real_files = any("real" in name for name in retrieved_files)
-                real_axis = has_real_files
-            else:
-                eliashberg_enabled = False
-
-        if eliashberg_enabled:
-            # Determine allowed prefixes based on inputs
-            allowed_prefixes = []
-            if real_axis is True:
-                allowed_prefixes.append("real")
-            elif real_axis is False:
-                allowed_prefixes.append("imag")
-                if analytical_continuation == "pade":
-                    allowed_prefixes.append("pade")
-                elif analytical_continuation == "acon":
-                    allowed_prefixes.append("acon")
-                else:
-                    allowed_prefixes.extend(["pade", "acon"])
-            else:
-                allowed_prefixes.extend(["imag", "real", "pade", "acon"])
-
-            prefix_pattern = "|".join(allowed_prefixes)
-
-            a2f_contents = self.get_retrieved_content(EpwCalculation._OUTPUT_A2F_FILE)
-            if a2f_contents is not None:
-                a2f_data, parsed_a2f = self.parse_a2f(a2f_contents)
-                self.out("a2f", a2f_data)
-                parsed_data.update(parsed_a2f)
-
-            dos_contents = self.get_retrieved_content(
-                EpwCalculation._OUTPUT_DOS_FILE,
-                Path(
-                    EpwCalculation._OUTPUT_SUBFOLDER, EpwCalculation._OUTPUT_DOS_FILE
-                ).as_posix(),
-            )
-            if dos_contents is not None:
-                self.out("dos", self.parse_dos(dos_contents))
-
-            phdos_contents = self.get_retrieved_content(
-                EpwCalculation._OUTPUT_PHDOS_FILE
-            )
-            if phdos_contents is not None:
-                self.out("phdos", self.parse_phdos(phdos_contents))
-
-            phdos_proj_contents = self.get_retrieved_content(
-                EpwCalculation._OUTPUT_PHDOS_PROJ_FILE
-            )
-            if phdos_proj_contents is not None:
-                self.out("phdos_proj", self.parse_phdos_proj(phdos_proj_contents))
-
-            a2f_proj_contents = self.get_retrieved_content(
-                EpwCalculation._OUTPUT_A2F_PROJ_FILE
-            )
-            if a2f_proj_contents is not None:
-                self.out("a2f_proj", self.parse_a2f_proj(a2f_proj_contents))
-
-            if momentum_dependence:
-                lambda_FS_contents = self.get_retrieved_content(
-                    EpwCalculation._OUTPUT_LAMBDA_FS_FILE
-                )
-                if lambda_FS_contents is not None:
-                    self.out("lambda_FS", self.parse_lambda_FS(lambda_FS_contents))
-
-                lambda_k_pairs_contents = self.get_retrieved_content(
-                    EpwCalculation._OUTPUT_LAMBDA_K_PAIRS_FILE
-                )
-                if lambda_k_pairs_contents is not None:
-                    self.out(
-                        "lambda_k_pairs",
-                        self.parse_lambda_k_pairs(lambda_k_pairs_contents),
-                    )
-
-                aniso_gap_pattern = re.compile(
-                    rf"{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_aniso_gap0_\d+\.\d+$"
-                )
-                if self.retrieved and any(
-                    aniso_gap_pattern.match(name)
-                    for name in self.retrieved.list_object_names()
-                ):
-                    self.out(
-                        "aniso_gap_functions",
-                        self.parse_aniso_gap_functions(
-                            self.retrieved, allowed_prefixes=allowed_prefixes
-                        ),
-                    )
-
-                aniso_gap_fs_pattern = re.compile(
-                    rf"^{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_aniso_gap_FS_\d+\.\d+$"
-                )
-                if self.retrieved and any(
-                    aniso_gap_fs_pattern.match(name)
-                    for name in self.retrieved.list_object_names()
-                ):
-                    self.out(
-                        "aniso_gap_FS",
-                        self.parse_aniso_gap_fs(
-                            self.retrieved, allowed_prefixes=allowed_prefixes
-                        ),
-                    )
-
-                aniso_imag_pattern = re.compile(
-                    rf"^{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_aniso_\d+\.\d+$"
-                )
-                if self.retrieved and any(
-                    aniso_imag_pattern.match(name)
-                    for name in self.retrieved.list_object_names()
-                ):
-                    fbw_enabled = False
-                    if "parameters" in self.node.inputs:
-                        params_dict = self.node.inputs.parameters.get_dict()
-                        fbw_enabled = params_dict.get("INPUTEPW", {}).get("fbw", False)
-                    restriction = "fbw" if fbw_enabled else "fsr"
-                    self.out(
-                        "aniso_gap_imag",
-                        self.parse_aniso_imag(
-                            self.retrieved,
-                            restriction=restriction,
-                            allowed_prefixes=allowed_prefixes,
-                        ),
-                    )
-            else:
-                iso_gap_pattern = re.compile(
-                    rf"^{EpwCalculation._PREFIX}\.(?:{prefix_pattern})_iso_\d+\.\d+$"
-                )
-                if self.retrieved and any(
-                    iso_gap_pattern.match(name)
-                    for name in self.retrieved.list_object_names()
-                ):
-                    self.out(
-                        "iso_gap_functions",
-                        self.parse_iso_gap_functions(
-                            self.retrieved, allowed_prefixes=allowed_prefixes
-                        ),
-                    )
 
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
@@ -352,7 +205,10 @@ class EpwParser(BaseParser):
         if "Allen_Dynes_Tc" in parsed_data:
             parsed_data.setdefault("allen_dynes", parsed_data["Allen_Dynes_Tc"])
 
-        self.out("output_parameters", orm.Dict(parsed_data))
+        self.out("output_parameters", orm.Dict(self.clean_nans(parsed_data)))
+
+        if "ERROR_PADE_APPROXIMANTS" in logs.error:
+            return self.exit(self.exit_codes.get("ERROR_PADE_APPROXIMANTS"), logs)
 
         for exit_code in list(self.get_error_map().values()):
             if exit_code in logs.error:
@@ -366,10 +222,29 @@ class EpwParser(BaseParser):
         return self.exit(logs=logs)
 
     @staticmethod
+    def clean_nans(value):
+        """Recursively replace float('nan'), float('inf'), and float('-inf') in dictionaries/lists with None."""
+        import math
+
+        if isinstance(value, float):
+            if math.isnan(value) or math.isinf(value):
+                return None
+            return value
+        if isinstance(value, dict):
+            return {k: EpwParser.clean_nans(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [EpwParser.clean_nans(v) for v in value]
+        if isinstance(value, tuple):
+            return tuple(EpwParser.clean_nans(v) for v in value)
+        return value
+
+    @staticmethod
     def parse_stdout(stdout, logs, code_version):
         """Parse the ``stdout``."""
 
         def parse_max_eigenvalue(stdout_block):
+            from aiida_epw.tools.parsers import parse_epw_max_eigenvalue
+
             parsed_max_ev = parse_epw_max_eigenvalue(stdout_block)
             max_eigenvalue_array = orm.XyData()
             max_eigenvalue_array.set_array(
@@ -451,457 +326,47 @@ class EpwParser(BaseParser):
                     numpy.trace(numpy.array(ibte_data["mobility"])) / 3.0
                 )
 
-        # Parse isotropic Eliashberg temperature blocks
-        eliashberg_marker = "Solve isotropic Eliashberg equations"
-        eliashberg_idx = stdout.find(eliashberg_marker)
-        if eliashberg_idx != -1:
-            eliashberg_content = stdout[eliashberg_idx:]
-            temp_pattern = re.compile(r"temp\(\s*\d+\s*\)\s*=\s*([\d\.]+)\s*K")
-            matches = list(temp_pattern.finditer(eliashberg_content))
+        # Parse Eliashberg temperature blocks
+        from aiida_epw.tools.parsers import parse_stdout_eliashberg
 
-            blocks = []
-            for i, match in enumerate(matches):
-                start = match.start()
-                end = (
-                    matches[i + 1].start()
-                    if i + 1 < len(matches)
-                    else len(eliashberg_content)
-                )
+        parsed_data.update(parse_stdout_eliashberg(stdout))
 
-                unfolding_idx = eliashberg_content.find(
-                    "Unfolding on the coarse grid", start, end
-                )
-                if unfolding_idx != -1:
-                    end = unfolding_idx
-
-                block_text = eliashberg_content[start:end]
-                temp = float(match.group(1))
-
-                nsiw_match = re.search(
-                    r"Total number of frequency points nsiw\(\s*\d+\s*\)\s*=\s*(\d+)",
-                    block_text,
-                )
-                wscut_match = re.search(
-                    r"Cutoff frequency wscut\s*=\s*([\d\.]+)\s*eV", block_text
-                )
-                broyden_match = re.search(
-                    r"broyden mixing factor\s*=\s*([\d\.]+)", block_text
-                )
-                nsiter_match = re.search(
-                    r"Convergence was reached in nsiter\s*=\s*(\d+)", block_text
-                )
-                free_energy_match = re.search(
-                    r"Free energy\s*=\s*([\d\.-]+)\s*meV", block_text
-                )
-
-                block_data = {"temp": temp}
-                if nsiw_match:
-                    block_data["nsiw"] = int(nsiw_match.group(1))
-                if wscut_match:
-                    block_data["wscut"] = float(wscut_match.group(1))
-                if broyden_match:
-                    block_data["broyden_mixing_factor"] = float(broyden_match.group(1))
-                if nsiter_match:
-                    block_data["nsiter"] = int(nsiter_match.group(1))
-                if free_energy_match:
-                    block_data["free_energy"] = float(free_energy_match.group(1))
-
-                iw_match = re.search(
-                    r"startiw\s*=\s*(\d+),\s*lastiw\s*=\s*(\d+),\s*nsiw\(itemp\)\s*=\s*(\d+)",
-                    block_text,
-                )
-                if iw_match:
-                    block_data["startiw"] = int(iw_match.group(1))
-                    block_data["lastiw"] = int(iw_match.group(2))
-                    block_data["nsiw_itemp"] = int(iw_match.group(3))
-
-                iter_header = re.search(
-                    r"iter\s+ethr\s+znormi\s+deltai\s+\[meV\]", block_text
-                )
-                if iter_header:
-                    header_end = iter_header.end()
-                    remaining_text = block_text[header_end:]
-                    ethr_list = []
-                    znormi_list = []
-                    deltai_list = []
-                    row_pattern = re.compile(
-                        r"^\s*(\d+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s*$"
-                    )
-                    for line in remaining_text.split("\n"):
-                        row_match = row_pattern.match(line)
-                        if row_match:
-                            ethr_list.append(parse_fortran_float(row_match.group(2)))
-                            znormi_list.append(parse_fortran_float(row_match.group(3)))
-                            deltai_list.append(parse_fortran_float(row_match.group(4)))
-                        elif ethr_list:
-                            break
-                    if ethr_list:
-                        block_data["iterations"] = {
-                            "ethr": ethr_list,
-                            "znormi": znormi_list,
-                            "deltai": deltai_list,
-                        }
-
-                blocks.append(block_data)
-
-            if blocks:
-                parsed_data["isotropic_eliashberg"] = blocks
-
-        # Parse anisotropic Eliashberg temperature blocks
-        anisotropic_marker = "anisotropic Eliashberg equations"
-        anisotropic_idx = stdout.find(anisotropic_marker)
-        if anisotropic_idx != -1:
-            anisotropic_content = stdout[anisotropic_idx:]
-            temp_pattern = re.compile(r"temp\(\s*\d+\s*\)\s*=\s*([\d\.]+)\s*K")
-            matches = list(temp_pattern.finditer(anisotropic_content))
-
-            blocks = []
-            for i, match in enumerate(matches):
-                start = match.start()
-                end = (
-                    matches[i + 1].start()
-                    if i + 1 < len(matches)
-                    else len(anisotropic_content)
-                )
-
-                unfolding_idx = anisotropic_content.find(
-                    "Unfolding on the coarse grid", start, end
-                )
-                if unfolding_idx != -1:
-                    end = unfolding_idx
-
-                block_text = anisotropic_content[start:end]
-                temp = float(match.group(1))
-
-                nsiw_match = re.search(
-                    r"Total number of frequency points nsiw\(\s*\d+\s*\)\s*=\s*(\d+)",
-                    block_text,
-                )
-                wscut_match = re.search(
-                    r"Cutoff frequency wscut\s*=\s*([\d\.]+)\s*eV", block_text
-                )
-                broyden_match = re.search(
-                    r"broyden mixing factor\s*=\s*([\d\.]+)", block_text
-                )
-                nsiter_match = re.search(
-                    r"Convergence was reached in nsiter\s*=\s*(\d+)", block_text
-                )
-                free_energy_match = re.search(
-                    r"Free energy\s*=\s*([\d\.-]+)\s*meV", block_text
-                )
-
-                block_data = {"temp": temp}
-                if nsiw_match:
-                    block_data["nsiw"] = int(nsiw_match.group(1))
-                if wscut_match:
-                    block_data["wscut"] = float(wscut_match.group(1))
-                if broyden_match:
-                    block_data["broyden_mixing_factor"] = float(broyden_match.group(1))
-                if nsiter_match:
-                    block_data["nsiter"] = int(nsiter_match.group(1))
-                if free_energy_match:
-                    block_data["free_energy"] = float(free_energy_match.group(1))
-
-                iw_match = re.search(
-                    r"startiw\s*=\s*(\d+),\s*lastiw\s*=\s*(\d+),\s*nsiw\(itemp\)\s*=\s*(\d+)",
-                    block_text,
-                )
-                if iw_match:
-                    block_data["startiw"] = int(iw_match.group(1))
-                    block_data["lastiw"] = int(iw_match.group(2))
-                    block_data["nsiw_itemp"] = int(iw_match.group(3))
-
-                gap_match = re.search(
-                    r"Min\.\s*/\s*Max\.\s*values\s*of\s*superconducting\s*gap\s*=\s*([\d\.-]+)\s+([\d\.-]+)\s*meV",
-                    block_text,
-                )
-                if gap_match:
-                    block_data["gap_min"] = float(gap_match.group(1))
-                    block_data["gap_max"] = float(gap_match.group(2))
-
-                iter_header = re.search(
-                    r"iter\s+ethr\s+znormi\s+deltai\s+\[meV\]", block_text
-                )
-                if iter_header:
-                    header_end = iter_header.end()
-                    remaining_text = block_text[header_end:]
-                    ethr_list = []
-                    znormi_list = []
-                    deltai_list = []
-                    shifti_list = []
-                    mu_list = []
-                    row_pattern = re.compile(
-                        r"^\s*(\d+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+)(?:\s+([\d\.\+\-EeDd]+)\s+([\d\.\+\-EeDd]+))?\s*$"
-                    )
-                    for line in remaining_text.split("\n"):
-                        row_match = row_pattern.match(line)
-                        if row_match:
-                            ethr_list.append(parse_fortran_float(row_match.group(2)))
-                            znormi_list.append(parse_fortran_float(row_match.group(3)))
-                            deltai_list.append(parse_fortran_float(row_match.group(4)))
-                            if row_match.group(5) is not None:
-                                shifti_list.append(
-                                    parse_fortran_float(row_match.group(5))
-                                )
-                            if row_match.group(6) is not None:
-                                mu_list.append(parse_fortran_float(row_match.group(6)))
-                        elif ethr_list:
-                            break
-                    if ethr_list:
-                        iterations = {
-                            "ethr": ethr_list,
-                            "znormi": znormi_list,
-                            "deltai": deltai_list,
-                        }
-                        if shifti_list:
-                            iterations["shifti"] = shifti_list
-                        if mu_list:
-                            iterations["mu"] = mu_list
-                        block_data["iterations"] = iterations
-
-                blocks.append(block_data)
-
-            if blocks:
-                parsed_data["anisotropic_eliashberg"] = blocks
+        # Check for Pade approximation failure (NaN values under the pade table header)
+        pade_header_match = re.search(
+            r"pade\s+Re\[znorm\]\s+Re\[delta\]\s+\[meV\]\s+Re\[shift\]\s+\[meV\]",
+            stdout,
+        )
+        if pade_header_match:
+            start_idx = pade_header_match.end()
+            remaining = stdout[start_idx:].lstrip()
+            if remaining:
+                first_line = remaining.split("\n", 1)[0]
+                if "nan" in first_line.lower():
+                    logs.error.append("ERROR_PADE_APPROXIMANTS")
 
         return parsed_data, logs
 
     @staticmethod
-    def parse_a2f(content):
-        """Parse the contents of the `.a2f` file."""
-        parsed_a2f = parse_epw_a2f(content)
-
-        a2f_data = A2fData()
-        a2f_data.set_a2f_data(
-            frequency=parsed_a2f["frequency"],
-            spectrum=parsed_a2f["a2f"],
-            lambda_values=parsed_a2f["lambda"],
-            phonon_smearing=parsed_a2f["phonon_smearing"],
-            cumulative_lambda=parsed_a2f.get("cumulative_lambda"),
-            electron_smearing=parsed_a2f.get("electron_smearing"),
-            fermi_window=parsed_a2f.get("fermi_window"),
-            summed_elph_coupling=parsed_a2f.get("summed_elph_coupling"),
-        )
-
-        parsed_data = {
-            "degaussw": parsed_a2f["electron_smearing"],
-            "fsthick": parsed_a2f["fermi_window"],
-        }
-        return a2f_data, parsed_data
-
-    @staticmethod
-    def parse_iso_gap_functions(file_contents, allowed_prefixes=None):
-        """Parse isotropic gap-function files into a typed datatype."""
-        kwargs = {}
-        if allowed_prefixes is not None:
-            kwargs["allowed_prefixes"] = allowed_prefixes
-        gap_functions = parse_epw_imag_iso(
-            file_contents, prefix=EpwCalculation._PREFIX, **kwargs
-        )
-        gap_function_data = GapFunctionData()
-        gap_function_data.set_gap_functions(gap_functions, kind="iso")
-        return gap_function_data
-
-    @staticmethod
-    def parse_aniso_gap_functions(file_contents, allowed_prefixes=None):
-        """Parse anisotropic gap-function files into a typed datatype."""
-        kwargs = {}
-        if allowed_prefixes is not None:
-            kwargs["allowed_prefixes"] = allowed_prefixes
-        gap_functions = parse_epw_imag_aniso_gap0(
-            file_contents, prefix=EpwCalculation._PREFIX, **kwargs
-        )
-        gap_function_data = GapFunctionData()
-        gap_function_data.set_gap_functions(gap_functions, kind="aniso")
-        return gap_function_data
-
-    @staticmethod
-    def parse_aniso_gap_fs(folder, allowed_prefixes=None):
-        """Parse the imag_aniso_gap_FS files into an ArrayData node."""
-        kwargs = {}
-        if allowed_prefixes is not None:
-            kwargs["allowed_prefixes"] = allowed_prefixes
-        parsed_by_temp = parse_aniso_gap_FS(
-            folder, prefix=EpwCalculation._PREFIX, **kwargs
-        )
-        array_data = orm.ArrayData()
-        temperatures = sorted(parsed_by_temp.keys())
-        array_data.base.attributes.set("temperatures", temperatures)
-
-        for temp in temperatures:
-            parsed = parsed_by_temp[temp]
-            temp_str = f"{temp:.2f}".replace(".", "_")
-            bands = [int(k) for k in parsed.keys() if isinstance(k, int)]
-            for band in sorted(bands):
-                band_data = parsed[band]
-                array_data.set_array(
-                    f"temp_{temp_str}_band_{band}_kpoints", band_data["kpoints"]
-                )
-                array_data.set_array(
-                    f"temp_{temp_str}_band_{band}_energy", band_data["energy"]
-                )
-                array_data.set_array(
-                    f"temp_{temp_str}_band_{band}_delta", band_data["delta"]
-                )
-            array_data.base.attributes.set(f"temp_{temp_str}_bands", sorted(bands))
-            if "units" in parsed:
-                array_data.base.attributes.set(
-                    f"temp_{temp_str}_units", parsed["units"]
-                )
-        return array_data
-
-    @staticmethod
-    def parse_aniso_imag(folder, restriction="fsr", allowed_prefixes=None):
-        """Parse the imag_aniso files into an ArrayData node."""
-        kwargs = {}
-        if allowed_prefixes is not None:
-            kwargs["allowed_prefixes"] = allowed_prefixes
-        parsed_by_temp = parse_aniso(
-            folder, prefix=EpwCalculation._PREFIX, restriction=restriction, **kwargs
-        )
-        array_data = orm.ArrayData()
-        temperatures = sorted(parsed_by_temp.keys())
-        array_data.base.attributes.set("temperatures", temperatures)
-
-        for temp in temperatures:
-            parsed = parsed_by_temp[temp]
-            temp_str = f"{temp:.2f}".replace(".", "_")
-            frequencies = sorted(
-                [float(k) for k in parsed.keys() if isinstance(k, float)]
-            )
-            for index, w in enumerate(frequencies):
-                w_data = parsed[w]
-                array_data.set_array(
-                    f"temp_{temp_str}_freq_{index}_energy", w_data["energy"]
-                )
-                array_data.set_array(
-                    f"temp_{temp_str}_freq_{index}_znorm", w_data["znorm"]
-                )
-                array_data.set_array(
-                    f"temp_{temp_str}_freq_{index}_delta", w_data["delta"]
-                )
-                if restriction == "fbw":
-                    array_data.set_array(
-                        f"temp_{temp_str}_freq_{index}_shift", w_data["shift"]
-                    )
-            array_data.base.attributes.set(f"temp_{temp_str}_frequencies", frequencies)
-            if "units" in parsed:
-                array_data.base.attributes.set(
-                    f"temp_{temp_str}_units", parsed["units"]
-                )
-        return array_data
-
-    @staticmethod
-    def parse_a2f_proj(content):
-        """Parse the contents of the `.a2f_proj` file."""
-        parsed = parse_epw_a2f_proj(content)
-        pa2f_data = PA2fData()
-        pa2f_data.set_pa2f_data(
-            frequency=parsed["frequency"],
-            a2f=parsed["a2f"],
-            projected_a2f=parsed["projected_a2f"],
-            lambda_int=parsed.get("lambda_int"),
-            lambda_sum=parsed.get("lambda_sum"),
-        )
-        return pa2f_data
-
-    @staticmethod
     def parse_bands(content, kpoints_data, units):
         """Parse the contents of a band structure file."""
-        parsed_bands = parse_epw_bands(content)
-        kpts = parsed_bands["kpoints"]
-        bands = parsed_bands["bands"]
+        from aiida_epw.tools.parsers import parse_epw_bands
+
+        parsed = parse_epw_bands(content)
 
         if kpoints_data is None:
-            nbnd, nks = (
-                int(v)
-                for v in re.search(
-                    r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", content
-                ).groups()
-            )
-            if len(kpts) != nks:
-                raise ValueError(
-                    "Could not reconstruct the band k-points from the retrieved EPW file."
-                )
-
             kpoints_data = orm.KpointsData()
-            kpoints_data.set_kpoints(kpts)
+            kpoints_data.set_kpoints(parsed["kpoints"])
 
         bands_data = orm.BandsData()
         # We should use the KpointsData from the inputs.
         bands_data.set_kpointsdata(kpoints_data)
-        bands_data.set_bands(bands, units=units)
+        bands_data.set_bands(parsed["bands"], units=units)
 
         return bands_data
 
     @staticmethod
-    def parse_dos(content):
-        """Parse the contents of the `.dos` file."""
-        parsed_dos = parse_epw_dos(content)
-        dos_data = DosData()
-        dos_data.set_dos_data(
-            energy=parsed_dos["energy"],
-            dos=parsed_dos["dos"],
-            integrated_dos=parsed_dos.get("integrated_dos"),
-        )
-        return dos_data
-
-    @staticmethod
-    def parse_phdos(content):
-        """Parse the contents of the `.phdos` file."""
-        parsed_phdos = parse_epw_phdos(content)
-        phdos_data = PhDosData()
-        phdos_data.set_phdos_data(
-            frequency=parsed_phdos["frequency"],
-            phdos=parsed_phdos["phdos"],
-        )
-        return phdos_data
-
-    @staticmethod
-    def parse_phdos_proj(content):
-        """Parse the contents of the `.phdos_proj` file."""
-        parsed = parse_epw_phdos_proj(content)
-        pdos_data = PDosData()
-        pdos_data.set_pdos_data(
-            frequency=parsed["frequency"],
-            phdos=parsed["phdos"],
-            projected_phdos=parsed["projected_phdos"],
-        )
-        return pdos_data
-
-    @staticmethod
-    def parse_lambda_FS(content):
-        """Parse the contents of the `.lambda_FS` file."""
-        parsed_lambda_fs = parse_epw_lambda_fs(content)
-        lambda_fs_data = LambdaFSData()
-        lambda_fs_data.set_lambda_fs(
-            kpoints=parsed_lambda_fs["kpoints"],
-            bands=parsed_lambda_fs["band"],
-            energies=parsed_lambda_fs["energy"],
-            couplings=parsed_lambda_fs["lambda"],
-            energy_units=parsed_lambda_fs["energy_units"],
-        )
-        return lambda_fs_data
-
-    @staticmethod
     def parse_lambda_k_pairs(content):
-        """Parse the contents of the `.lambda_k_pairs` file."""
-        parsed = parse_epw_lambda_k_pairs(content)
-        dos_data = DosData()
-        dos_data.set_dos_data(
-            energy=parsed["energy"],
-            dos=parsed["dos"],
-            integrated_dos=parsed.get("integrated_dos"),
-        )
-        return dos_data
+        """Parse ``.lambda_k_pairs`` content into a generic DOS-style dataset."""
+        from aiida_epw.tools.parsers import parse_epw_lambda_k_pairs
 
-    @staticmethod
-    def parse_gap_function(content, skiprows=0):
-        """Parse the contents of the `gap_function.dat` file."""
-        import io
-
-        gap_function = numpy.loadtxt(
-            io.StringIO(content), dtype=float, comments="#", skiprows=skiprows
-        )
-
-        return gap_function
+        return DosData.from_parsed(parse_epw_lambda_k_pairs(content))

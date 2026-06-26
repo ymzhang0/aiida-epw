@@ -426,6 +426,11 @@ class EpwCalculation(NamelistsCalculation):
             "ERROR_FACTORIZATION",
             message="Error in routine mix_broyden (5): factorization.",
         )
+        spec.exit_code(
+            322,
+            "ERROR_PADE_APPROXIMANTS",
+            message="The Pade approximants calculation failed (NaN values detected).",
+        )
 
     @classmethod
     def normalize_parameters(cls, parameters):
