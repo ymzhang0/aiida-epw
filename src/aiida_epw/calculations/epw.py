@@ -1128,10 +1128,6 @@ class EpwCalculation(NamelistsCalculation):
                 "dmedata.fmt",
                 "vmedata.fmt",
                 Path(self._OUTPUT_SUBFOLDER, f"{self._PREFIX}.dos").as_posix(),
-                f"{self._PREFIX}.phdos",
-                f"{self._PREFIX}.phdos_proj",
-                f"{self._PREFIX}.a2f_proj",
-                f"{self._PREFIX}.a2f",
             ]
 
             # Solvers-specific large matrix elements (always symlink)
