@@ -745,13 +745,13 @@ def test_epw_ephread_eliashberg_staging(
         for entry in calc_info.remote_symlink_list + calc_info.remote_copy_list
     )
 
-    # basic metadata, dos, phdos should be copied
+    # basic metadata, dos should be copied
     copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
     assert "crystal.fmt" in copied_targets
     assert "epwdata.fmt" in copied_targets
     assert "selecq.fmt" in copied_targets
     assert "wigner.fmt" in copied_targets
-    assert "aiida.phdos" in copied_targets
+    assert "aiida.phdos" not in copied_targets
     assert (
         Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.dos").as_posix() in copied_targets
     )
