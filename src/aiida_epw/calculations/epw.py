@@ -1094,7 +1094,7 @@ class EpwCalculation(NamelistsCalculation):
         parent_folder_epw = self.inputs.parent_folder_epw
         epw_path = self.get_parent_folder_path(parent_folder_epw)
 
-        # Retrieve restart_type and calculation_type from inputs
+        # 1. Retrieve restart_type and calculation_type from input ports
         restart_type = (
             self.inputs.restart_type.get_member()
             if "restart_type" in self.inputs
@@ -1108,7 +1108,34 @@ class EpwCalculation(NamelistsCalculation):
 
         from aiida_epw.common.types import CalculationTypes, RestartType
 
-        if restart_type == RestartType.EPHREAD:
+        # 2. Retrieve raw namelist parameters from the parameters input port
+        raw_parameters = (
+            self.inputs.parameters.get_dict() if "parameters" in self.inputs else {}
+        )
+        inputepw = raw_parameters.get("INPUTEPW", {})
+
+        # 3. Resolve active settings using input ports and raw parameters
+        is_eliashberg = (
+            calculation_type == CalculationTypes.ELIASHBERG
+            or "momentum_dependence" in self.inputs
+            or "full_bandwidth" in self.inputs
+            or "real_axis" in self.inputs
+            or "analytical_continuation" in self.inputs
+            or inputepw.get("eliashberg", False)
+        )
+        is_ephread = restart_type == RestartType.EPHREAD or (
+            inputepw.get("epwread", False) and not inputepw.get("ephwrite", True)
+        )
+        is_ephwrite = restart_type == RestartType.EPHWRITE or (
+            inputepw.get("epwread", False) and inputepw.get("ephwrite", True)
+        )
+        is_wannierize = restart_type == RestartType.WANNIERIZE or inputepw.get(
+            "wannierize", False
+        )
+
+        is_restart_fmt = inputepw.get("restart", False)
+
+        if is_ephread:
             # EPHREAD mode: Only copy matrix files, basic metadata, and DOS/a2f outputs
             # Strictly exclude quadrupole.fmt and decay.* files based on source code analysis
             file_list = [
@@ -1126,7 +1153,7 @@ class EpwCalculation(NamelistsCalculation):
             ]
 
             # Solvers-specific large matrix elements (always symlink)
-            if calculation_type == CalculationTypes.ELIASHBERG:
+            if is_eliashberg:
                 remote_symlink_list.append(
                     (
                         parent_folder_epw.computer.uuid,
@@ -1171,11 +1198,14 @@ class EpwCalculation(NamelistsCalculation):
                 f"{self._PREFIX}.bvec",
                 self._FOLDER_SAVE,
             ]
-            if parameters.get("INPUTEPW", {}).get("restart", False):
+            if is_restart_fmt:
                 file_list.append("restart.fmt")
 
-            inputepw = parameters.get("INPUTEPW", {})
-            if inputepw.get("epwread", False) and inputepw.get("elph", False):
+            # Symlink epmatwp if epwread=True and elph=True
+            is_epwread_and_elph = is_ephwrite or (
+                inputepw.get("epwread", False) and inputepw.get("elph", False)
+            )
+            if is_epwread_and_elph:
                 remote_symlink_list.append(
                     (
                         parent_folder_epw.computer.uuid,
@@ -1189,9 +1219,9 @@ class EpwCalculation(NamelistsCalculation):
                     )
                 )
 
-            if inputepw.get("eliashberg", False):
-                if inputepw.get("ephwrite", True):
-                    if inputepw.get("restart", False):
+            if is_eliashberg:
+                if is_ephwrite:
+                    if is_restart_fmt:
                         remote_symlink_list.append(
                             (
                                 parent_folder_epw.computer.uuid,
@@ -1204,7 +1234,7 @@ class EpwCalculation(NamelistsCalculation):
                                 ).as_posix(),
                             )
                         )
-                else:
+                elif not is_wannierize:
                     remote_symlink_list.append(
                         (
                             parent_folder_epw.computer.uuid,
