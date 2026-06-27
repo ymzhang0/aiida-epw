@@ -96,6 +96,14 @@ class EpwCalculation(NamelistsCalculation):
         ("INPUTEPW", "nkf1"),
         ("INPUTEPW", "nkf2"),
         ("INPUTEPW", "nkf3"),
+        ("INPUTEPW", "wannierize"),
+        ("INPUTEPW", "epwread"),
+        ("INPUTEPW", "epwwrite"),
+        ("INPUTEPW", "restart"),
+        ("INPUTEPW", "ep_coupling"),
+        ("INPUTEPW", "elph"),
+        ("INPUTEPW", "ephwrite"),
+        ("INPUTEPW", "epmatkqread"),
         ("INPUTEPW", "eliashberg"),
         ("INPUTEPW", "liso"),
         ("INPUTEPW", "laniso"),
@@ -106,14 +114,6 @@ class EpwCalculation(NamelistsCalculation):
         ("INPUTEPW", "lacon"),
         ("INPUTEPW", "scattering"),
         ("INPUTEPW", "plrn"),
-        ("INPUTEPW", "wannierize"),
-        ("INPUTEPW", "epwread"),
-        ("INPUTEPW", "epwwrite"),
-        ("INPUTEPW", "restart"),
-        ("INPUTEPW", "ep_coupling"),
-        ("INPUTEPW", "elph"),
-        ("INPUTEPW", "ephwrite"),
-        ("INPUTEPW", "epmatkqread"),
     ]
 
     _use_kpoints = True
@@ -894,7 +894,6 @@ class EpwCalculation(NamelistsCalculation):
                 elif ac_method == "none":
                     inputepw_parameters["lpade"] = False
                     inputepw_parameters["lacon"] = False
-
         if "restart_type" in self.inputs:
             restart_val = self.inputs.restart_type.get_member()
             from aiida_epw.common import RestartType
@@ -1095,60 +1094,39 @@ class EpwCalculation(NamelistsCalculation):
         parent_folder_epw = self.inputs.parent_folder_epw
         epw_path = self.get_parent_folder_path(parent_folder_epw)
 
-        file_list = [
-            "selecq.fmt",
-            "crystal.fmt",
-            "epwdata.fmt",
-            "dmedata.fmt",
-            "vmedata.fmt",
-            "wigner.fmt",
-            "quadrupole.fmt",
-            "decay.H",
-            "decay.v",
-            "decay.P",
-            "decay.dynmat",
-            "decay.epmate",
-            "decay.epmatp",
-            f"{self._PREFIX}.kgmap",
-            f"{self._PREFIX}.kmap",
-            f"{self._PREFIX}.ukk",
-            f"{self._PREFIX}.mmn",
-            f"{self._PREFIX}.bvec",
-            self._FOLDER_SAVE,
-        ]
-        if parameters["INPUTEPW"].get("restart", False):
-            file_list.append("restart.fmt")
+        # Retrieve restart_type and calculation_type from inputs
+        restart_type = (
+            self.inputs.restart_type.get_member()
+            if "restart_type" in self.inputs
+            else None
+        )
+        calculation_type = (
+            self.inputs.calculation_type.get_member()
+            if "calculation_type" in self.inputs
+            else None
+        )
 
-        if parameters["INPUTEPW"].get("epwread", False) and parameters["INPUTEPW"].get(
-            "elph", False
-        ):
-            remote_symlink_list.append(
-                (
-                    parent_folder_epw.computer.uuid,
-                    Path(
-                        epw_path,
-                        f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
-                    ).as_posix(),
-                    Path(f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp").as_posix(),
-                )
-            )
+        from aiida_epw.common.types import CalculationTypes, RestartType
 
-        if parameters["INPUTEPW"].get("eliashberg", False):
-            if parameters["INPUTEPW"].get("ephwrite", True):
-                if parameters["INPUTEPW"].get("restart", False):
-                    remote_symlink_list.append(
-                        (
-                            parent_folder_epw.computer.uuid,
-                            Path(
-                                epw_path,
-                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
-                            ).as_posix(),
-                            Path(
-                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
-                            ).as_posix(),
-                        )
-                    )
-            else:
+        if restart_type == RestartType.EPHREAD:
+            # EPHREAD mode: Only copy matrix files, basic metadata, and DOS/a2f outputs
+            # Strictly exclude quadrupole.fmt and decay.* files based on source code analysis
+            file_list = [
+                "selecq.fmt",
+                "crystal.fmt",
+                "epwdata.fmt",
+                "wigner.fmt",
+                "dmedata.fmt",
+                "vmedata.fmt",
+                Path(self._OUTPUT_SUBFOLDER, f"{self._PREFIX}.dos").as_posix(),
+                f"{self._PREFIX}.phdos",
+                f"{self._PREFIX}.phdos_proj",
+                f"{self._PREFIX}.a2f_proj",
+                f"{self._PREFIX}.a2f",
+            ]
+
+            # Solvers-specific large matrix elements (always symlink)
+            if calculation_type == CalculationTypes.ELIASHBERG:
                 remote_symlink_list.append(
                     (
                         parent_folder_epw.computer.uuid,
@@ -1161,7 +1139,20 @@ class EpwCalculation(NamelistsCalculation):
                         ).as_posix(),
                     )
                 )
-                file_list.append(f"{self._PREFIX}.a2f")
+            else:
+                # Symlink epmatwp file for transport/polaron
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(
+                            epw_path,
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
+                        ).as_posix(),
+                        Path(
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
+                        ).as_posix(),
+                    )
+                )
 
         for filename in file_list:
             remote_list.append(
