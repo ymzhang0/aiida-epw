@@ -1154,6 +1154,70 @@ class EpwCalculation(NamelistsCalculation):
                     )
                 )
 
+        else:
+            # EPHWRITE, WANNIERIZE, or Fallback: copy/symlink default files
+            # Strictly exclude quadrupole.fmt and decay.* files based on source code analysis
+            file_list = [
+                "selecq.fmt",
+                "crystal.fmt",
+                "epwdata.fmt",
+                "dmedata.fmt",
+                "vmedata.fmt",
+                "wigner.fmt",
+                f"{self._PREFIX}.kgmap",
+                f"{self._PREFIX}.kmap",
+                f"{self._PREFIX}.ukk",
+                f"{self._PREFIX}.mmn",
+                f"{self._PREFIX}.bvec",
+                self._FOLDER_SAVE,
+            ]
+            if parameters.get("INPUTEPW", {}).get("restart", False):
+                file_list.append("restart.fmt")
+
+            inputepw = parameters.get("INPUTEPW", {})
+            if inputepw.get("epwread", False) and inputepw.get("elph", False):
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(
+                            epw_path,
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
+                        ).as_posix(),
+                        Path(
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
+                        ).as_posix(),
+                    )
+                )
+
+            if inputepw.get("eliashberg", False):
+                if inputepw.get("ephwrite", True):
+                    if inputepw.get("restart", False):
+                        remote_symlink_list.append(
+                            (
+                                parent_folder_epw.computer.uuid,
+                                Path(
+                                    epw_path,
+                                    f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
+                                ).as_posix(),
+                                Path(
+                                    f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
+                                ).as_posix(),
+                            )
+                        )
+                else:
+                    remote_symlink_list.append(
+                        (
+                            parent_folder_epw.computer.uuid,
+                            Path(
+                                epw_path,
+                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
+                            ).as_posix(),
+                            Path(
+                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
+                            ).as_posix(),
+                        )
+                    )
+
         for filename in file_list:
             remote_list.append(
                 (
