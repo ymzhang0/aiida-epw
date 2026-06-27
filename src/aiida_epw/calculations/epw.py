@@ -1108,14 +1108,7 @@ class EpwCalculation(NamelistsCalculation):
 
         from aiida_epw.common.types import CalculationTypes, RestartType
 
-        # Determine Eliashberg mode from calculation_type or other input ports
-        is_eliashberg = (
-            calculation_type == CalculationTypes.ELIASHBERG
-            or "momentum_dependence" in self.inputs
-            or "full_bandwidth" in self.inputs
-            or "real_axis" in self.inputs
-            or "analytical_continuation" in self.inputs
-        )
+        is_eliashberg = calculation_type == CalculationTypes.ELIASHBERG
 
         if restart_type == RestartType.EPHREAD:
             # EPHREAD mode: Only copy matrix files, basic metadata, and DOS/a2f outputs

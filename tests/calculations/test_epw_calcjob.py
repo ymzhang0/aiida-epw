@@ -519,6 +519,7 @@ def test_epw_stages_dos_when_ephwrite_disabled(
     parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
     inputs = generate_inputs_epw(
         restart_type="ephread",
+        calculation_type="eliashberg",
         momentum_dependence=orm.Bool(False),
         parent_folder_epw=parent_folder,
     )
