@@ -562,9 +562,11 @@ def test_epw_restart_type_parameter(
     assert "epmatkqread" not in input_contents
 
     # 4. EPHREAD (with scattering)
+    from aiida_epw.common.types import CalculationTypes
+
     inputs_read2 = generate_inputs_epw(
         restart_type=RestartType.EPHREAD,
-        parameters={"INPUTEPW": {"scattering": True}},
+        calculation_type=CalculationTypes.TRANSPORT,
         parent_folder_epw=generate_remote_data(fixture_localhost, "/remote/epw"),
     )
     generate_calc_job(fixture_sandbox, "epw.epw", inputs_read2)
@@ -576,3 +578,166 @@ def test_epw_restart_type_parameter(
     assert "elph = .false." in input_contents
     assert "ephwrite = .false." in input_contents
     assert "epmatkqread = .true." in input_contents
+
+
+def test_epw_calculation_type_parameter(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that calculation_type correctly overrides the namelist parameters."""
+    from aiida_epw.common.types import CalculationTypes
+    from aiida_epw.calculations.epw import EpwCalculation
+    import pytest
+
+    # 1. Test Eliashberg mode
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.ELIASHBERG),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .true." in input_contents
+    assert "scattering = .false." in input_contents
+    assert "plrn = .false." in input_contents
+
+    # 2. Test Transport mode
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.TRANSPORT),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .false." in input_contents
+    assert "scattering = .true." in input_contents
+    assert "plrn = .false." in input_contents
+
+    # 3. Test Polaron mode
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.POLARON),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .false." in input_contents
+    assert "scattering = .false." in input_contents
+    assert "plrn = .true." in input_contents
+
+    # 4. Test validation of Eliashberg inputs in non-Eliashberg modes
+    if "real_axis" in EpwCalculation.spec().inputs:
+        with pytest.raises(
+            ValueError,
+            match="Eliashberg parameter 'real_axis' cannot be specified",
+        ):
+            inputs_invalid = generate_inputs_epw(
+                calculation_type=orm.EnumData(CalculationTypes.TRANSPORT),
+                real_axis=orm.Bool(True),
+            )
+            generate_calc_job(fixture_sandbox, "epw.epw", inputs_invalid)
+
+    # 5. Test blocked parameter validation
+    with pytest.raises(ValueError, match="parameters.INPUTEPW.scattering"):
+        inputs_blocked = generate_inputs_epw(
+            parameters={"INPUTEPW": {"scattering": True}}
+        )
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs_blocked)
+
+
+def test_epw_ephread_eliashberg_staging(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test optimized staging logic for EPHREAD + ELIASHBERG calculation."""
+    from aiida_epw.common.types import CalculationTypes, RestartType
+
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
+    inputs = generate_inputs_epw(
+        restart_type=RestartType.EPHREAD,
+        calculation_type=CalculationTypes.ELIASHBERG,
+        parent_folder_epw=parent_folder,
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    # ephmat should be in remote_symlink_list
+    assert (
+        parent_folder.computer.uuid,
+        Path(
+            parent_folder.get_remote_path(),
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.ephmat",
+        ).as_posix(),
+        Path(
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.ephmat"
+        ).as_posix(),
+    ) in calc_info.remote_symlink_list
+
+    # epmatwp should not be in remote_symlink_list or remote_copy_list
+    assert not any(
+        "epmatwp" in entry[1]
+        for entry in calc_info.remote_symlink_list + calc_info.remote_copy_list
+    )
+
+    # basic metadata, dos, phdos should be copied
+    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    assert "crystal.fmt" in copied_targets
+    assert "epwdata.fmt" in copied_targets
+    assert "selecq.fmt" in copied_targets
+    assert "wigner.fmt" in copied_targets
+    assert "aiida.phdos" in copied_targets
+    assert (
+        Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.dos").as_posix() in copied_targets
+    )
+
+    # save/ and Wannier checkpoint files should be excluded
+    assert "save" not in copied_targets
+    assert "aiida.chk" not in copied_targets
+    assert "aiida.mmn" not in copied_targets
+    assert "quadrupole.fmt" not in copied_targets
+    assert not any("decay" in target for target in copied_targets)
+
+
+def test_epw_ephread_transport_staging(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test optimized staging logic for EPHREAD + TRANSPORT calculation."""
+    from aiida_epw.common.types import CalculationTypes, RestartType
+
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
+    inputs = generate_inputs_epw(
+        restart_type=RestartType.EPHREAD,
+        calculation_type=CalculationTypes.TRANSPORT,
+        parent_folder_epw=parent_folder,
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    # epmatwp should be in remote_symlink_list
+    assert (
+        parent_folder.computer.uuid,
+        Path(
+            parent_folder.get_remote_path(),
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.epmatwp",
+        ).as_posix(),
+        Path(
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.epmatwp"
+        ).as_posix(),
+    ) in calc_info.remote_symlink_list
+
+    # ephmat should not be in remote_symlink_list or remote_copy_list
+    assert not any(
+        "ephmat" in entry[1]
+        for entry in calc_info.remote_symlink_list + calc_info.remote_copy_list
+    )
+
+    # basic metadata + dme/vme should be copied
+    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    assert "crystal.fmt" in copied_targets
+    assert "epwdata.fmt" in copied_targets
+    assert "dmedata.fmt" in copied_targets
+    assert "vmedata.fmt" in copied_targets
+
+    # quadrupole and decay should be excluded
+    assert "quadrupole.fmt" not in copied_targets
+    assert not any("decay" in target for target in copied_targets)
