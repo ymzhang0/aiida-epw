@@ -596,6 +596,22 @@ def test_handle_out_of_walltime_ephread_success(aiida_localhost):
     workchain.ctx.inputs = MagicMock()
     workchain.ctx.inputs.parameters = orm.Dict(dict=initial_params)
 
+    if HAS_RESTART_TYPE:
+        from aiida_epw.common.types import CalculationTypes, RestartType
+
+        calc_type_mock = MagicMock()
+        calc_type_mock.get_member.return_value = CalculationTypes.ELIASHBERG
+        restart_type_mock = MagicMock()
+        restart_type_mock.get_member.return_value = RestartType.EPHREAD
+
+        workchain.ctx.inputs.calculation_type = calc_type_mock
+        workchain.ctx.inputs.restart_type = restart_type_mock
+        workchain.ctx.inputs.__contains__.side_effect = lambda key: key in (
+            "calculation_type",
+            "restart_type",
+            "parameters",
+        )
+
     # Run handler
     report = workchain.handle_out_of_walltime.__wrapped__(calc)
 
@@ -663,6 +679,22 @@ def test_handle_out_of_walltime_ephread_failure(aiida_localhost):
     workchain.ctx.inputs = MagicMock()
     workchain.ctx.inputs.parameters = orm.Dict(dict=initial_params)
 
+    if HAS_RESTART_TYPE:
+        from aiida_epw.common.types import CalculationTypes, RestartType
+
+        calc_type_mock = MagicMock()
+        calc_type_mock.get_member.return_value = CalculationTypes.ELIASHBERG
+        restart_type_mock = MagicMock()
+        restart_type_mock.get_member.return_value = RestartType.EPHREAD
+
+        workchain.ctx.inputs.calculation_type = calc_type_mock
+        workchain.ctx.inputs.restart_type = restart_type_mock
+        workchain.ctx.inputs.__contains__.side_effect = lambda key: key in (
+            "calculation_type",
+            "restart_type",
+            "parameters",
+        )
+
     # Run handler
     report = workchain.handle_out_of_walltime.__wrapped__(calc)
 
@@ -711,6 +743,22 @@ def test_handle_out_of_walltime_wannierize(aiida_localhost):
     }
     workchain.ctx.inputs = MagicMock()
     workchain.ctx.inputs.parameters = orm.Dict(dict=initial_params)
+
+    if HAS_RESTART_TYPE:
+        from aiida_epw.common.types import CalculationTypes, RestartType
+
+        calc_type_mock = MagicMock()
+        calc_type_mock.get_member.return_value = CalculationTypes.ELIASHBERG
+        restart_type_mock = MagicMock()
+        restart_type_mock.get_member.return_value = RestartType.WANNIERIZE
+
+        workchain.ctx.inputs.calculation_type = calc_type_mock
+        workchain.ctx.inputs.restart_type = restart_type_mock
+        workchain.ctx.inputs.__contains__.side_effect = lambda key: key in (
+            "calculation_type",
+            "restart_type",
+            "parameters",
+        )
 
     # Run handler
     report = workchain.handle_out_of_walltime.__wrapped__(calc)
