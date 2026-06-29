@@ -902,21 +902,21 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["wannierize"] = True
                 inputepw_parameters["epwread"] = False
                 inputepw_parameters["epwwrite"] = True
-                inputepw_parameters["restart"] = False
+                inputepw_parameters.setdefault("restart", False)
                 inputepw_parameters["ep_coupling"] = True
                 inputepw_parameters["elph"] = True
             elif restart_val is RestartType.EPHWRITE:
                 inputepw_parameters["wannierize"] = False
                 inputepw_parameters["epwread"] = True
                 inputepw_parameters["epwwrite"] = False
-                inputepw_parameters["restart"] = False
+                inputepw_parameters.setdefault("restart", False)
                 inputepw_parameters["ep_coupling"] = True
                 inputepw_parameters["elph"] = True
                 inputepw_parameters["ephwrite"] = True
             elif restart_val is RestartType.EPHREAD:
                 inputepw_parameters["wannierize"] = False
                 inputepw_parameters["epwread"] = True
-                inputepw_parameters["restart"] = False
+                inputepw_parameters.setdefault("restart", False)
                 inputepw_parameters["ep_coupling"] = False
                 inputepw_parameters["elph"] = False
                 inputepw_parameters["ephwrite"] = False
