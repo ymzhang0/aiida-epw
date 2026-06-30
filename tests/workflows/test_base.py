@@ -10,6 +10,32 @@ try:
 except ImportError:
     HAS_RESTART_TYPE = False
 from aiida_epw.workflows.base import EpwBaseWorkChain
+import enum
+
+try:
+    from aiida_epw.common.types import CalculationTypes, RestartType
+
+    HAS_RESTART_TYPE = True
+except ImportError:
+    # Fallback for testing when types module is not fully defined on this branch
+    class CalculationTypes(enum.Enum):
+        ELIASHBERG = "eliashberg"
+        TRANSPORT = "transport"
+        POLARON = "polaron"
+
+    try:
+        from aiida_epw.common.types import RestartType
+
+        HAS_RESTART_TYPE = True
+    except ImportError:
+
+        class RestartType(enum.Enum):
+            WANNIERIZE = "wannierize"
+            EPHWRITE = "ephwrite"
+            EPHREAD = "ephread"
+            EPHWRITE_RESTART = "ephwrite_restart"
+
+        HAS_RESTART_TYPE = False
 
 
 def test_handle_pade_approximants(aiida_localhost):
@@ -445,8 +471,6 @@ def test_handle_out_of_walltime(aiida_localhost):
     workchain.ctx.inputs.parameters = orm.Dict(dict=initial_params)
 
     if HAS_RESTART_TYPE:
-        from aiida_epw.common.types import CalculationTypes, RestartType
-
         calc_type_mock = MagicMock()
         calc_type_mock.get_member.return_value = CalculationTypes.ELIASHBERG
         restart_type_mock = MagicMock()
@@ -467,9 +491,11 @@ def test_handle_out_of_walltime(aiida_localhost):
     assert report.do_break is True
     assert report.exit_code.status == 0
     assert workchain.ctx.inputs.parent_folder_epw == calc.outputs.remote_folder
-
-    updated_params = workchain.ctx.inputs.parameters.get_dict()
-    assert updated_params["INPUTEPW"]["restart"] is True
+    if HAS_RESTART_TYPE:
+        assert workchain.ctx.inputs.restart_type == RestartType.EPHWRITE_RESTART
+    else:
+        updated_params = workchain.ctx.inputs.parameters.get_dict()
+        assert updated_params["INPUTEPW"]["restart"] is True
 
 
 def test_handle_out_of_walltime_unsupported(aiida_localhost):
