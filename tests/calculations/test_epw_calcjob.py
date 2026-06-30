@@ -650,6 +650,21 @@ def test_epw_restart_type_parameter(
     assert "ephwrite = .false." in input_contents
     assert "epmatkqread = .true." in input_contents
 
+    # 5. EPHWRITE_RESTART
+    inputs_write_restart = generate_inputs_epw(
+        restart_type=RestartType.EPHWRITE_RESTART,
+        parent_folder_epw=generate_remote_data(fixture_localhost, "/remote/epw"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_write_restart)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .false." in input_contents
+    assert "epwread = .true." in input_contents
+    assert "epwwrite = .false." in input_contents
+    assert "restart = .true." in input_contents
+    assert "ep_coupling = .true." in input_contents
+    assert "elph = .true." in input_contents
+    assert "ephwrite = .true." in input_contents
+
 
 def test_epw_calculation_type_parameter(
     fixture_sandbox, generate_calc_job, generate_inputs_epw
