@@ -365,9 +365,36 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 self._process_class._output_phbands_file,
             ]
 
-        if parameters.get("INPUTEPW", {}).get("eliashberg", False):
+        # Determine calculation type
+        calculation_type = None
+        if "calculation_type" in self.inputs:
+            calculation_type = self.inputs.calculation_type.get_member().value
+        else:
+            eliashberg_any = any(
+                f in self.inputs
+                for f in (
+                    "momentum_dependence",
+                    "full_bandwidth",
+                    "real_axis",
+                    "analytical_continuation",
+                )
+            )
+            if eliashberg_any or parameters.get("INPUTEPW", {}).get(
+                "eliashberg", False
+            ):
+                calculation_type = "eliashberg"
+
+        if calculation_type == "eliashberg":
             retrieve_list.append(self._process_class._OUTPUT_A2F_FILE)
-            if not parameters.get("INPUTEPW", {}).get("restart", False):
+
+            # Determine whether it's a restart
+            is_restart = False
+            if "restart_type" in self.inputs:
+                restart_val = self.inputs.restart_type.get_member().value
+                if restart_val in ("ephread", "ephwrite_restart"):
+                    is_restart = True
+
+            if not is_restart:
                 retrieve_list.append(self._process_class._OUTPUT_A2F_PROJ_FILE)
                 retrieve_list.append(self._process_class._OUTPUT_PHDOS_FILE)
                 retrieve_list.append(self._process_class._OUTPUT_PHDOS_PROJ_FILE)
@@ -378,29 +405,15 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                     ).as_posix()
                 )
 
-        # Determine whether anisotropic or isotropic files are produced
-        momentum_dependence = None
-        if "momentum_dependence" in self.inputs:
-            momentum_dependence = self.inputs.momentum_dependence.value
-        else:
-            momentum_dependence = parameters.get("INPUTEPW", {}).get("laniso", False)
+            # Determine whether anisotropic or isotropic files are produced
+            momentum_dependence = None
+            if "momentum_dependence" in self.inputs:
+                momentum_dependence = self.inputs.momentum_dependence.value
+            else:
+                momentum_dependence = parameters.get("INPUTEPW", {}).get(
+                    "laniso", False
+                )
 
-        # Retrieve files if Eliashberg calculations are enabled
-        eliashberg_enabled = False
-        if any(
-            f in self.inputs
-            for f in (
-                "momentum_dependence",
-                "full_bandwidth",
-                "real_axis",
-                "analytical_continuation",
-            )
-        ):
-            eliashberg_enabled = True
-        else:
-            eliashberg_enabled = parameters.get("INPUTEPW", {}).get("eliashberg", False)
-
-        if eliashberg_enabled:
             if momentum_dependence:
                 retrieve_list.append(self._process_class._OUTPUT_LAMBDA_FS_FILE)
                 retrieve_list.append(self._process_class._OUTPUT_LAMBDA_K_PAIRS_FILE)
