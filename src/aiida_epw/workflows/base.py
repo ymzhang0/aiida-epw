@@ -122,6 +122,9 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
 class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
     """BaseWorkchain to run a epw.x calculation."""
 
+    _MAX_NSIW = 200
+    _MIN_NSIW = 20
+
     _process_class = EpwCalculation
 
     @classmethod
@@ -366,20 +369,6 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         calculation_type = None
         if "calculation_type" in self.inputs:
             calculation_type = self.inputs.calculation_type.get_member().value
-        else:
-            eliashberg_any = any(
-                f in self.inputs
-                for f in (
-                    "momentum_dependence",
-                    "full_bandwidth",
-                    "real_axis",
-                    "analytical_continuation",
-                )
-            )
-            if eliashberg_any or parameters.get("INPUTEPW", {}).get(
-                "eliashberg", False
-            ):
-                calculation_type = "eliashberg"
 
         if calculation_type == "eliashberg":
             retrieve_list.append(self._process_class._OUTPUT_A2F_FILE)
@@ -604,7 +593,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report("{}<{}> failed with exit status {}: {}".format(*arguments))
         self.report(f"Action taken: {action}")
 
-    @process_handler(priority=600)
+    @process_handler(priority=10)
     def handle_unrecoverable_failure(self, calculation):
         """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""
         if calculation.is_failed and calculation.exit_status < 400:
@@ -736,6 +725,246 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # Could not diagnose or fix - let it fail
         self.report_error_handled(
             calculation, "Could not diagnose cause of exit code 312. Aborting."
+        )
+        return ProcessHandlerReport(
+            True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+        )
+
+    @process_handler(
+        priority=400,
+        exit_codes=[EpwCalculation.exit_codes.ERROR_PADE_APPROXIMANTS],
+    )
+    def handle_pade_approximants(self, calculation):
+        """Handle exit code 322 (Pade NaN failure) by reducing nsiw and popping successful temperatures."""
+        from aiida_epw.tools.workchain import pop_succeeded_temperatures
+
+        parameters = self.ctx.inputs.parameters.get_dict()
+        outputs = calculation.outputs.output_parameters.get_dict()
+
+        updated_params, succeeded_temps, remaining_temps, eliashberg_data = (
+            pop_succeeded_temperatures(parameters, outputs)
+        )
+
+        input_epw = parameters.get("INPUTEPW", {})
+
+        nsiw = None
+        for t in remaining_temps:
+            for k, data in eliashberg_data.items():
+                if abs(float(k) - t) < 1e-4:
+                    nsiw = data.get("nsiw")
+                    break
+            if nsiw is not None:
+                break
+
+        if nsiw is None:
+            nsiw = input_epw.get("nsiw")
+
+        current_npade = input_epw.get("npade", 90)
+
+        current_N = None
+        for t in remaining_temps:
+            for k, data in eliashberg_data.items():
+                if abs(float(k) - t) < 1e-4:
+                    current_N = data.get("pade", {}).get("nsiter")
+                    break
+            if current_N is not None:
+                break
+
+        if current_N is None and nsiw is not None:
+            fbw = input_epw.get("fbw", False)
+            positive_matsu = input_epw.get("positive_matsu", True)
+            if fbw and not positive_matsu:
+                current_N = int(current_npade * (nsiw / 2) / 100)
+            else:
+                current_N = int(current_npade * nsiw / 100)
+
+        target_npade = None
+        if current_N is not None and nsiw:
+            if current_N > self._MAX_NSIW:
+                target_N = self._MAX_NSIW
+            else:
+                target_N = max(self._MIN_NSIW, int(current_N * 0.5))
+
+            fbw = input_epw.get("fbw", False)
+            positive_matsu = input_epw.get("positive_matsu", True)
+            if fbw and not positive_matsu:
+                target_npade = int(target_N * 100 / (nsiw / 2))
+            else:
+                target_npade = int(target_N * 100 / nsiw)
+
+            target_npade = max(1, min(100, target_npade))
+            if target_npade == current_npade and current_npade > 1:
+                target_npade = max(1, current_npade - 5)
+
+        action_taken = ""
+        input_epw_new = updated_params.setdefault("INPUTEPW", {})
+
+        if target_npade is not None and target_npade != current_npade:
+            input_epw_new["npade"] = target_npade
+            action_taken += f"Reduced npade from {current_npade} to {target_npade}. "
+
+        if succeeded_temps:
+            action_taken += (
+                f"Removed successfully calculated temperatures: {succeeded_temps}. "
+            )
+
+        if not action_taken:
+            self.report_error_handled(
+                calculation,
+                "Cannot reduce npade further or pop temperatures. Aborting.",
+            )
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        try:
+            from aiida_epw.common.types import RestartType
+
+            self.ctx.inputs.restart_type = RestartType.EPHREAD
+        except ImportError:
+            input_epw_new["epwread"] = True
+
+        self.ctx.inputs.parameters = orm.Dict(updated_params)
+        self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
+
+        self.report_error_handled(calculation, action_taken)
+        return ProcessHandlerReport(True)
+
+    @process_handler(
+        priority=450,
+        exit_codes=[EpwCalculation.exit_codes.ERROR_TEMPERATURE_OUT_OF_RANGE],
+    )
+    def handle_temperature_out_of_range(self, calculation):
+        """Handle exit code 323 (Temperature out of range / phase transition reached).
+
+        Since the gap has converged to zero, we consider the physical calculation complete
+        and exit the workchain successfully.
+        """
+        self.ctx.is_finished = True
+        self.report_error_handled(
+            calculation,
+            "Temperature reached phase transition (delta converged to zero). Finishing workchain successfully.",
+        )
+        return ProcessHandlerReport(True)
+
+    @process_handler(
+        priority=650,
+        exit_codes=[
+            EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME,
+            EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
+        ],
+    )
+    def handle_out_of_walltime(self, calculation):
+        """Handle exit code 120 (scheduler walltime timeout) and 400 (software walltime timeout)."""
+        try:
+            from aiida_epw.common.types import CalculationTypes, RestartType
+
+            calculation_type = (
+                self.ctx.inputs.calculation_type.get_member()
+                if "calculation_type" in self.ctx.inputs
+                else None
+            )
+            restart_type = (
+                self.ctx.inputs.restart_type.get_member()
+                if "restart_type" in self.ctx.inputs
+                else None
+            )
+            is_valid_eliashberg_ephwrite = (
+                calculation_type == CalculationTypes.ELIASHBERG
+                and restart_type in (RestartType.EPHWRITE, RestartType.EPHWRITE_RESTART)
+            )
+            is_valid_eliashberg_ephread = (
+                calculation_type == CalculationTypes.ELIASHBERG
+                and restart_type == RestartType.EPHREAD
+            )
+            is_valid_eliashberg_wannierize = (
+                calculation_type == CalculationTypes.ELIASHBERG
+                and restart_type == RestartType.WANNIERIZE
+            )
+        except ImportError:
+            # Fallback for branches/environments where ports do not exist yet
+            parameters = self.ctx.inputs.parameters.get_dict()
+            input_epw = parameters.get("INPUTEPW", {})
+            is_eliashberg = input_epw.get("eliashberg", False)
+
+            is_valid_eliashberg_ephwrite = (
+                is_eliashberg
+                and input_epw.get("epwread", False)
+                and input_epw.get("ephwrite", True)
+            )
+            is_valid_eliashberg_ephread = (
+                is_eliashberg
+                and input_epw.get("epwread", False)
+                and not input_epw.get("ephwrite", True)
+            )
+            is_valid_eliashberg_wannierize = (
+                is_eliashberg
+                and input_epw.get("wannierize", False)
+                and not input_epw.get("epwread", False)
+            )
+
+        if is_valid_eliashberg_ephwrite:
+            # Set parent folder to the failed calculation's remote folder
+            self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
+
+            try:
+                from aiida_epw.common.types import RestartType
+
+                self.ctx.inputs.restart_type = RestartType.EPHWRITE_RESTART
+            except ImportError:
+                # Fallback: Modify the parameters to set restart = True
+                parameters = self.ctx.inputs.parameters.get_dict()
+                input_epw = parameters.setdefault("INPUTEPW", {})
+                input_epw["restart"] = True
+                self.ctx.inputs.parameters = orm.Dict(parameters)
+
+            self.report_error_handled(
+                calculation,
+                "Walltime reached during Eliashberg ephwrite calculation. Restarting from the last checkpoint.",
+            )
+            return ProcessHandlerReport(True)
+
+        elif is_valid_eliashberg_ephread:
+            from aiida_epw.tools.workchain import pop_succeeded_temperatures
+
+            parameters = self.ctx.inputs.parameters.get_dict()
+            outputs = calculation.outputs.output_parameters.get_dict()
+
+            updated_params, succeeded_temps, remaining_temps, _ = (
+                pop_succeeded_temperatures(parameters, outputs)
+            )
+
+            if succeeded_temps:
+                self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
+                self.ctx.inputs.parameters = orm.Dict(updated_params)
+                self.report_error_handled(
+                    calculation,
+                    f"Walltime reached during Eliashberg ephread calculation. "
+                    f"Removed successfully calculated temperatures: {succeeded_temps}. Restarting.",
+                )
+                return ProcessHandlerReport(True)
+            else:
+                self.report_error_handled(
+                    calculation,
+                    "Walltime reached during Eliashberg ephread calculation but no temperatures finished. Aborting.",
+                )
+                return ProcessHandlerReport(
+                    True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+                )
+
+        elif is_valid_eliashberg_wannierize:
+            self.report_error_handled(
+                calculation,
+                "Walltime reached during Wannierization. Resuming Wannierization via epbread is not implemented yet. Aborting.",
+            )
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        # For other cases, do not handle (let it fail/abort)
+        self.report_error_handled(
+            calculation,
+            "Walltime reached but this calculation/restart type is not supported for auto-recovery. Aborting.",
         )
         return ProcessHandlerReport(
             True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
