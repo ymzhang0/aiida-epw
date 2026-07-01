@@ -413,6 +413,8 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
     with unittest.mock.patch(
         "aiida.engine.BaseRestartWorkChain.setup", return_value=None
     ):
+        from aiida_epw.calculations.epw import serialize_calculation_type
+
         # Test isotropic imaginary axis with Pade continuation
         inputs_iso = {
             "code": epw_code,
@@ -420,6 +422,7 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
             "momentum_dependence": orm.Bool(False),
             "real_axis": orm.Bool(False),
             "analytical_continuation": orm.Str("pade"),
+            "calculation_type": serialize_calculation_type("eliashberg"),
             "options": orm.Dict(dict={"resources": {"num_machines": 1}}),
             "parameters": orm.Dict(dict={"INPUTEPW": {}}),
         }
@@ -444,6 +447,7 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
             "momentum_dependence": orm.Bool(True),
             "full_bandwidth": orm.Bool(False),
             "real_axis": orm.Bool(False),
+            "calculation_type": serialize_calculation_type("eliashberg"),
             "options": orm.Dict(dict={"resources": {"num_machines": 1}}),
             "parameters": orm.Dict(dict={"INPUTEPW": {}}),
         }

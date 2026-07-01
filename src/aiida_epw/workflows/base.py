@@ -369,20 +369,6 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         calculation_type = None
         if "calculation_type" in self.inputs:
             calculation_type = self.inputs.calculation_type.get_member().value
-        else:
-            eliashberg_any = any(
-                f in self.inputs
-                for f in (
-                    "momentum_dependence",
-                    "full_bandwidth",
-                    "real_axis",
-                    "analytical_continuation",
-                )
-            )
-            if eliashberg_any or parameters.get("INPUTEPW", {}).get(
-                "eliashberg", False
-            ):
-                calculation_type = "eliashberg"
 
         if calculation_type == "eliashberg":
             retrieve_list.append(self._process_class._OUTPUT_A2F_FILE)
