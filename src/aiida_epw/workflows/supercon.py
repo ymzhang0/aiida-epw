@@ -183,11 +183,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             help="The `output_parameters` output node of the final EPW calculation.",
         )
         spec.output(
-            "max_eigenvalue",
-            valid_type=orm.XyData,
-            help="The temperature dependence of the max eigenvalue for the final EPW.",
-        )
-        spec.output(
             "a2f",
             valid_type=orm.XyData,
             help="The contents of the `.a2f` file for the final EPW.",
@@ -497,7 +492,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         """TODO"""
         self.out("Tc_iso", calculate_tc(self.ctx.final_epw_iso.outputs.max_eigenvalue))
         self.out("parameters", self.ctx.final_epw_iso.outputs.output_parameters)
-        self.out("max_eigenvalue", self.ctx.final_epw_iso.outputs.max_eigenvalue)
         self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
 
     def on_terminated(self):
