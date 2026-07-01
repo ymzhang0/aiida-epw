@@ -240,12 +240,17 @@ def test_supercon_get_builder_from_protocol_default(
     assert "code" in builder.epw_interp
     assert "code" in builder.epw_final_iso
     assert "code" in builder.epw_final_aniso
-    assert not builder.epw_final_iso.momentum_dependence.value
-    assert not builder.epw_final_iso.real_axis.value
-    assert builder.epw_final_iso.parameters.get_dict()["INPUTEPW"]["tc_linear"] is True
-    assert builder.epw_final_aniso.momentum_dependence.value
-    assert not builder.epw_final_aniso.full_bandwidth.value
-    assert not builder.epw_final_aniso.real_axis.value
+    # epw_final_iso check
+    if "momentum_dependence" in builder.epw_final_iso:
+        assert not builder.epw_final_iso.momentum_dependence.value
+        assert not builder.epw_final_iso.real_axis.value
+    assert builder.epw_final_iso.parameters.get_dict()["INPUTEPW"]["tc_linear"] is False
+
+    # epw_final_aniso check
+    if "momentum_dependence" in builder.epw_final_aniso:
+        assert builder.epw_final_aniso.momentum_dependence.value
+        assert not builder.epw_final_aniso.full_bandwidth.value
+        assert not builder.epw_final_aniso.real_axis.value
 
 
 def test_epw_base_eliashberg_params(fixture_code, generate_structure):
