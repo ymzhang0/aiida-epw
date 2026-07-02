@@ -171,11 +171,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Dict,
             help="The `output_parameters` output node of the final EPW calculation.",
         )
-        spec.output(
-            "a2f",
-            valid_type=orm.XyData,
-            help="The contents of the `.a2f` file for the final EPW.",
-        )
 
         spec.exit_code(
             401,
@@ -517,7 +512,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
     def results(self):
         """TODO"""
         self.out("parameters", self.ctx.final_epw_iso.outputs.output_parameters)
-        self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""
