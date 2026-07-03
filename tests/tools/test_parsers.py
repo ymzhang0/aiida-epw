@@ -258,3 +258,24 @@ def test_parser_robust_exception_handling():
         match="Could not parse the number of smearing values from the header",
     ):
         parsers.parse_epw_phdos("w[meV] phdos[states/meV]\n0.1 1.0")
+
+
+def test_preprocess_fortran_floats():
+    """Test preprocess_fortran_floats correctly parses Fortran scientific formats."""
+    from aiida_epw.tools.parsers import preprocess_fortran_floats
+
+    # 1. exponent sign without E
+    assert preprocess_fortran_floats("1.4305144185+100") == "1.4305144185e+100"
+    assert preprocess_fortran_floats("1.4305144185-100") == "1.4305144185e-100"
+
+    # 2. D/d exponent characters
+    assert preprocess_fortran_floats("1.4305144185d-100") == "1.4305144185e-100"
+    assert preprocess_fortran_floats("1.4305144185D+100") == "1.4305144185e+100"
+
+    # 3. standard scientific notation should not be changed
+    assert preprocess_fortran_floats("1.4305144185e+100") == "1.4305144185e+100"
+    assert preprocess_fortran_floats("1.4305144185E-100") == "1.4305144185E-100"
+
+    # 4. negative values and normal floats
+    assert preprocess_fortran_floats("-1.4305144185") == "-1.4305144185"
+    assert preprocess_fortran_floats("1.4305144185") == "1.4305144185"

@@ -8,6 +8,17 @@ import numpy
 Ry2eV = 13.605662285137
 
 
+def preprocess_fortran_floats(content_str):
+    """Replace Fortran scientific formats (e.g. 1.0+100, 1.0d-100) to python compatible floats."""
+    if not content_str:
+        return ""
+    # Replace D/d exponent characters to e
+    content_str = re.sub(r"(?<=[0-9])[dD](?=[+-]?[0-9])", "e", content_str)
+    # Replace sign exponent without E (e.g. 1.23+100 -> 1.23e+100)
+    content_str = re.sub(r"(?<=[0-9])(?=[+-][0-9])", "e", content_str)
+    return content_str
+
+
 def parse_epw_bands(file_content):
     """Parse the contents of a `band.eig`-style EPW bands file."""
     header_match = re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", file_content)
@@ -150,7 +161,11 @@ def parse_epw_max_eigenvalue(file_content):
 def parse_epw_dos(file_content):
     """Parse the contents of the electronic DOS file produced by EPW."""
     try:
-        dos = numpy.loadtxt(io.StringIO(file_content), dtype=float, comments="#")
+        dos = numpy.loadtxt(
+            io.StringIO(preprocess_fortran_floats(file_content)),
+            dtype=float,
+            comments="#",
+        )
     except Exception as exc:
         raise ValueError(
             f"Malformed electronic DOS file: Failed to load tabular data: {exc}"
@@ -184,7 +199,11 @@ def parse_epw_phdos(file_content):
     num_smearings = int(smearing_match.group(1))
 
     try:
-        phdos = numpy.loadtxt(io.StringIO(file_content), dtype=float, skiprows=1)
+        phdos = numpy.loadtxt(
+            io.StringIO(preprocess_fortran_floats(file_content)),
+            dtype=float,
+            skiprows=1,
+        )
     except Exception as exc:
         raise ValueError(
             f"Malformed phonon DOS file: Failed to load tabular data: {exc}"
@@ -345,7 +364,10 @@ def parse_epw_imag_iso(file_contents, prefix="aiida"):
             temperature = float(match.group(1))
             try:
                 gap_function = numpy.loadtxt(
-                    io.StringIO(file_content), dtype=float, comments="#", skiprows=1
+                    io.StringIO(preprocess_fortran_floats(file_content)),
+                    dtype=float,
+                    comments="#",
+                    skiprows=1,
                 )
             except Exception as exc:
                 raise ValueError(
@@ -378,7 +400,10 @@ def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
             temperature = float(match.group(1))
             try:
                 gap_function = numpy.loadtxt(
-                    io.StringIO(file_content), dtype=float, comments="#", skiprows=1
+                    io.StringIO(preprocess_fortran_floats(file_content)),
+                    dtype=float,
+                    comments="#",
+                    skiprows=1,
                 )
             except Exception as exc:
                 raise ValueError(
@@ -476,7 +501,11 @@ def parse_aniso(file_content):
 
 def _load_numeric_table(file_content, **kwargs):
     """Load a numeric table from in-memory text and preserve 2D shape for single-row tables."""
-    table = numpy.loadtxt(io.StringIO(file_content), dtype=float, **kwargs)
+    table = numpy.loadtxt(
+        io.StringIO(preprocess_fortran_floats(file_content)),
+        dtype=float,
+        **kwargs,
+    )
     if table.ndim == 1:
         table = table[numpy.newaxis, :]
 
