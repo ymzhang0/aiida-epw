@@ -246,6 +246,12 @@ def test_supercon_get_builder_from_protocol_default(
 
         assert builder.epw_interp.restart_type == RestartType.EPHWRITE
 
+    # epw_interp check
+    if "restart_type" in builder.epw_interp:
+        from aiida_epw.common import RestartType
+
+        assert builder.epw_interp.restart_type == RestartType.EPHWRITE
+
     # epw_final_iso check
     if "momentum_dependence" in builder.epw_final_iso:
         assert not builder.epw_final_iso.momentum_dependence.value
