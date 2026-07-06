@@ -6,43 +6,42 @@ default_inputs:
     - 0.02
     - 0.01
   convergence_threshold: 0.05
-  epw:
-    options:
-      resources:
-        num_machines: 1
-      max_wallclock_seconds: 43200  # Twelve hours
-      withmpi: True
-    parameters:
-      INPUTEPW:
-        broyden_beta: 0.4
-        conv_thr_iaxis: 0.01
-        degaussq: 0.5
-        eliashberg: True
-        elph: True
-        ep_coupling: True
-        epbread: False
-        epbwrite: False
-        ephwrite: True
-        eps_acoustic: 1
-        epwread: True
-        epwwrite: False
-        etf_mem: 1
-        fsthick: 0.8
-        liso: True
-        laniso: False
-        limag: True
-        lpade: True
-        mp_mesh_k: True
-        muc: 0.13
-        nqstep: 500
-        nsiter: 1
-        nstemp: 1
-        restart: False
-        selecqread: False
-        temps: 10.0
-        vme: 'dipole'
-        wannierize: False
-        wscut: 0.5
+  options:
+    resources:
+      num_machines: 1
+    max_wallclock_seconds: 43200  # Twelve hours
+    withmpi: True
+  parameters:
+    INPUTEPW:
+      broyden_beta: 0.4
+      conv_thr_iaxis: 0.01
+      degaussq: 0.5
+      eliashberg: True
+      elph: True
+      ep_coupling: True
+      epbread: False
+      epbwrite: False
+      ephwrite: True
+      eps_acoustic: 1
+      epwread: True
+      epwwrite: False
+      etf_mem: 1
+      fsthick: 0.8
+      liso: True
+      laniso: False
+      limag: True
+      lpade: True
+      mp_mesh_k: True
+      muc: 0.13
+      nqstep: 500
+      nsiter: 1
+      nstemp: 1
+      restart: False
+      selecqread: False
+      temps: 10.0
+      vme: 'dipole'
+      wannierize: False
+      wscut: 0.5
 
 default_protocol: moderate
 protocols:
