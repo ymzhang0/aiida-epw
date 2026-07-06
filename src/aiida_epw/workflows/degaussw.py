@@ -12,7 +12,7 @@ from aiida_epw.workflows.base import EpwBaseWorkChain
 class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
     """This workchain runs a series of parallel `EpwBaseWorkChain`s in interpolation mode
     with different `degaussw` (smearing width) values on a fixed fine k/q-mesh,
-    and converges the critical temperature (or other properties)."""
+    and converges the electron-phonon coupling strength lambda."""
 
     @classmethod
     def define(cls, spec):
@@ -38,7 +38,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             "convergence_threshold",
             valid_type=orm.Float,
             default=lambda: orm.Float(0.05),
-            help="Relative threshold for critical temperature convergence.",
+            help="Relative threshold for lambda convergence.",
         )
 
         spec.expose_inputs(
@@ -57,7 +57,8 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
 
         spec.outline(
             cls.setup,
-            cls.run_parallel_degaussw,
+            cls.initialize_ephmat,
+            cls.run_convergence,
             cls.inspect_convergence,
             cls.results,
         )
@@ -77,6 +78,11 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             401,
             "ERROR_ALL_SUB_PROCESSES_FAILED",
             message="All EpwBaseWorkChain sub-processes failed.",
+        )
+        spec.exit_code(
+            402,
+            "ERROR_GENERATOR_FAILED",
+            message="The initial matrix element calculation (ephwrite = True) failed.",
         )
 
     @classmethod
@@ -163,20 +169,60 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         degaussw_list.sort(reverse=True)
         self.ctx.degaussw_values = degaussw_list
 
-    def run_parallel_degaussw(self):
-        """Submit calculations for all degaussw values in parallel."""
+    def initialize_ephmat(self):
+        """Submit the first calculation to generate and write the ephmat file."""
+        degaussw = self.ctx.degaussw_values[0]
+
+        inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain, namespace="epw"))
+        inputs.structure = self.inputs.structure
+        inputs.parent_folder_epw = self.inputs.parent_folder_epw
+
+        # Configure to write matrix elements (ephwrite = True, restart = False)
+        parameters = inputs.parameters.get_dict()
+        parameters.setdefault("INPUTEPW", {})["ephwrite"] = True
+        parameters["INPUTEPW"]["restart"] = False
+        parameters["INPUTEPW"]["degaussw"] = degaussw
+        inputs.parameters = orm.Dict(parameters)
+
+        inputs.setdefault("metadata", {})["call_link_label"] = (
+            f"degaussw_00_{str(degaussw).replace('.', '_')}"
+        )
+
+        node = self.submit(EpwBaseWorkChain, **inputs)
+        self.report(
+            f"launching matrix generator EpwBaseWorkChain<{node.pk}> with degaussw = {degaussw} eV"
+        )
+
+        return ToContext(wc_0=node)
+
+    def run_convergence(self):
+        """Submit all remaining calculations in parallel reading from the generated ephmat file."""
+        if not self.ctx.wc_0.is_finished_ok:
+            self.report(
+                "Generator EpwBaseWorkChain failed. Aborting remaining calculations."
+            )
+            return self.exit_codes.ERROR_GENERATOR_FAILED
+
+        # Check if there are remaining values to run
+        if len(self.ctx.degaussw_values) <= 1:
+            self.report("No remaining degaussw values to run.")
+            return
+
+        parent_folder_epw = self.ctx.wc_0.outputs.remote_folder
         base_inputs = AttributeDict(
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw")
         )
         base_inputs.structure = self.inputs.structure
-        base_inputs.parent_folder_epw = self.inputs.parent_folder_epw
+        base_inputs.parent_folder_epw = parent_folder_epw
 
         running_workchains = {}
-        for idx, degaussw in enumerate(self.ctx.degaussw_values):
+        for idx, degaussw in enumerate(self.ctx.degaussw_values[1:], start=1):
             inputs = AttributeDict(base_inputs)
-            # Update the degaussw value in inputs.parameters["INPUTEPW"]
+            # Configure to read matrix elements (ephwrite = False, restart = True)
             parameters = base_inputs.parameters.get_dict()
-            parameters.setdefault("INPUTEPW", {})["degaussw"] = degaussw
+            parameters.setdefault("INPUTEPW", {})["ephwrite"] = False
+            parameters["INPUTEPW"]["restart"] = True
+            parameters["INPUTEPW"]["degaussw"] = degaussw
             inputs.parameters = orm.Dict(parameters)
 
             inputs.setdefault("metadata", {})["call_link_label"] = (
@@ -188,15 +234,36 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             running_workchains[label] = workchain_node
 
             self.report(
-                f"launching EpwBaseWorkChain<{workchain_node.pk}> with degaussw = {degaussw} eV"
+                f"launching parallel EpwBaseWorkChain<{workchain_node.pk}> with degaussw = {degaussw} eV "
+                f"(reading matrix elements from PK {self.ctx.wc_0.pk})"
             )
 
         return ToContext(**running_workchains)
 
     def inspect_convergence(self):
-        """Analyze results from the parallel runs and find the converged one."""
+        """Analyze results from all runs and find the converged one by checking lambda."""
         results = []
-        for idx, degaussw in enumerate(self.ctx.degaussw_values):
+
+        # Parse first run (wc_0)
+        if self.ctx.wc_0.is_finished_ok:
+            try:
+                lambda_val = self.ctx.wc_0.outputs.a2f.get_lambda()[-1]
+            except (AttributeError, IndexError, ValueError):
+                lambda_val = None
+
+            results.append(
+                {
+                    "degaussw": self.ctx.degaussw_values[0],
+                    "lambda": lambda_val,
+                    "workchain": self.ctx.wc_0,
+                    "pk": self.ctx.wc_0.pk,
+                }
+            )
+        else:
+            self.report(f"Generator EpwBaseWorkChain<{self.ctx.wc_0.pk}> failed.")
+
+        # Parse remaining runs
+        for idx, degaussw in enumerate(self.ctx.degaussw_values[1:], start=1):
             label = f"wc_{idx}"
             workchain = getattr(self.ctx, label)
             if not workchain.is_finished_ok:
@@ -207,15 +274,14 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
                 continue
 
             try:
-                output_params = workchain.outputs.output_parameters.get_dict()
-                tc = output_params.get("Allen_Dynes_Tc", None)
-            except AttributeError:
-                tc = None
+                lambda_val = workchain.outputs.a2f.get_lambda()[-1]
+            except (AttributeError, IndexError, ValueError):
+                lambda_val = None
 
             results.append(
                 {
                     "degaussw": degaussw,
-                    "tc": tc,
+                    "lambda": lambda_val,
                     "workchain": workchain,
                     "pk": workchain.pk,
                 }
@@ -231,7 +297,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         self.report("Degaussw convergence scan results:")
         for res in results:
             self.report(
-                f"  degaussw = {res['degaussw']} eV -> Allen-Dynes Tc = {res['tc']} K (PK: {res['pk']})"
+                f"  degaussw = {res['degaussw']} eV -> Integrated Lambda = {res['lambda']} (PK: {res['pk']})"
             )
 
         converged_index = None
@@ -239,16 +305,16 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
 
         # Compare consecutive entries (from largest degaussw to smallest)
         for i in range(len(results) - 1):
-            tc_prev = results[i]["tc"]
-            tc_curr = results[i + 1]["tc"]
+            lambda_prev = results[i]["lambda"]
+            lambda_curr = results[i + 1]["lambda"]
 
-            if tc_prev is not None and tc_curr is not None and tc_curr != 0:
-                rel_diff = abs(tc_prev - tc_curr) / tc_curr
+            if lambda_prev is not None and lambda_curr is not None and lambda_curr != 0:
+                rel_diff = abs(lambda_prev - lambda_curr) / lambda_curr
                 if rel_diff <= threshold:
                     converged_index = i + 1
                     self.report(
                         f"Convergence achieved at degaussw = {results[converged_index]['degaussw']} eV "
-                        f"(relative difference = {rel_diff:.4f} <= threshold {threshold})"
+                        f"(relative difference in lambda = {rel_diff:.4f} <= threshold {threshold})"
                     )
                     break
 
