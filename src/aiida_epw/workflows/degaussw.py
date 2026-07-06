@@ -43,16 +43,14 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
 
         spec.expose_inputs(
             EpwBaseWorkChain,
-            namespace="epw",
             exclude=(
                 "clean_workdir",
                 "parent_folder_ph",
                 "parent_folder_nscf",
                 "parent_folder_chk",
+                "structure",
+                "parent_folder_epw",
             ),
-            namespace_options={
-                "help": "Inputs forwarded to `EpwBaseWorkChain` for the individual runs."
-            },
         )
 
         spec.outline(
@@ -96,7 +94,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
     @classmethod
     def get_builder_from_protocol(
         cls,
-        epw_code,
+        code,
         parent_epw,
         protocol=None,
         overrides=None,
@@ -127,33 +125,31 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             raise ValueError(f"Invalid parent_epw process: {parent_epw.process_label}")
 
         if parent_folder_epw is None:
-            if epw_source.inputs.code.computer.hostname != epw_code.computer.hostname:
+            if epw_source.inputs.code.computer.hostname != code.computer.hostname:
                 raise ValueError(
-                    "The `epw_code` must be configured on the same computer as that where the `parent_epw` was run."
+                    "The `code` must be configured on the same computer as that where the `parent_epw` was run."
                 )
             parent_folder_epw = epw_source.outputs.remote_stash
         else:
-            # TODO: Add check to make sure parent_folder_epw is on same computer as epw_code
+            # TODO: Add check to make sure parent_folder_epw is on same computer as code
             pass
 
-        epw_inputs = inputs.get("epw", None)
-
         epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
-            code=epw_code,
+            code=code,
             structure=structure,
             protocol=protocol,
-            overrides=epw_inputs,
+            overrides=inputs,
         )
 
         epw_builder.kpoints = epw_source.inputs.kpoints
         epw_builder.qpoints = epw_source.inputs.qpoints
 
-        if "settings" in epw_inputs:
-            epw_builder.settings = orm.Dict(epw_inputs["settings"])
+        # Populate exposed inputs directly to the root builder
+        for name in epw_builder:
+            if name in builder:
+                builder[name] = epw_builder[name]
 
-        builder.epw = epw_builder
-
-        if isinstance(inputs["degaussw_list"], list):
+        if isinstance(inputs.get("degaussw_list"), list):
             builder.degaussw_list = orm.List(inputs["degaussw_list"])
 
         builder.convergence_threshold = orm.Float(inputs["convergence_threshold"])
@@ -173,7 +169,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         """Submit the first calculation to generate and write the ephmat file."""
         degaussw = self.ctx.degaussw_values[0]
 
-        inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain, namespace="epw"))
+        inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain))
         inputs.structure = self.inputs.structure
         inputs.parent_folder_epw = self.inputs.parent_folder_epw
 
@@ -209,9 +205,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             return
 
         parent_folder_epw = self.ctx.wc_0.outputs.remote_folder
-        base_inputs = AttributeDict(
-            self.exposed_inputs(EpwBaseWorkChain, namespace="epw")
-        )
+        base_inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain))
         base_inputs.structure = self.inputs.structure
         base_inputs.parent_folder_epw = parent_folder_epw
 

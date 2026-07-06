@@ -40,7 +40,7 @@ def test_degaussw_get_builder_from_protocol_prep(
     monkeypatch.setattr(PortNamespace, "validate", lambda *a, **k: None)
     monkeypatch.setattr(EpwBaseWorkChain, "get_builder_from_protocol", mock_get_builder)
 
-    epw_code = fixture_code("epw.epw")
+    code = fixture_code("epw.epw")
     structure = generate_structure()
     remote_stash = generate_remote_data(fixture_localhost, "/tmp/remote_stash")
 
@@ -53,7 +53,7 @@ def test_degaussw_get_builder_from_protocol_prep(
     # Mock base.links.get_outgoing
     epw_source = MagicMock()
     epw_source.inputs = MagicMock()
-    epw_source.inputs.code = epw_code
+    epw_source.inputs.code = code
     epw_source.inputs.kpoints = orm.KpointsData()
     epw_source.inputs.qpoints = orm.KpointsData()
     epw_source.outputs = MagicMock()
@@ -62,7 +62,7 @@ def test_degaussw_get_builder_from_protocol_prep(
     parent_epw.base.links.get_outgoing.return_value.first.return_value.node = epw_source
 
     builder = EpwDegausswConvWorkChain.get_builder_from_protocol(
-        epw_code=epw_code,
+        code=code,
         parent_epw=parent_epw,
         protocol="fast",
     )
@@ -87,7 +87,7 @@ def test_degaussw_get_builder_from_protocol_base_success(
     monkeypatch.setattr(PortNamespace, "validate", lambda *a, **k: None)
     monkeypatch.setattr(EpwBaseWorkChain, "get_builder_from_protocol", mock_get_builder)
 
-    epw_code = fixture_code("epw.epw")
+    code = fixture_code("epw.epw")
     structure = generate_structure()
     remote_stash = generate_remote_data(fixture_localhost, "/tmp/remote_stash")
 
@@ -96,14 +96,14 @@ def test_degaussw_get_builder_from_protocol_base_success(
     parent_epw.process_label = "EpwBaseWorkChain"
     parent_epw.inputs = MagicMock()
     parent_epw.inputs.structure = structure
-    parent_epw.inputs.code = epw_code
+    parent_epw.inputs.code = code
     parent_epw.inputs.kpoints = orm.KpointsData()
     parent_epw.inputs.qpoints = orm.KpointsData()
     parent_epw.outputs = MagicMock()
     parent_epw.outputs.remote_stash = remote_stash
 
     builder = EpwDegausswConvWorkChain.get_builder_from_protocol(
-        epw_code=epw_code,
+        code=code,
         parent_epw=parent_epw,
         protocol="fast",
     )
