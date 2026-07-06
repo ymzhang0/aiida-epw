@@ -1,6 +1,7 @@
 """Tests for EpwDegausswConvWorkChain."""
 
 from unittest.mock import MagicMock
+import numpy
 from aiida import orm
 
 
@@ -112,7 +113,7 @@ def test_degaussw_get_builder_from_protocol_base_success(
 
 
 def test_degaussw_inspect_convergence():
-    """Test inspect_convergence of EpwDegausswConvWorkChain."""
+    """Test inspect_convergence of EpwDegausswConvWorkChain using lambda."""
     from aiida_epw.workflows.degaussw import EpwDegausswConvWorkChain
     from types import SimpleNamespace
     from aiida.common.extendeddicts import AttributeDict
@@ -120,27 +121,28 @@ def test_degaussw_inspect_convergence():
     class FakeExitCodes:
         ERROR_ALL_SUB_PROCESSES_FAILED = "ERROR_ALL_SUB_PROCESSES_FAILED"
 
-    def make_mock_node(is_finished_ok, tc):
+    def make_mock_node(is_finished_ok, lambda_val):
         node = MagicMock()
         node.is_finished_ok = is_finished_ok
         node.exit_status = 0
         node.pk = 123
         node.outputs = MagicMock()
-        node.outputs.output_parameters = orm.Dict(dict={"Allen_Dynes_Tc": tc})
+        node.outputs.a2f.get_lambda.return_value = numpy.array([lambda_val])
+        node.outputs.output_parameters = orm.Dict(dict={})
         return node
 
     # degaussw = [0.05, 0.04, 0.03, 0.02, 0.01]
-    # wc_0 (0.05) -> Tc = 15.0
-    # wc_1 (0.04) -> Tc = 12.0 (diff vs 15.0 relative to 12.0 = 0.25)
-    # wc_2 (0.03) -> Tc = 10.0 (diff vs 12.0 relative to 10.0 = 0.20)
-    # wc_3 (0.02) -> Tc = 9.8  (diff vs 10.0 relative to 9.8 = 0.0204)
-    # wc_4 (0.01) -> Tc = 9.7  (diff vs 9.8 relative to 9.7 = 0.0103)
+    # wc_0 (0.05) -> lambda = 1.5
+    # wc_1 (0.04) -> lambda = 1.2 (diff vs 1.5 relative to 1.2 = 0.25)
+    # wc_2 (0.03) -> lambda = 1.0 (diff vs 1.2 relative to 1.0 = 0.20)
+    # wc_3 (0.02) -> lambda = 0.98 (diff vs 1.0 relative to 0.98 = 0.0204)
+    # wc_4 (0.01) -> lambda = 0.97 (diff vs 0.98 relative to 0.97 = 0.0103)
 
-    wc_0 = make_mock_node(True, 15.0)
-    wc_1 = make_mock_node(True, 12.0)
-    wc_2 = make_mock_node(True, 10.0)
-    wc_3 = make_mock_node(True, 9.8)
-    wc_4 = make_mock_node(True, 9.7)
+    wc_0 = make_mock_node(True, 1.5)
+    wc_1 = make_mock_node(True, 1.2)
+    wc_2 = make_mock_node(True, 1.0)
+    wc_3 = make_mock_node(True, 0.98)
+    wc_4 = make_mock_node(True, 0.97)
 
     ctx = SimpleNamespace(
         degaussw_values=[0.05, 0.04, 0.03, 0.02, 0.01],
@@ -169,5 +171,5 @@ def test_degaussw_inspect_convergence():
 
     # Should converge at index 3 (degaussw = 0.02 eV) because rel_diff (0.0204) <= threshold (0.05)
     assert wc_instance.ctx.converged_res["degaussw"] == 0.02
-    assert wc_instance.ctx.converged_res["tc"] == 9.8
+    assert wc_instance.ctx.converged_res["lambda"] == 0.98
     assert wc_instance.ctx.converged_res["workchain"] is wc_3
