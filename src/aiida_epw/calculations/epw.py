@@ -571,25 +571,6 @@ class EpwCalculation(NamelistsCalculation):
         cls.validate_restart_inputs(parameters, inputs)
 
         inputepw = parameters["INPUTEPW"]
-        from aiida_epw.common import RestartType
-
-        restart_type = None
-        if "restart_type" in inputs:
-            restart_node = inputs["restart_type"]
-            if hasattr(restart_node, "get_member"):
-                restart_type = restart_node.get_member()
-            elif hasattr(restart_node, "value"):
-                try:
-                    restart_type = RestartType(restart_node.value)
-                except Exception:
-                    pass
-            elif isinstance(restart_node, RestartType):
-                restart_type = restart_node
-            elif isinstance(restart_node, str):
-                try:
-                    restart_type = RestartType(restart_node.lower())
-                except ValueError:
-                    pass
 
         is_wannierize = False
         calculation_type = inputs.get("calculation_type", None)
@@ -601,8 +582,6 @@ class EpwCalculation(NamelistsCalculation):
                 is_wannierize = True
         if not is_wannierize:
             is_wannierize = inputepw.get("wannierize", False)
-        if not is_wannierize:
-            is_wannierize = restart_type is RestartType.WANNIERIZE
 
         if is_wannierize:
             if inputepw.get("auto_projections", False):

@@ -771,18 +771,14 @@ def test_handle_out_of_walltime_wannierize(aiida_localhost):
     workchain.ctx.inputs.parameters = orm.Dict(dict=initial_params)
 
     if HAS_RESTART_TYPE:
-        from aiida_epw.common.types import CalculationTypes, RestartType
+        from aiida_epw.common.types import CalculationTypes
 
         calc_type_mock = MagicMock()
-        calc_type_mock.get_member.return_value = CalculationTypes.ELIASHBERG
-        restart_type_mock = MagicMock()
-        restart_type_mock.get_member.return_value = RestartType.WANNIERIZE
+        calc_type_mock.get_member.return_value = CalculationTypes.WANNIERIZE
 
         workchain.ctx.inputs.calculation_type = calc_type_mock
-        workchain.ctx.inputs.restart_type = restart_type_mock
         workchain.ctx.inputs.__contains__.side_effect = lambda key: key in (
             "calculation_type",
-            "restart_type",
             "parameters",
         )
 

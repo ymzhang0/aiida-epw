@@ -878,8 +878,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 and restart_type == RestartType.EPHREAD
             )
             is_valid_eliashberg_wannierize = (
-                calculation_type == CalculationTypes.ELIASHBERG
-                and restart_type == RestartType.WANNIERIZE
+                calculation_type == CalculationTypes.WANNIERIZE
             )
         except ImportError:
             # Fallback for branches/environments where ports do not exist yet

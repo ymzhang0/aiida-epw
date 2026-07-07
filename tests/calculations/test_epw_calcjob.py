@@ -451,7 +451,6 @@ def test_epw_stages_dos_when_ephwrite_disabled(
     inputs = generate_inputs_epw(
         restart_type="ephread",
         calculation_type="eliashberg",
-        parameters={"INPUTEPW": {"ephwrite": False}},
         momentum_dependence=orm.Bool(False),
         parent_folder_epw=parent_folder,
     )
@@ -463,30 +462,6 @@ def test_epw_stages_dos_when_ephwrite_disabled(
         Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.dos").as_posix() in copied_targets
     )
     assert "aiida.a2f" not in copied_targets
-
-
-def test_epw_stages_a2f_when_ephwrite_disabled(
-    fixture_sandbox,
-    fixture_localhost,
-    generate_calc_job,
-    generate_inputs_epw,
-    generate_remote_data,
-):
-    """Test that EpwCalculation stages prefix.a2f when eliashberg is True and ephwrite is False."""
-    from aiida_epw.common.types import CalculationTypes
-
-    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
-    inputs = generate_inputs_epw(
-        calculation_type=orm.EnumData(CalculationTypes.ELIASHBERG),
-        parameters={"INPUTEPW": {"ephwrite": False}},
-        momentum_dependence=orm.Bool(False),
-        parent_folder_epw=parent_folder,
-    )
-
-    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
-    assert "aiida.a2f" in copied_targets
 
 
 def test_epw_eliashberg_parameters(

@@ -484,9 +484,9 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
 
 
 def test_epw_base_restart_types(fixture_code, generate_structure):
-    """Test that EpwBaseWorkChain exposes restart_type from EpwCalculation."""
+    """Test that EpwBaseWorkChain exposes restart_type and calculation_type from EpwCalculation."""
     from aiida_epw.workflows.base import EpwBaseWorkChain
-    from aiida_epw.common import RestartType
+    from aiida_epw.common import RestartType, CalculationTypes
 
     epw_code = fixture_code("epw.epw")
     structure = generate_structure()
@@ -497,6 +497,9 @@ def test_epw_base_restart_types(fixture_code, generate_structure):
         protocol="fast",
     )
 
-    # We should be able to set and access restart_type on the builder
-    builder.restart_type = RestartType.WANNIERIZE
-    assert builder.restart_type == RestartType.WANNIERIZE
+    # We should be able to set and access restart_type and calculation_type on the builder
+    builder.restart_type = RestartType.EPHWRITE
+    assert builder.restart_type == RestartType.EPHWRITE
+
+    builder.calculation_type = CalculationTypes.WANNIERIZE
+    assert builder.calculation_type == CalculationTypes.WANNIERIZE
