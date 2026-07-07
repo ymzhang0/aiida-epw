@@ -146,7 +146,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
 
         # Populate exposed inputs directly to the root builder
         for name in epw_builder:
-            if name in builder:
+            if name in cls.spec().inputs:
                 builder[name] = epw_builder[name]
 
         if isinstance(inputs.get("degaussw_list"), list):
