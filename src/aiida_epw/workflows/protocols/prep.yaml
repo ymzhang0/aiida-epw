@@ -55,13 +55,14 @@ default_inputs:
         a2f: False
         degaussq: 0.05
         degaussw: 0.2
-        epbread: False
-        epbwrite: True
+        elph: True
+        epwread: False
+        epwwrite: True
         fsthick: 100
         phonselfen: False
         temps: 300
         vme: 'dipole'
-    restart_type: wannierize
+    calculation_type: wannierize
   epw_bands:
     options:
       resources:
