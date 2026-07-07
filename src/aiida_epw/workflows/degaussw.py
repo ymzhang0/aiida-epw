@@ -173,36 +173,15 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         inputs.parent_folder_epw = self.inputs.parent_folder_epw
 
         # Configure to write matrix elements
-        if "restart_type" in EpwBaseWorkChain.spec().inputs:
-            inputs.calculation_type = "eliashberg"
-            inputs.restart_type = "ephwrite"
-            inputs.momentum_dependence = False
-            inputs.real_axis = False
-            inputs.analytical_continuation = "pade"
-            parameters = inputs.parameters.get_dict()
-            inputepw = parameters.setdefault("INPUTEPW", {})
-            inputepw["degaussw"] = degaussw
-            inputs.parameters = orm.Dict(parameters)
-        else:
-            # Fallback for old version
-            parameters = inputs.parameters.get_dict()
-            inputepw = parameters.setdefault("INPUTEPW", {})
-            inputepw["eliashberg"] = True
-            inputepw["elph"] = True
-            inputepw["ep_coupling"] = True
-            inputepw["epbread"] = False
-            inputepw["epbwrite"] = False
-            inputepw["ephwrite"] = True
-            inputepw["restart"] = False
-            inputepw["epwread"] = True
-            inputepw["epwwrite"] = False
-            inputepw["wannierize"] = False
-            inputepw["liso"] = True
-            inputepw["laniso"] = False
-            inputepw["limag"] = True
-            inputepw["lpade"] = True
-            inputepw["degaussw"] = degaussw
-            inputs.parameters = orm.Dict(parameters)
+        inputs.calculation_type = "eliashberg"
+        inputs.restart_type = "ephwrite"
+        inputs.momentum_dependence = False
+        inputs.real_axis = False
+        inputs.analytical_continuation = "pade"
+        parameters = inputs.parameters.get_dict()
+        inputepw = parameters.setdefault("INPUTEPW", {})
+        inputepw["degaussw"] = degaussw
+        inputs.parameters = orm.Dict(parameters)
 
         inputs.setdefault("metadata", {})["call_link_label"] = (
             f"degaussw_00_{str(degaussw).replace('.', '_')}"
@@ -237,36 +216,15 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         for idx, degaussw in enumerate(self.ctx.degaussw_values[1:], start=1):
             inputs = AttributeDict(base_inputs)
             # Configure to read matrix elements
-            if "restart_type" in EpwBaseWorkChain.spec().inputs:
-                inputs.calculation_type = "eliashberg"
-                inputs.restart_type = "ephread"
-                inputs.momentum_dependence = False
-                inputs.real_axis = False
-                inputs.analytical_continuation = "pade"
-                parameters = base_inputs.parameters.get_dict()
-                inputepw = parameters.setdefault("INPUTEPW", {})
-                inputepw["degaussw"] = degaussw
-                inputs.parameters = orm.Dict(parameters)
-            else:
-                # Fallback for old version
-                parameters = base_inputs.parameters.get_dict()
-                inputepw = parameters.setdefault("INPUTEPW", {})
-                inputepw["eliashberg"] = True
-                inputepw["elph"] = True
-                inputepw["ep_coupling"] = True
-                inputepw["epbread"] = False
-                inputepw["epbwrite"] = False
-                inputepw["ephwrite"] = False
-                inputepw["restart"] = True
-                inputepw["epwread"] = True
-                inputepw["epwwrite"] = False
-                inputepw["wannierize"] = False
-                inputepw["liso"] = True
-                inputepw["laniso"] = False
-                inputepw["limag"] = True
-                inputepw["lpade"] = True
-                inputepw["degaussw"] = degaussw
-                inputs.parameters = orm.Dict(parameters)
+            inputs.calculation_type = "eliashberg"
+            inputs.restart_type = "ephread"
+            inputs.momentum_dependence = False
+            inputs.real_axis = False
+            inputs.analytical_continuation = "pade"
+            parameters = base_inputs.parameters.get_dict()
+            inputepw = parameters.setdefault("INPUTEPW", {})
+            inputepw["degaussw"] = degaussw
+            inputs.parameters = orm.Dict(parameters)
 
             inputs.setdefault("metadata", {})["call_link_label"] = (
                 f"degaussw_{idx:02d}_{str(degaussw).replace('.', '_')}"
