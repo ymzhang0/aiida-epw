@@ -1,10 +1,15 @@
 default_inputs:
   degaussw_list:
-    - 0.05
-    - 0.04
-    - 0.03
-    - 0.02
+    - 0.005
     - 0.01
+    - 0.015
+    - 0.02
+    - 0.025
+    - 0.03
+    - 0.035
+    - 0.04
+    - 0.045
+    - 0.05
   convergence_threshold: 0.05
   options:
     resources:
@@ -16,12 +21,6 @@ default_inputs:
       broyden_beta: 0.4
       conv_thr_iaxis: 0.01
       degaussq: 0.5
-      eliashberg: True
-      elph: True
-      ep_coupling: True
-      epbread: False
-      epbwrite: False
-      ephwrite: True
       eps_acoustic: 1
       epwread: True
       epwwrite: False
@@ -36,7 +35,6 @@ default_inputs:
       nqstep: 500
       nsiter: 1
       nstemp: 1
-      restart: False
       selecqread: False
       temps: 10.0
       vme: 'dipole'
