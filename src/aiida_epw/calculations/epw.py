@@ -868,6 +868,35 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["eliashberg"] = True
                 inputepw_parameters["scattering"] = False
                 inputepw_parameters["plrn"] = False
+
+                if "momentum_dependence" in self.inputs:
+                    momentum_dependence = self.inputs.momentum_dependence.value
+                    inputepw_parameters["laniso"] = momentum_dependence
+                    inputepw_parameters["liso"] = not momentum_dependence
+
+                if "full_bandwidth" in self.inputs:
+                    inputepw_parameters["fbw"] = self.inputs.full_bandwidth.value
+
+                if "real_axis" in self.inputs:
+                    real_axis = self.inputs.real_axis.value
+                    inputepw_parameters["lreal"] = real_axis
+                    inputepw_parameters["limag"] = not real_axis
+
+                if "analytical_continuation" in self.inputs:
+                    ac_method = self.inputs.analytical_continuation.value.lower()
+                    if ac_method == "pade":
+                        inputepw_parameters["lpade"] = True
+                        inputepw_parameters["lacon"] = False
+                        inputepw_parameters["limag"] = True
+                        inputepw_parameters["lreal"] = False
+                    elif ac_method == "acon":
+                        inputepw_parameters["lpade"] = True
+                        inputepw_parameters["lacon"] = True
+                        inputepw_parameters["limag"] = True
+                        inputepw_parameters["lreal"] = False
+                    elif ac_method == "none":
+                        inputepw_parameters["lpade"] = False
+                        inputepw_parameters["lacon"] = False
             elif calc_type == CalculationTypes.TRANSPORT:
                 inputepw_parameters["eliashberg"] = False
                 inputepw_parameters["scattering"] = True
@@ -886,47 +915,6 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["epbwrite"] = True
                 inputepw_parameters["epbread"] = False
 
-        # Override Eliashberg settings in parameters if inputs are specified
-        eliashberg_any = any(
-            f in self.inputs
-            for f in (
-                "momentum_dependence",
-                "full_bandwidth",
-                "real_axis",
-                "analytical_continuation",
-            )
-        )
-        if eliashberg_any:
-            inputepw_parameters["eliashberg"] = True
-
-            if "momentum_dependence" in self.inputs:
-                momentum_dependence = self.inputs.momentum_dependence.value
-                inputepw_parameters["laniso"] = momentum_dependence
-                inputepw_parameters["liso"] = not momentum_dependence
-
-            if "full_bandwidth" in self.inputs:
-                inputepw_parameters["fbw"] = self.inputs.full_bandwidth.value
-
-            if "real_axis" in self.inputs:
-                real_axis = self.inputs.real_axis.value
-                inputepw_parameters["lreal"] = real_axis
-                inputepw_parameters["limag"] = not real_axis
-
-            if "analytical_continuation" in self.inputs:
-                ac_method = self.inputs.analytical_continuation.value.lower()
-                if ac_method == "pade":
-                    inputepw_parameters["lpade"] = True
-                    inputepw_parameters["lacon"] = False
-                    inputepw_parameters["limag"] = True
-                    inputepw_parameters["lreal"] = False
-                elif ac_method == "acon":
-                    inputepw_parameters["lpade"] = True
-                    inputepw_parameters["lacon"] = True
-                    inputepw_parameters["limag"] = True
-                    inputepw_parameters["lreal"] = False
-                elif ac_method == "none":
-                    inputepw_parameters["lpade"] = False
-                    inputepw_parameters["lacon"] = False
         if "restart_type" in self.inputs:
             restart_val = self.inputs.restart_type.get_member()
             from aiida_epw.common import RestartType
