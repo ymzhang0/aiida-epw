@@ -516,8 +516,6 @@ class EpwCalculation(NamelistsCalculation):
                 is_wannierize = True
         if not is_wannierize:
             is_wannierize = inputepw.get("wannierize", False)
-        if not is_wannierize:
-            is_wannierize = restart_type is RestartType.WANNIERIZE
 
         if is_wannierize:
             for input_name in ("parent_folder_epw", "parent_folder_chk"):
@@ -933,15 +931,7 @@ class EpwCalculation(NamelistsCalculation):
             restart_val = self.inputs.restart_type.get_member()
             from aiida_epw.common import RestartType
 
-            if restart_val is RestartType.WANNIERIZE:
-                inputepw_parameters["wannierize"] = True
-                inputepw_parameters["epwread"] = False
-                inputepw_parameters["epwwrite"] = True
-                inputepw_parameters.setdefault("restart", False)
-                inputepw_parameters["ep_coupling"] = True
-                inputepw_parameters["elph"] = True
-            elif restart_val is RestartType.EPHWRITE:
-                inputepw_parameters["wannierize"] = False
+            if restart_val is RestartType.EPHWRITE:
                 inputepw_parameters["epwread"] = True
                 inputepw_parameters["epwwrite"] = False
                 inputepw_parameters.setdefault("restart", False)
@@ -949,7 +939,6 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["elph"] = True
                 inputepw_parameters["ephwrite"] = True
             elif restart_val is RestartType.EPHWRITE_RESTART:
-                inputepw_parameters["wannierize"] = False
                 inputepw_parameters["epwread"] = True
                 inputepw_parameters["epwwrite"] = False
                 inputepw_parameters["restart"] = True
@@ -957,7 +946,6 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["elph"] = True
                 inputepw_parameters["ephwrite"] = True
             elif restart_val is RestartType.EPHREAD:
-                inputepw_parameters["wannierize"] = False
                 inputepw_parameters["epwread"] = True
                 inputepw_parameters.setdefault("restart", False)
                 inputepw_parameters["ep_coupling"] = False
