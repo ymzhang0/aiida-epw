@@ -485,6 +485,7 @@ class EpwCalculation(NamelistsCalculation):
     @classmethod
     def validate_restart_inputs(cls, parameters, inputs):
         """Validate restart-related input combinations against the EPW parameters."""
+        inputepw = parameters["INPUTEPW"]
         from aiida_epw.common import RestartType
 
         restart_type = None
@@ -505,20 +506,30 @@ class EpwCalculation(NamelistsCalculation):
                 except ValueError:
                     pass
 
-        is_wannierize = restart_type is RestartType.WANNIERIZE
+        is_wannierize = False
+        calculation_type = inputs.get("calculation_type", None)
+        if calculation_type is not None:
+            calc_type = calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type is CalculationTypes.WANNIERIZE:
+                is_wannierize = True
+        if not is_wannierize:
+            is_wannierize = inputepw.get("wannierize", False)
+        if not is_wannierize:
+            is_wannierize = restart_type is RestartType.WANNIERIZE
 
         if is_wannierize:
             for input_name in ("parent_folder_epw", "parent_folder_chk"):
                 if input_name in inputs:
                     raise exceptions.InputValidationError(
                         f"`{input_name}` cannot be specified when "
-                        "doing wannierization (restart_type='wannierize')."
+                        "wannierize is enabled."
                     )
 
             if "parent_folder_nscf" not in inputs:
                 raise exceptions.InputValidationError(
-                    "`parent_folder_nscf` must be specified when "
-                    "doing wannierization (restart_type='wannierize')."
+                    "`parent_folder_nscf` must be specified when wannierize is enabled."
                 )
         else:
             if restart_type in (
@@ -582,7 +593,18 @@ class EpwCalculation(NamelistsCalculation):
                 except ValueError:
                     pass
 
-        is_wannierize = restart_type is RestartType.WANNIERIZE
+        is_wannierize = False
+        calculation_type = inputs.get("calculation_type", None)
+        if calculation_type is not None:
+            calc_type = calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type is CalculationTypes.WANNIERIZE:
+                is_wannierize = True
+        if not is_wannierize:
+            is_wannierize = inputepw.get("wannierize", False)
+        if not is_wannierize:
+            is_wannierize = restart_type is RestartType.WANNIERIZE
 
         if is_wannierize:
             if inputepw.get("auto_projections", False):
@@ -605,8 +627,7 @@ class EpwCalculation(NamelistsCalculation):
 
             if not cls.has_manual_projections(inputepw):
                 raise exceptions.InputValidationError(
-                    "Manual `proj` entries must be provided when "
-                    "doing wannierization (restart_type='wannierize')."
+                    "Manual `proj` entries must be provided when wannierize is enabled."
                 )
 
         # Validate Eliashberg parameters
@@ -857,6 +878,15 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["eliashberg"] = False
                 inputepw_parameters["scattering"] = False
                 inputepw_parameters["plrn"] = True
+            elif calc_type == CalculationTypes.WANNIERIZE:
+                inputepw_parameters["wannierize"] = True
+                inputepw_parameters["epwread"] = False
+                inputepw_parameters["epwwrite"] = True
+                inputepw_parameters.setdefault("restart", False)
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+                inputepw_parameters["epbwrite"] = True
+                inputepw_parameters["epbread"] = False
 
         # Override Eliashberg settings in parameters if inputs are specified
         eliashberg_any = any(
