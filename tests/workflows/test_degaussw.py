@@ -21,7 +21,12 @@ class MockBuilder(dict):
 
 
 def mock_get_builder(*args, **kwargs):
-    return MockBuilder()
+    builder = MockBuilder()
+    builder.code = kwargs.get("code")
+    builder.parameters = MockBuilder()
+    builder.kpoints = orm.KpointsData()
+    builder.qpoints = orm.KpointsData()
+    return builder
 
 
 def test_degaussw_get_builder_from_protocol_prep(
@@ -69,6 +74,8 @@ def test_degaussw_get_builder_from_protocol_prep(
 
     assert builder.structure is structure
     assert builder.parent_folder_epw is remote_stash
+    assert builder.code is code
+    assert builder.parameters is not None
 
 
 def test_degaussw_get_builder_from_protocol_base_success(
@@ -110,6 +117,8 @@ def test_degaussw_get_builder_from_protocol_base_success(
 
     assert builder.structure is structure
     assert builder.parent_folder_epw is remote_stash
+    assert builder.code is code
+    assert builder.parameters is not None
 
 
 def test_degaussw_inspect_convergence():
