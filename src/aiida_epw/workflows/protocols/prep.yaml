@@ -55,9 +55,6 @@ default_inputs:
         a2f: False
         degaussq: 0.05
         degaussw: 0.2
-        elph: True
-        epwread: False
-        epwwrite: True
         fsthick: 100
         phonselfen: False
         temps: 300
@@ -71,8 +68,6 @@ default_inputs:
     parameters:
       INPUTEPW:
         band_plot: True
-        epbread: False
-        epbwrite: False
     restart_type: ephread
 default_protocol: moderate
 protocols:
