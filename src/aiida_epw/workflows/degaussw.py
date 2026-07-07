@@ -146,8 +146,7 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
 
         # Populate exposed inputs directly to the root builder
         for name in epw_builder:
-            if name in cls.spec().inputs:
-                builder[name] = epw_builder[name]
+            builder[name] = epw_builder[name]
 
         if isinstance(inputs.get("degaussw_list"), list):
             builder.degaussw_list = orm.List(inputs["degaussw_list"])
