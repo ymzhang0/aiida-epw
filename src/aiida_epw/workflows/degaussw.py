@@ -172,18 +172,30 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         inputs.structure = self.inputs.structure
         inputs.parent_folder_epw = self.inputs.parent_folder_epw
 
-        # Configure to write matrix elements (ephwrite = True, restart = False)
-        parameters = inputs.parameters.get_dict()
-        inputepw = parameters.setdefault("INPUTEPW", {})
-        inputepw["eliashberg"] = True
-        inputepw["elph"] = True
-        inputepw["ep_coupling"] = True
-        inputepw["epbread"] = False
-        inputepw["epbwrite"] = False
-        inputepw["ephwrite"] = True
-        inputepw["restart"] = False
-        inputepw["degaussw"] = degaussw
-        inputs.parameters = orm.Dict(parameters)
+        # Configure to write matrix elements
+        if "restart_type" in EpwBaseWorkChain.spec().inputs:
+            inputs.calculation_type = "eliashberg"
+            inputs.restart_type = "ephwrite"
+            parameters = inputs.parameters.get_dict()
+            inputepw = parameters.setdefault("INPUTEPW", {})
+            inputepw["degaussw"] = degaussw
+            inputs.parameters = orm.Dict(parameters)
+        else:
+            # Fallback for old version
+            parameters = inputs.parameters.get_dict()
+            inputepw = parameters.setdefault("INPUTEPW", {})
+            inputepw["eliashberg"] = True
+            inputepw["elph"] = True
+            inputepw["ep_coupling"] = True
+            inputepw["epbread"] = False
+            inputepw["epbwrite"] = False
+            inputepw["ephwrite"] = True
+            inputepw["restart"] = False
+            inputepw["epwread"] = True
+            inputepw["epwwrite"] = False
+            inputepw["wannierize"] = False
+            inputepw["degaussw"] = degaussw
+            inputs.parameters = orm.Dict(parameters)
 
         inputs.setdefault("metadata", {})["call_link_label"] = (
             f"degaussw_00_{str(degaussw).replace('.', '_')}"
@@ -217,18 +229,30 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         running_workchains = {}
         for idx, degaussw in enumerate(self.ctx.degaussw_values[1:], start=1):
             inputs = AttributeDict(base_inputs)
-            # Configure to read matrix elements (ephwrite = False, restart = True)
-            parameters = base_inputs.parameters.get_dict()
-            inputepw = parameters.setdefault("INPUTEPW", {})
-            inputepw["eliashberg"] = True
-            inputepw["elph"] = True
-            inputepw["ep_coupling"] = True
-            inputepw["epbread"] = False
-            inputepw["epbwrite"] = False
-            inputepw["ephwrite"] = False
-            inputepw["restart"] = True
-            inputepw["degaussw"] = degaussw
-            inputs.parameters = orm.Dict(parameters)
+            # Configure to read matrix elements
+            if "restart_type" in EpwBaseWorkChain.spec().inputs:
+                inputs.calculation_type = "eliashberg"
+                inputs.restart_type = "ephread"
+                parameters = base_inputs.parameters.get_dict()
+                inputepw = parameters.setdefault("INPUTEPW", {})
+                inputepw["degaussw"] = degaussw
+                inputs.parameters = orm.Dict(parameters)
+            else:
+                # Fallback for old version
+                parameters = base_inputs.parameters.get_dict()
+                inputepw = parameters.setdefault("INPUTEPW", {})
+                inputepw["eliashberg"] = True
+                inputepw["elph"] = True
+                inputepw["ep_coupling"] = True
+                inputepw["epbread"] = False
+                inputepw["epbwrite"] = False
+                inputepw["ephwrite"] = False
+                inputepw["restart"] = True
+                inputepw["epwread"] = True
+                inputepw["epwwrite"] = False
+                inputepw["wannierize"] = False
+                inputepw["degaussw"] = degaussw
+                inputs.parameters = orm.Dict(parameters)
 
             inputs.setdefault("metadata", {})["call_link_label"] = (
                 f"degaussw_{idx:02d}_{str(degaussw).replace('.', '_')}"
