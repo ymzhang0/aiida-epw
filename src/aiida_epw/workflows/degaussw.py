@@ -175,9 +175,15 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
 
         # Configure to write matrix elements (ephwrite = True, restart = False)
         parameters = inputs.parameters.get_dict()
-        parameters.setdefault("INPUTEPW", {})["ephwrite"] = True
-        parameters["INPUTEPW"]["restart"] = False
-        parameters["INPUTEPW"]["degaussw"] = degaussw
+        inputepw = parameters.setdefault("INPUTEPW", {})
+        inputepw["eliashberg"] = True
+        inputepw["elph"] = True
+        inputepw["ep_coupling"] = True
+        inputepw["epbread"] = False
+        inputepw["epbwrite"] = False
+        inputepw["ephwrite"] = True
+        inputepw["restart"] = False
+        inputepw["degaussw"] = degaussw
         inputs.parameters = orm.Dict(parameters)
 
         inputs.setdefault("metadata", {})["call_link_label"] = (
@@ -214,9 +220,15 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             inputs = AttributeDict(base_inputs)
             # Configure to read matrix elements (ephwrite = False, restart = True)
             parameters = base_inputs.parameters.get_dict()
-            parameters.setdefault("INPUTEPW", {})["ephwrite"] = False
-            parameters["INPUTEPW"]["restart"] = True
-            parameters["INPUTEPW"]["degaussw"] = degaussw
+            inputepw = parameters.setdefault("INPUTEPW", {})
+            inputepw["eliashberg"] = True
+            inputepw["elph"] = True
+            inputepw["ep_coupling"] = True
+            inputepw["epbread"] = False
+            inputepw["epbwrite"] = False
+            inputepw["ephwrite"] = False
+            inputepw["restart"] = True
+            inputepw["degaussw"] = degaussw
             inputs.parameters = orm.Dict(parameters)
 
             inputs.setdefault("metadata", {})["call_link_label"] = (
