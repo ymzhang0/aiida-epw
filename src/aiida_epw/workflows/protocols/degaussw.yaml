@@ -24,10 +24,6 @@ default_inputs:
       eps_acoustic: 1
       etf_mem: 1
       fsthick: 0.8
-      liso: True
-      laniso: False
-      limag: True
-      lpade: True
       mp_mesh_k: True
       muc: 0.13
       nqstep: 500

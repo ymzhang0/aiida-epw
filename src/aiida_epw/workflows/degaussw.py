@@ -176,6 +176,9 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
         if "restart_type" in EpwBaseWorkChain.spec().inputs:
             inputs.calculation_type = "eliashberg"
             inputs.restart_type = "ephwrite"
+            inputs.momentum_dependence = False
+            inputs.real_axis = False
+            inputs.analytical_continuation = "pade"
             parameters = inputs.parameters.get_dict()
             inputepw = parameters.setdefault("INPUTEPW", {})
             inputepw["degaussw"] = degaussw
@@ -194,6 +197,10 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             inputepw["epwread"] = True
             inputepw["epwwrite"] = False
             inputepw["wannierize"] = False
+            inputepw["liso"] = True
+            inputepw["laniso"] = False
+            inputepw["limag"] = True
+            inputepw["lpade"] = True
             inputepw["degaussw"] = degaussw
             inputs.parameters = orm.Dict(parameters)
 
@@ -233,6 +240,9 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
             if "restart_type" in EpwBaseWorkChain.spec().inputs:
                 inputs.calculation_type = "eliashberg"
                 inputs.restart_type = "ephread"
+                inputs.momentum_dependence = False
+                inputs.real_axis = False
+                inputs.analytical_continuation = "pade"
                 parameters = base_inputs.parameters.get_dict()
                 inputepw = parameters.setdefault("INPUTEPW", {})
                 inputepw["degaussw"] = degaussw
@@ -251,6 +261,10 @@ class EpwDegausswConvWorkChain(ProtocolMixin, WorkChain):
                 inputepw["epwread"] = True
                 inputepw["epwwrite"] = False
                 inputepw["wannierize"] = False
+                inputepw["liso"] = True
+                inputepw["laniso"] = False
+                inputepw["limag"] = True
+                inputepw["lpade"] = True
                 inputepw["degaussw"] = degaussw
                 inputs.parameters = orm.Dict(parameters)
 
