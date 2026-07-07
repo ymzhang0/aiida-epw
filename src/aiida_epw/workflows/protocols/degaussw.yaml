@@ -22,8 +22,6 @@ default_inputs:
       conv_thr_iaxis: 0.01
       degaussq: 0.5
       eps_acoustic: 1
-      epwread: True
-      epwwrite: False
       etf_mem: 1
       fsthick: 0.8
       liso: True
@@ -38,7 +36,6 @@ default_inputs:
       selecqread: False
       temps: 10.0
       vme: 'dipole'
-      wannierize: False
       wscut: 0.5
 
 default_protocol: moderate
