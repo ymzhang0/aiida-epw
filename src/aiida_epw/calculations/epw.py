@@ -892,6 +892,11 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["elph"] = True
                 inputepw_parameters["epbwrite"] = True
                 inputepw_parameters["epbread"] = False
+            elif calc_type == CalculationTypes.BANDS:
+                inputepw_parameters["band_plot"] = True
+                inputepw_parameters["eliashberg"] = False
+                inputepw_parameters["scattering"] = False
+                inputepw_parameters["plrn"] = False
 
         if "restart_type" in self.inputs:
             restart_val = self.inputs.restart_type.get_member()
