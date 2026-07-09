@@ -277,6 +277,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_epw",
                 "parent_folder_chk",
                 "calculation_type",
+                "restart_type",
             ),
             namespace_options={"help": "Inputs for the `EpwBaseWorkChain`."},
         )
@@ -294,6 +295,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "kfpoints_factor",
                 "parent_folder_epw",
                 "calculation_type",
+                "restart_type",
             ),
             namespace_options={
                 "help": "Inputs namespace for `EpwBaseWorkChain` that runs the `epw.x` calculation in interpolation mode, i.e. the interpolated electron and phonon band structures."
@@ -1174,9 +1176,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         inputs.metadata.call_link_label = "epw_base"
 
-        from aiida_epw.common.types import CalculationTypes
+        from aiida_epw.common.types import CalculationTypes, RestartType
 
         inputs.calculation_type = CalculationTypes.WANNIERIZE
+        inputs.restart_type = RestartType.NONE
 
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(
@@ -1255,9 +1258,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         inputs.parent_folder_epw = self.ctx.workchain_epw.outputs.remote_folder
         inputs.metadata.call_link_label = "epw_bands"
 
-        from aiida_epw.common.types import CalculationTypes
+        from aiida_epw.common.types import CalculationTypes, RestartType
 
         inputs.calculation_type = CalculationTypes.BANDS
+        inputs.restart_type = RestartType.EPWREAD
 
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(
