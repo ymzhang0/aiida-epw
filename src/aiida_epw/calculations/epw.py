@@ -114,6 +114,7 @@ class EpwCalculation(NamelistsCalculation):
         ("INPUTEPW", "lacon"),
         ("INPUTEPW", "scattering"),
         ("INPUTEPW", "plrn"),
+        ("INPUTEPW", "band_plot"),
     ]
 
     _use_kpoints = True
