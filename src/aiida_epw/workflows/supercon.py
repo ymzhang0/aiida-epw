@@ -6,6 +6,7 @@ from aiida.engine import WorkChain, while_, if_, append_
 
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
+from aiida_epw.calculations.epw import serialize_calculation_type
 from aiida_epw.workflows.base import EpwBaseWorkChain
 from aiida_epw.tools.workchain import set_auto_temps
 
@@ -402,10 +403,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         inputs.qfpoints_distance = self.ctx.interpolation_list.pop()
 
         base_inputs = EpwBaseWorkChain.spec().inputs
-        if "calculation_type" in base_inputs:
-            from aiida_epw.calculations.epw import serialize_calculation_type
-
-            inputs.calculation_type = serialize_calculation_type("eliashberg")
+        inputs.calculation_type = serialize_calculation_type("eliashberg")
         if "restart_type" in base_inputs:
             from aiida_epw.calculations.epw import serialize_restart_type
 
@@ -478,10 +476,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
 
         base_inputs = EpwBaseWorkChain.spec().inputs
-        if "calculation_type" in base_inputs:
-            from aiida_epw.calculations.epw import serialize_calculation_type
-
-            inputs.calculation_type = serialize_calculation_type("eliashberg")
+        inputs.calculation_type = serialize_calculation_type("eliashberg")
         if "restart_type" in base_inputs:
             from aiida_epw.calculations.epw import serialize_restart_type
 
@@ -525,10 +520,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
 
         base_inputs = EpwBaseWorkChain.spec().inputs
-        if "calculation_type" in base_inputs:
-            from aiida_epw.calculations.epw import serialize_calculation_type
-
-            inputs.calculation_type = serialize_calculation_type("eliashberg")
+        inputs.calculation_type = serialize_calculation_type("eliashberg")
         if "restart_type" in base_inputs:
             from aiida_epw.calculations.epw import serialize_restart_type
 
