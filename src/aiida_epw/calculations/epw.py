@@ -234,6 +234,12 @@ class EpwCalculation(NamelistsCalculation):
             help="Wannierization mode: EPW or external.",
         )
         spec.input(
+            "filirobj",
+            valid_type=(orm.SinglefileData, orm.Str),
+            required=False,
+            help="Sparse-IR basis file (SinglefileData) or the filename of a pre-shipped basis (Str).",
+        )
+        spec.input(
             "kpoints",
             valid_type=orm.KpointsData,
             help=(
@@ -1402,6 +1408,29 @@ class EpwCalculation(NamelistsCalculation):
 
         settings = self.get_settings()
         parameters = self.prepare_input_parameters(folder, self.get_parameters())
+
+        if "filirobj" in self.inputs:
+            filirobj_input = self.inputs.filirobj
+            if isinstance(filirobj_input, orm.SinglefileData):
+                filename = filirobj_input.filename
+                with filirobj_input.open(mode="rb") as f:
+                    content = f.read()
+                with folder.open(filename, "wb") as handle:
+                    handle.write(content)
+            else:
+                from importlib_resources import files
+                from aiida_epw.common.resources import irobjs
+
+                filename = filirobj_input.value
+                resource_path = files(irobjs) / filename
+                if not resource_path.exists():
+                    raise ValueError(
+                        f"Built-in basis file '{filename}' not found in resources."
+                    )
+                with folder.open(filename, "wb") as handle:
+                    handle.write(resource_path.read_bytes())
+
+            parameters.setdefault("INPUTEPW", {})["filirobj"] = filename
 
         self.stage_parent_folders(
             folder, parameters, settings, remote_copy_list, remote_symlink_list
