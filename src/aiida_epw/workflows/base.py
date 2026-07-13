@@ -349,6 +349,8 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             builder.real_axis = to_aiida_type(real_axis)
         if analytical_continuation is not None:
             builder.analytical_continuation = to_aiida_type(analytical_continuation)
+        if "filirobj" in inputs:
+            builder.filirobj = to_aiida_type(inputs["filirobj"])
 
         # pylint: enable=no-member
 

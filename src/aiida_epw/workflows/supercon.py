@@ -266,7 +266,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 params = epw_inputs.setdefault("parameters", {})
                 inputepw = params.setdefault("INPUTEPW", {})
                 inputepw["tc_linear"] = False
-
             real_axis = epw_inputs.pop("real_axis", False)
             analytical_continuation = epw_inputs.pop("analytical_continuation", None)
             calculation_type = epw_inputs.pop("calculation_type", "eliashberg")
@@ -274,6 +273,15 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "ephwrite" if epw_namespace == "epw_interp" else "ephread"
             )
             restart_type = epw_inputs.pop("restart_type", default_restart_type)
+
+            # Default to IR sampling (gridsamp = 2 and filirobj = "ir_nlambda6_ndigit8.dat") for anisotropic
+            if epw_namespace == "epw_final_aniso":
+                if "filirobj" not in epw_inputs:
+                    epw_inputs["filirobj"] = "ir_nlambda6_ndigit8.dat"
+                params = epw_inputs.setdefault("parameters", {})
+                inputepw = params.setdefault("INPUTEPW", {})
+                if "gridsamp" not in inputepw:
+                    inputepw["gridsamp"] = 2
 
             # Check which input ports are supported by EpwBaseWorkChain dynamically for cross-branch compatibility
             base_inputs = EpwBaseWorkChain.spec().inputs
