@@ -255,8 +255,18 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             # Hardcode momentum_dependence: True for final anisotropic run, False otherwise
             momentum_dependence = True if epw_namespace == "epw_final_aniso" else False
 
-            # Pop other flags directly from overrides / protocol dictionary
-            full_bandwidth = epw_inputs.pop("full_bandwidth", False)
+            # Default full_bandwidth is True for final calculations (fbw instead of fsr)
+            default_fbw = (
+                True if epw_namespace in ("epw_final_iso", "epw_final_aniso") else False
+            )
+            full_bandwidth = epw_inputs.pop("full_bandwidth", default_fbw)
+
+            # Ensure tc_linear is False in parameters override if full_bandwidth is True for isotropic
+            if epw_namespace == "epw_final_iso" and full_bandwidth:
+                params = epw_inputs.setdefault("parameters", {})
+                inputepw = params.setdefault("INPUTEPW", {})
+                inputepw["tc_linear"] = False
+
             real_axis = epw_inputs.pop("real_axis", False)
             analytical_continuation = epw_inputs.pop("analytical_continuation", None)
             calculation_type = epw_inputs.pop("calculation_type", "eliashberg")

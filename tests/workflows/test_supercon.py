@@ -246,15 +246,11 @@ def test_supercon_get_builder_from_protocol_default(
 
         assert builder.epw_interp.restart_type == RestartType.EPHWRITE
 
-    # epw_interp check
-    if "restart_type" in builder.epw_interp:
-        from aiida_epw.common import RestartType
-
-        assert builder.epw_interp.restart_type == RestartType.EPHWRITE
-
     # epw_final_iso check
     if "momentum_dependence" in builder.epw_final_iso:
         assert not builder.epw_final_iso.momentum_dependence.value
+        if "full_bandwidth" in builder.epw_final_iso:
+            assert builder.epw_final_iso.full_bandwidth.value
         assert not builder.epw_final_iso.real_axis.value
     if "calculation_type" in builder.epw_final_iso:
         from aiida_epw.common.types import CalculationTypes
@@ -275,7 +271,8 @@ def test_supercon_get_builder_from_protocol_default(
     # epw_final_aniso check
     if "momentum_dependence" in builder.epw_final_aniso:
         assert builder.epw_final_aniso.momentum_dependence.value
-        assert not builder.epw_final_aniso.full_bandwidth.value
+        if "full_bandwidth" in builder.epw_final_aniso:
+            assert builder.epw_final_aniso.full_bandwidth.value
         assert not builder.epw_final_aniso.real_axis.value
     if "calculation_type" in builder.epw_final_aniso:
         from aiida_epw.common.types import CalculationTypes
