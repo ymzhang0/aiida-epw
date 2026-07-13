@@ -261,11 +261,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             )
             full_bandwidth = epw_inputs.pop("full_bandwidth", default_fbw)
 
-            # Ensure tc_linear is False in parameters override if full_bandwidth is True for isotropic
-            if epw_namespace == "epw_final_iso" and full_bandwidth:
-                params = epw_inputs.setdefault("parameters", {})
-                inputepw = params.setdefault("INPUTEPW", {})
-                inputepw["tc_linear"] = False
             real_axis = epw_inputs.pop("real_axis", False)
             analytical_continuation = epw_inputs.pop("analytical_continuation", None)
             calculation_type = epw_inputs.pop("calculation_type", "eliashberg")
