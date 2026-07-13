@@ -671,3 +671,13 @@ def test_epw_filirobj_parameter(
         ValueError, match="Built-in basis file 'nonexistent_file.dat' not found"
     ):
         generate_calc_job(fixture_sandbox, "epw.epw", inputs_invalid)
+
+    # 4. Test default sparse-IR sampling when momentum_dependence=True and no filirobj is provided
+    inputs_md = generate_inputs_epw(
+        momentum_dependence=orm.Bool(True),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_md)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "filirobj = 'ir_nlambda6_ndigit8.dat'" in input_contents
+    assert "gridsamp = 2" in input_contents
+    assert Path(fixture_sandbox.abspath, "ir_nlambda6_ndigit8.dat").exists()

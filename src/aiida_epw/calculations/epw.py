@@ -1211,8 +1211,16 @@ class EpwCalculation(NamelistsCalculation):
         settings = self.get_settings()
         parameters = self.prepare_input_parameters(folder, self.get_parameters())
 
+        filirobj_input = None
         if "filirobj" in self.inputs:
             filirobj_input = self.inputs.filirobj
+        elif (
+            "momentum_dependence" in self.inputs
+            and self.inputs.momentum_dependence.value
+        ):
+            filirobj_input = orm.Str("ir_nlambda6_ndigit8.dat")
+
+        if filirobj_input is not None:
             if isinstance(filirobj_input, orm.SinglefileData):
                 filename = filirobj_input.filename
                 with filirobj_input.open(mode="rb") as f:
@@ -1223,7 +1231,11 @@ class EpwCalculation(NamelistsCalculation):
                 from importlib_resources import files
                 from aiida_epw.common.resources import irobjs
 
-                filename = filirobj_input.value
+                filename = (
+                    filirobj_input.value
+                    if isinstance(filirobj_input, orm.Str)
+                    else filirobj_input
+                )
                 resource_path = files(irobjs) / filename
                 if not resource_path.exists():
                     raise ValueError(
@@ -1232,7 +1244,10 @@ class EpwCalculation(NamelistsCalculation):
                 with folder.open(filename, "wb") as handle:
                     handle.write(resource_path.read_bytes())
 
-            parameters.setdefault("INPUTEPW", {})["filirobj"] = filename
+            inputepw = parameters.setdefault("INPUTEPW", {})
+            inputepw["filirobj"] = filename
+            if "gridsamp" not in inputepw:
+                inputepw["gridsamp"] = 2
 
         self.stage_parent_folders(
             folder, parameters, settings, remote_copy_list, remote_symlink_list

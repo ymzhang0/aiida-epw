@@ -329,14 +329,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 momentum_dependence = True
                 full_bandwidth = True
                 real_axis = False
-                # Default to IR sampling (gridsamp = 2 and filirobj = "ir_nlambda6_ndigit8.dat")
-                epw_inputs = epw_inputs or {}
-                if "filirobj" not in epw_inputs:
-                    epw_inputs["filirobj"] = "ir_nlambda6_ndigit8.dat"
-                params = epw_inputs.setdefault("parameters", {})
-                inputepw = params.setdefault("INPUTEPW", {})
-                if "gridsamp" not in inputepw:
-                    inputepw["gridsamp"] = 2
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
                 code=epw_code,

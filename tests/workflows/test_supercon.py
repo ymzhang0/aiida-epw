@@ -247,8 +247,6 @@ def test_supercon_get_builder_from_protocol_default(
     assert builder.epw_final_aniso.momentum_dependence.value
     assert builder.epw_final_aniso.full_bandwidth.value
     assert not builder.epw_final_aniso.real_axis.value
-    assert builder.epw_final_aniso.filirobj.value == "ir_nlambda6_ndigit8.dat"
-    assert builder.epw_final_aniso.parameters.get_dict()["INPUTEPW"]["gridsamp"] == 2
 
 
 def test_epw_base_eliashberg_params(fixture_code, generate_structure):
