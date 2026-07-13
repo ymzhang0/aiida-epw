@@ -761,7 +761,10 @@ class EpwCalculation(NamelistsCalculation):
                     inputepw_parameters["liso"] = not momentum_dependence
 
                 if "full_bandwidth" in self.inputs:
-                    inputepw_parameters["fbw"] = self.inputs.full_bandwidth.value
+                    fbw = self.inputs.full_bandwidth.value
+                    inputepw_parameters["fbw"] = fbw
+                    if fbw:
+                        inputepw_parameters["tc_linear"] = False
 
                 if "real_axis" in self.inputs:
                     real_axis = self.inputs.real_axis.value

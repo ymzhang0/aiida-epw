@@ -243,7 +243,9 @@ def test_supercon_get_builder_from_protocol_default(
     assert not builder.epw_final_iso.momentum_dependence.value
     assert builder.epw_final_iso.full_bandwidth.value
     assert not builder.epw_final_iso.real_axis.value
-    assert builder.epw_final_iso.parameters.get_dict()["INPUTEPW"]["tc_linear"] is False
+    assert not builder.epw_final_iso.parameters.get_dict()["INPUTEPW"].get(
+        "tc_linear", False
+    )
     assert builder.epw_final_aniso.momentum_dependence.value
     assert builder.epw_final_aniso.full_bandwidth.value
     assert not builder.epw_final_aniso.real_axis.value
