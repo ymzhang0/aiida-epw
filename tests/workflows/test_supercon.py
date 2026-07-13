@@ -274,12 +274,6 @@ def test_supercon_get_builder_from_protocol_default(
         if "full_bandwidth" in builder.epw_final_aniso:
             assert builder.epw_final_aniso.full_bandwidth.value
         assert not builder.epw_final_aniso.real_axis.value
-        if "filirobj" in builder.epw_final_aniso:
-            assert builder.epw_final_aniso.filirobj.value == "ir_nlambda6_ndigit8.dat"
-            assert (
-                builder.epw_final_aniso.parameters.get_dict()["INPUTEPW"]["gridsamp"]
-                == 2
-            )
     if "calculation_type" in builder.epw_final_aniso:
         from aiida_epw.common.types import CalculationTypes
 

@@ -274,15 +274,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             )
             restart_type = epw_inputs.pop("restart_type", default_restart_type)
 
-            # Default to IR sampling (gridsamp = 2 and filirobj = "ir_nlambda6_ndigit8.dat") for anisotropic
-            if epw_namespace == "epw_final_aniso":
-                if "filirobj" not in epw_inputs:
-                    epw_inputs["filirobj"] = "ir_nlambda6_ndigit8.dat"
-                params = epw_inputs.setdefault("parameters", {})
-                inputepw = params.setdefault("INPUTEPW", {})
-                if "gridsamp" not in inputepw:
-                    inputepw["gridsamp"] = 2
-
             # Check which input ports are supported by EpwBaseWorkChain dynamically for cross-branch compatibility
             base_inputs = EpwBaseWorkChain.spec().inputs
             kwargs = {}
