@@ -35,6 +35,9 @@ except ImportError:
     PhononBandsWorkChain = None
     DynamicalMatrixWorkChain = None
 
+from aiida_epw.common.types import WannierType
+from aiida_epw.calculations.epw import serialize_wannier_type
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,6 +192,14 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ),
         )
         spec.input("bandplot", valid_type=orm.Int, default=lambda: orm.Int(0))
+        spec.input(
+            "wannier_type",
+            valid_type=orm.EnumData,
+            required=False,
+            default=lambda: orm.EnumData(WannierType.EXTERNAL),
+            serializer=serialize_wannier_type,
+            help="Wannierization mode: EPW or external.",
+        )
         if PhononBandsWorkChain is not None:
             spec.expose_inputs(
                 PhononBandsWorkChain,
@@ -278,6 +289,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_chk",
                 "calculation_type",
                 "restart_type",
+                "wannier_type",
             ),
             namespace_options={"help": "Inputs for the `EpwBaseWorkChain`."},
         )
@@ -296,6 +308,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_epw",
                 "calculation_type",
                 "restart_type",
+                "wannier_type",
             ),
             namespace_options={
                 "help": "Inputs namespace for `EpwBaseWorkChain` that runs the `epw.x` calculation in interpolation mode, i.e. the interpolated electron and phonon band structures."
@@ -1180,6 +1193,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         inputs.calculation_type = CalculationTypes.WANNIERIZE
         inputs.restart_type = RestartType.NONE
+        inputs.wannier_type = self.inputs.wannier_type
 
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(

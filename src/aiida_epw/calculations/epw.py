@@ -30,6 +30,7 @@ from aiida_epw.data import (
 )
 
 from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
+from aiida_epw.common.types import WannierType
 
 
 def _lowercase_dict(dictionary, dict_name):
@@ -74,6 +75,26 @@ def serialize_restart_type(value):
                 f"{[member.value for member in RestartType]}"
             ) from exc
     raise TypeError(f"Cannot serialize {value} to EnumData of RestartType")
+
+
+def serialize_wannier_type(value):
+    """Serialize input parameter into an AiiDA EnumData for WannierType."""
+    from aiida.orm import EnumData
+    from aiida_epw.common.types import WannierType
+
+    if isinstance(value, EnumData):
+        return value
+    if isinstance(value, WannierType):
+        return EnumData(value)
+    if isinstance(value, str):
+        try:
+            return EnumData(WannierType(value.lower()))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid wannier type '{value}'. Supported values: "
+                f"{[member.value for member in WannierType]}"
+            ) from exc
+    raise TypeError(f"Cannot serialize {value} to EnumData of WannierType")
 
 
 class EpwCalculation(NamelistsCalculation):
@@ -203,6 +224,14 @@ class EpwCalculation(NamelistsCalculation):
             required=False,
             serializer=serialize_restart_type,
             help="EPW restart type: Wannierize, ephwrite, or ephread.",
+        )
+        spec.input(
+            "wannier_type",
+            valid_type=orm.EnumData,
+            required=False,
+            default=lambda: orm.EnumData(WannierType.EXTERNAL),
+            serializer=serialize_wannier_type,
+            help="Wannierization mode: EPW or external.",
         )
         spec.input(
             "kpoints",
@@ -486,7 +515,6 @@ class EpwCalculation(NamelistsCalculation):
     @classmethod
     def validate_restart_inputs(cls, parameters, inputs):
         """Validate restart-related input combinations against the EPW parameters."""
-        inputepw = parameters["INPUTEPW"]
         from aiida_epw.common import RestartType
 
         restart_type = None
@@ -507,28 +535,23 @@ class EpwCalculation(NamelistsCalculation):
                 except ValueError:
                     pass
 
-        is_wannierize = False
+        calc_type = None
         calculation_type = inputs.get("calculation_type", None)
         if calculation_type is not None:
             calc_type = calculation_type.get_member()
-            from aiida_epw.common.types import CalculationTypes
 
-            if calc_type is CalculationTypes.WANNIERIZE:
-                is_wannierize = True
-        if not is_wannierize:
-            is_wannierize = inputepw.get("wannierize", False)
+        from aiida_epw.common.types import CalculationTypes
 
-        if is_wannierize:
-            for input_name in ("parent_folder_epw", "parent_folder_chk"):
-                if input_name in inputs:
-                    raise exceptions.InputValidationError(
-                        f"`{input_name}` cannot be specified when "
-                        "wannierize is enabled."
-                    )
+        is_initial_stage = calc_type is CalculationTypes.WANNIERIZE
 
+        if is_initial_stage:
+            if "parent_folder_epw" in inputs:
+                raise exceptions.InputValidationError(
+                    "`parent_folder_epw` cannot be specified during the WANNIERIZE calculation stage."
+                )
             if "parent_folder_nscf" not in inputs:
                 raise exceptions.InputValidationError(
-                    "`parent_folder_nscf` must be specified when wannierize is enabled."
+                    "`parent_folder_nscf` must be specified during the WANNIERIZE calculation stage."
                 )
         else:
             if restart_type in (
@@ -580,7 +603,13 @@ class EpwCalculation(NamelistsCalculation):
             from aiida_epw.common.types import CalculationTypes
 
             if calc_type is CalculationTypes.WANNIERIZE:
-                is_wannierize = True
+                from aiida_epw.common.types import WannierType
+
+                wannier_val = WannierType.EXTERNAL
+                if "wannier_type" in inputs:
+                    wannier_val = inputs["wannier_type"].get_member()
+                if wannier_val is WannierType.EPW:
+                    is_wannierize = True
         if not is_wannierize:
             is_wannierize = inputepw.get("wannierize", False)
 
@@ -893,6 +922,11 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["elph"] = True
                 inputepw_parameters["epbwrite"] = True
                 inputepw_parameters["epbread"] = False
+
+                from aiida_epw.common.types import WannierType
+
+                wannier_val = self.inputs.wannier_type.get_member()
+                inputepw_parameters["wannierize"] = wannier_val is WannierType.EPW
             elif calc_type == CalculationTypes.BANDS:
                 inputepw_parameters["band_plot"] = True
                 inputepw_parameters["eliashberg"] = False

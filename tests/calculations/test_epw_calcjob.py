@@ -10,7 +10,7 @@ from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 
 from aiida_epw.calculations.epw import EpwCalculation
-from aiida_epw.common import RestartType
+from aiida_epw.common import RestartType, WannierType
 
 
 def generate_kpoints_mesh(mesh):
@@ -746,3 +746,47 @@ def test_epw_ephread_transport_staging(
     # quadrupole and decay should be excluded
     assert "quadrupole.fmt" not in copied_targets
     assert not any("decay" in target for target in copied_targets)
+
+
+def test_epw_wannier_type_parameter(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that `wannier_type` correctly updates `wannierize` parameter."""
+    from aiida_epw.common.types import CalculationTypes
+
+    # 1. WannierType.EPW (internal)
+    inputs_epw = generate_inputs_epw(
+        calculation_type=CalculationTypes.WANNIERIZE,
+        wannier_type=WannierType.EPW,
+        parameters={"INPUTEPW": {"proj": ["Si:s"]}},
+        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
+        parent_folder_chk=generate_remote_data(fixture_localhost, "/remote/chk"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_epw)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .true." in input_contents
+
+    # 2. WannierType.EXTERNAL (external)
+    inputs_ext = generate_inputs_epw(
+        calculation_type=CalculationTypes.WANNIERIZE,
+        wannier_type=WannierType.EXTERNAL,
+        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
+        parent_folder_chk=generate_remote_data(fixture_localhost, "/remote/chk"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_ext)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .false." in input_contents
+
+    # 3. Default to EXTERNAL
+    inputs_default = generate_inputs_epw(
+        calculation_type=CalculationTypes.WANNIERIZE,
+        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
+        parent_folder_chk=generate_remote_data(fixture_localhost, "/remote/chk"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_default)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .false." in input_contents

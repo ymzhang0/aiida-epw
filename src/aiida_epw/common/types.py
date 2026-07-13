@@ -22,3 +22,10 @@ class RestartType(enum.Enum):
     EPHREAD = "ephread"
     EPHWRITE_RESTART = "ephwrite_restart"
     EPWREAD = "epwread"
+
+
+class WannierType(enum.Enum):
+    """Enumeration of Wannierization modes (internal or external)."""
+
+    EPW = "epw"
+    EXTERNAL = "external"
