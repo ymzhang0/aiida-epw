@@ -8,7 +8,6 @@ import numpy as numpy
 from scipy.optimize import curve_fit
 
 from aiida_epw.tools.calculators import bcs_gap_function
-from aiida_epw.tools.gap import find_multigap_averages
 
 
 def plot_max_eigenvalue(temps, evs, ax=None, **kwargs):
@@ -277,23 +276,6 @@ def plot_anisotropic_gap(
                     edgecolor="tab:blue",
                     linewidth=0.5,
                     zorder=1,
-                )
-
-            rep_gaps = find_multigap_averages(array, T)
-
-            for idx, vg in enumerate(rep_gaps):
-                branches.setdefault(idx, ([], []))
-                branches[idx][0].append(T)
-                branches[idx][1].append(vg)
-
-            if rep_gaps:
-                ax.scatter(
-                    [T] * len(rep_gaps),
-                    rep_gaps,
-                    color="red",
-                    edgecolors="black",
-                    s=25,
-                    zorder=5,
                 )
 
     ax.set_xlabel(xlabel)
