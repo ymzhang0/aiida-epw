@@ -50,6 +50,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
     it will then run the final isotropic and anisotropic `EpwBaseWorkChain`s to compute the
     critical temperature solving the isotropic and anisotropic Migdal-Eliashberg equations."""
 
+    DEFAULT_FILIROBJ = "ir_nlambda6_ndigit8.dat"
+
     @classmethod
     def define(cls, spec):
         """Define the work chain specification."""
@@ -340,6 +342,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 full_bandwidth=full_bandwidth,
                 real_axis=real_axis,
             )
+            if epw_namespace == "epw_final_aniso" and "filirobj" not in epw_builder:
+                epw_builder.filirobj = orm.Str(cls.DEFAULT_FILIROBJ)
 
             if epw_namespace == "epw_interp" and scon_epw_code is not None:
                 epw_builder.code = scon_epw_code
