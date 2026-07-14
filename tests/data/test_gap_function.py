@@ -41,6 +41,13 @@ def test_iso_gap_data_roundtrip_ragged_sources():
     ]
     assert node.get_data(3.0, source="imag")["deltaw"].tolist() == [0.01, 0.02]
     assert node.get_data(3.0, source="pade")["deltaw_imag"].tolist() == [0.001]
+    as_dict = node.to_dict()
+    assert as_dict["imag"][3.0]["columns"] == ["omega", "znorm", "deltaw"]
+    assert as_dict["imag"][3.0]["table"].tolist() == [
+        [0.1, 1.0, 0.01],
+        [0.2, 1.1, 0.02],
+    ]
+    assert as_dict["imag"][3.0]["data"]["deltaw"].tolist() == [0.01, 0.02]
 
     with pytest.raises(KeyError, match="Multiple gap data entries"):
         node.get_data(3.0)

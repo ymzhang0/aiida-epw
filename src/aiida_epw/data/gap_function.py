@@ -103,6 +103,21 @@ class _RaggedGapData(orm.ArrayData):
                 self.get_data(entry["temperature"], source=entry["source"]),
             )
 
+    def to_dict(self, source=None):
+        """Return the stored gap data as plain dictionaries and NumPy arrays."""
+        data = {}
+        for entry in self._get_entries(source=source):
+            table = self.get_array(entry["array_name"])
+            columns = list(entry["columns"])
+            data.setdefault(entry["source"], {})[entry["temperature"]] = {
+                "columns": columns,
+                "table": table,
+                "data": {
+                    column: table[:, index] for index, column in enumerate(columns)
+                },
+            }
+        return data
+
     @property
     def sources(self):
         """Return the source labels represented by this node, e.g. `imag` or `pade`."""
