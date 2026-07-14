@@ -90,7 +90,7 @@ def test_aniso_gap0_data_roundtrip_ragged_temperatures():
     assert node.get_temperatures(source="imag").tolist() == [3.0, 4.0]
     assert node.get_data(3.0, source="imag")["delta_nk"].shape == (2,)
     assert node.get_data(4.0, source="imag")["delta_nk"].shape == (1,)
-    assert node.get_multigap_averages(source="imag") == {
+    assert node.get_averaged_gap(source="imag") == {
         "T": [3.0, 4.0],
         "gap": [[1.05], [1.4]],
         "source": "imag",
