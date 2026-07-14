@@ -119,6 +119,22 @@ def _iter_aniso_gap_tables(gap_functions, source="imag"):
         yield float(temperature), table
 
 
+def _selected_aniso_frequencies(
+    temperature_data, frequencies=None, min_frequency_fraction=0.1
+):
+    """Return selected frequency keys from parsed ``imag_aniso`` data."""
+    available = sorted(key for key in temperature_data if key != "units")
+    if frequencies is not None:
+        return [float(frequency) for frequency in frequencies if frequency in available]
+
+    if not available:
+        return []
+
+    max_frequency = max(abs(frequency) for frequency in available)
+    min_frequency = min_frequency_fraction * max_frequency
+    return [frequency for frequency in available if abs(frequency) >= min_frequency]
+
+
 #### Isotropic gap (Imaginary, real and ) vs. temeprature
 
 
@@ -332,6 +348,70 @@ def plot_anisotropic_gap(
                 print(f"Branch {b_idx + 1} fitting failed: {e}")
 
         # ax.legend(loc="upper right")
+
+    if destpath:
+        plt.savefig(destpath, dpi=300)
+
+
+def plot_anisotropic_frequency_gap(
+    aniso_gap_functions,
+    temperature=None,
+    frequencies=None,
+    min_frequency_fraction=0.1,
+    ax=None,
+    destpath=None,
+    **kwargs,
+):
+    """Plot frequency-resolved anisotropic ``delta`` values from ``imag_aniso`` files."""
+    title = kwargs.pop("title", "Anisotropic Gap by Matsubara Frequency")
+    xlabel = kwargs.pop("xlabel", r"$E_{nk} - E_F$ (eV)")
+    ylabel = kwargs.pop("ylabel", r"$\Delta(i\omega_n, nk)$ (meV)")
+    component = kwargs.pop("component", "delta")
+
+    if not ax:
+        plt.rcParams.update({"font.size": kwargs.pop("fontsize", 12)})
+        plt.rcParams["font.family"] = "serif"
+        plt.rcParams["font.serif"] = ["STIXGeneral"]
+        plt.rcParams["mathtext.fontset"] = "stix"
+        plt.rcParams["font.family"] = "STIXGeneral"
+        plt.rcParams["mathtext.default"] = "regular"
+        fig, axs = plt.subplots(
+            1, 1, figsize=(6, 5), squeeze=False, constrained_layout=True
+        )
+        ax = axs[0, 0]
+
+    temperatures = sorted(aniso_gap_functions)
+    if temperature is None:
+        temperature = temperatures[0]
+    temperature_data = aniso_gap_functions[temperature]
+
+    selected_frequencies = _selected_aniso_frequencies(
+        temperature_data,
+        frequencies=frequencies,
+        min_frequency_fraction=min_frequency_fraction,
+    )
+
+    for frequency in selected_frequencies:
+        data = temperature_data[frequency]
+        energy = numpy.array(data["energy"], dtype=float)
+        values = numpy.array(data[component], dtype=float) * 1000.0
+        ax.plot(
+            energy,
+            values,
+            marker="o",
+            linestyle="-",
+            linewidth=1.0,
+            markersize=3,
+            label=rf"$\omega$={frequency:.4g} eV",
+        )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.axhline(0.0, color="gray", linewidth=1.0, linestyle="--")
+
+    if kwargs.pop("legend", True) and selected_frequencies:
+        ax.legend(fontsize=kwargs.pop("legend_fontsize", 8))
 
     if destpath:
         plt.savefig(destpath, dpi=300)
