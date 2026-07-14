@@ -327,70 +327,143 @@ def _parse_epw_lambda_distribution(file_content, file_label, *, x_key, y_key):
     }
 
 
-def parse_epw_imag_iso(file_contents, prefix="aiida"):
-    """Parse the isotropic gap functions from EPW isotropic Eliashberg equation calculation.
+def parse_epw_iso_gap_files(file_contents, prefix="aiida"):
+    """Parse isotropic EPW gap-function files.
 
     :param file_contents: mapping of file names to file contents.
-    :param prefix: the prefix of the `imag_iso` files.
-    :returns: dictionary containing the isotropic gap functions keyed by temperature.
+    :param prefix: the prefix of the gap files.
+    :returns: dictionary keyed by `(source, temperature)` with named column arrays.
     """
     if not file_contents:
         raise ValueError("No gap-function file contents provided.")
     parsed_data = {}
-    pattern_iso = re.compile(rf"^{prefix}\.imag_iso_(\d{{3}}\.\d{{2}})$")
+    pattern_iso = re.compile(rf"^{prefix}\.(imag|pade)_iso_(\d{{3}}\.\d{{2}})$")
 
     for filename, file_content in file_contents.items():
         match = pattern_iso.match(filename)
         if match:
-            temperature = float(match.group(1))
+            source = match.group(1)
+            temperature = float(match.group(2))
             try:
-                gap_function = numpy.loadtxt(
-                    io.StringIO(file_content), dtype=float, comments="#", skiprows=1
-                )
+                table = _load_numeric_table(file_content, comments="#", skiprows=1)
             except Exception as exc:
                 raise ValueError(
                     f"Failed to parse gap function file {filename}: {exc}"
                 ) from exc
-            parsed_data[temperature] = gap_function
+            parsed_data[(source, temperature)] = _columns_from_iso_gap_table(
+                table, filename
+            )
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_iso_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.(imag|pade)_iso_XXX.XX' were parsed successfully."
+        )
+    return parsed_data
+
+
+def parse_epw_imag_iso(file_contents, prefix="aiida"):
+    """Parse isotropic imaginary-axis gap files."""
+    return {
+        temperature: columns
+        for (source, temperature), columns in parse_epw_iso_gap_files(
+            file_contents, prefix=prefix
+        ).items()
+        if source == "imag"
+    }
+
+
+def parse_epw_aniso_gap0_files(file_contents, prefix="aiida"):
+    """Parse anisotropic EPW gap0 distribution files.
+
+    :param file_contents: mapping of file names to file contents.
+    :param prefix: the prefix of the gap files.
+    :returns: dictionary keyed by `(source, temperature)` with named column arrays.
+    """
+    if not file_contents:
+        raise ValueError("No gap-function file contents provided.")
+    parsed_data = {}
+    pattern_aniso_gap0 = re.compile(
+        rf"^{prefix}\.(imag|pade)_aniso_gap0_(\d{{3}}\.\d{{2}})$"
+    )
+
+    for filename, file_content in file_contents.items():
+        match = pattern_aniso_gap0.match(filename)
+        if match:
+            source = match.group(1)
+            temperature = float(match.group(2))
+            try:
+                table = _load_numeric_table(file_content, comments="#")
+            except Exception as exc:
+                raise ValueError(
+                    f"Failed to parse gap function file {filename}: {exc}"
+                ) from exc
+            if table.shape[1] < 5:
+                raise ValueError(
+                    f"Malformed gap function file {filename}: Expected at least 5 columns, got {table.shape[1]}."
+                )
+            parsed_data[(source, temperature)] = {
+                "T_dist_scaled": table[:, 0],
+                "delta_nk": table[:, 1],
+                "T": table[:, 2],
+                "dist_scaled": table[:, 3],
+                "dist_not_scaled": table[:, 4],
+            }
+
+    if not parsed_data:
+        raise ValueError(
+            f"No files matching the template '{prefix}.(imag|pade)_aniso_gap0_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
 def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
-    """Parse the anisotropic gap functions from EPW anisotropic Eliashberg equation calculation.
+    """Parse anisotropic imaginary-axis gap0 distribution files."""
+    return {
+        temperature: columns
+        for (source, temperature), columns in parse_epw_aniso_gap0_files(
+            file_contents, prefix=prefix
+        ).items()
+        if source == "imag"
+    }
 
-    :param file_contents: mapping of file names to file contents.
-    :param prefix: the prefix of the `imag_aniso_gap0` files.
-    :returns: dictionary containing the anisotropic gap functions keyed by temperature.
-    """
-    if not file_contents:
-        raise ValueError("No gap-function file contents provided.")
-    parsed_data = {}
-    pattern_aniso_gap0 = re.compile(rf"^{prefix}\.imag_aniso_gap0_(\d{{3}}\.\d{{2}})$")
 
-    for filename, file_content in file_contents.items():
-        match = pattern_aniso_gap0.match(filename)
-        if match:
-            temperature = float(match.group(1))
-            try:
-                gap_function = numpy.loadtxt(
-                    io.StringIO(file_content), dtype=float, comments="#", skiprows=1
-                )
-            except Exception as exc:
-                raise ValueError(
-                    f"Failed to parse gap function file {filename}: {exc}"
-                ) from exc
-            parsed_data[temperature] = gap_function
+def _columns_from_iso_gap_table(table, filename):
+    """Return named isotropic gap columns for supported EPW table layouts."""
+    if table.shape[1] == 3:
+        return {
+            "omega": table[:, 0],
+            "znorm": table[:, 1],
+            "deltaw": table[:, 2],
+        }
+    if table.shape[1] == 4:
+        return {
+            "omega": table[:, 0],
+            "znorm": table[:, 1],
+            "deltaw": table[:, 2],
+            "shift": table[:, 3],
+        }
+    if table.shape[1] == 5:
+        return {
+            "omega": table[:, 0],
+            "znorm_real": table[:, 1],
+            "znorm_imag": table[:, 2],
+            "deltaw_real": table[:, 3],
+            "deltaw_imag": table[:, 4],
+        }
+    if table.shape[1] == 7:
+        return {
+            "omega": table[:, 0],
+            "znorm_real": table[:, 1],
+            "znorm_imag": table[:, 2],
+            "deltaw_real": table[:, 3],
+            "deltaw_imag": table[:, 4],
+            "shift_real": table[:, 5],
+            "shift_imag": table[:, 6],
+        }
 
-    if not parsed_data:
-        raise ValueError(
-            f"No files matching the template '{prefix}.imag_aniso_gap0_XXX.XX' were parsed successfully."
-        )
-    return parsed_data
+    raise ValueError(
+        f"Malformed gap function file {filename}: Expected 3, 4, 5 or 7 columns, got {table.shape[1]}."
+    )
 
 
 def parse_aniso_FS(file_content):

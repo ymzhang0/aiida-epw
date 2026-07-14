@@ -20,12 +20,13 @@ from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
 from aiida_epw.data import (
     A2fData,
+    AnisoGap0Data,
     PA2fData,
     DosData,
+    IsoGapData,
+    LambdaFSData,
     PDosData,
     PhDosData,
-    GapFunctionData,
-    LambdaFSData,
 )
 
 from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
@@ -261,15 +262,15 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "iso_gap_functions",
-            valid_type=GapFunctionData,
+            valid_type=IsoGapData,
             required=False,
             help="The interpolated isotropic gap function.",
         )
         spec.output(
             "aniso_gap_functions",
-            valid_type=GapFunctionData,
+            valid_type=AnisoGap0Data,
             required=False,
-            help="The interpolated anisotropic gap function.",
+            help="The interpolated anisotropic gap0 distribution.",
         )
 
         spec.exit_code(
@@ -651,12 +652,18 @@ class EpwCalculation(NamelistsCalculation):
         if parameters["INPUTEPW"].get("liso", False) and not parameters["INPUTEPW"].get(
             "tc_linear", False
         ):
-            retrieve_list.append("aiida.imag_iso_*")
+            if parameters["INPUTEPW"].get("limag", False):
+                retrieve_list.append("aiida.imag_iso_*")
+            if parameters["INPUTEPW"].get("lpade", False):
+                retrieve_list.append("aiida.pade_iso_*")
 
         if parameters["INPUTEPW"].get("laniso", False):
             retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
             retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
-            retrieve_list.append("aiida.imag_aniso_gap*")
+            if parameters["INPUTEPW"].get("limag", False):
+                retrieve_list.append("aiida.imag_aniso_gap*")
+            if parameters["INPUTEPW"].get("lpade", False):
+                retrieve_list.append("aiida.pade_aniso_gap*")
 
         return retrieve_list
 

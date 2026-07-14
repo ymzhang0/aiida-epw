@@ -185,6 +185,48 @@ def test_epw_accepts_parser_options_setting(
     assert calc_info.retrieve_list == ["aiida.out"]
 
 
+def test_epw_retrieves_iso_gap_files_for_imag_and_pade(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test isotropic Eliashberg runs retrieve both imaginary-axis and Pade gap files."""
+    inputs = generate_inputs_epw(
+        parameters={
+            "INPUTEPW": {
+                "eliashberg": True,
+                "liso": True,
+                "limag": True,
+                "lpade": True,
+            }
+        }
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert "aiida.imag_iso_*" in calc_info.retrieve_list
+    assert "aiida.pade_iso_*" in calc_info.retrieve_list
+
+
+def test_epw_retrieves_aniso_gap_files_for_imag_and_pade(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test anisotropic Eliashberg runs retrieve both imaginary-axis and Pade gap files."""
+    inputs = generate_inputs_epw(
+        parameters={
+            "INPUTEPW": {
+                "eliashberg": True,
+                "laniso": True,
+                "limag": True,
+                "lpade": True,
+            }
+        }
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    assert "aiida.imag_aniso_gap*" in calc_info.retrieve_list
+    assert "aiida.pade_aniso_gap*" in calc_info.retrieve_list
+
+
 def test_epw_accepts_manual_proj_for_wannierize(
     fixture_sandbox,
     fixture_localhost,

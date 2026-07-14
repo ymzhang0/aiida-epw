@@ -11,8 +11,9 @@ from packaging.version import Version
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
+    AnisoGap0Data,
     DosData,
-    GapFunctionData,
+    IsoGapData,
     LambdaFSData,
     PA2fData,
     PDosData,
@@ -177,24 +178,24 @@ class EpwParser(BaseParser):
                 self.out(link_label, parser_func(contents))
 
         iso_gap_filecontents = self.get_retrieved_contents_matching(
-            re.compile(rf"{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
+            re.compile(rf"{EpwCalculation._PREFIX}\.(imag|pade)_iso_\d+\.\d+$")
         )
         if iso_gap_filecontents:
             self.out(
                 "iso_gap_functions",
-                GapFunctionData.from_files(
-                    iso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="iso"
+                IsoGapData.from_files(
+                    iso_gap_filecontents, prefix=EpwCalculation._PREFIX
                 ),
             )
 
         aniso_gap_filecontents = self.get_retrieved_contents_matching(
-            re.compile(rf"{EpwCalculation._PREFIX}\.imag_aniso_gap0_\d+\.\d+$")
+            re.compile(rf"{EpwCalculation._PREFIX}\.(imag|pade)_aniso_gap0_\d+\.\d+$")
         )
         if aniso_gap_filecontents:
             self.out(
                 "aniso_gap_functions",
-                GapFunctionData.from_files(
-                    aniso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="aniso"
+                AnisoGap0Data.from_files(
+                    aniso_gap_filecontents, prefix=EpwCalculation._PREFIX
                 ),
             )
 
