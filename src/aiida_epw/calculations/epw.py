@@ -1416,11 +1416,6 @@ class EpwCalculation(NamelistsCalculation):
         filirobj_input = None
         if "filirobj" in self.inputs:
             filirobj_input = self.inputs.filirobj
-        elif (
-            "momentum_dependence" in self.inputs
-            and self.inputs.momentum_dependence.value
-        ):
-            filirobj_input = orm.Str("ir_nlambda6_ndigit8.dat")
 
         if filirobj_input is not None:
             if isinstance(filirobj_input, orm.SinglefileData):

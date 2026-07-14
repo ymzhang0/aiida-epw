@@ -275,13 +275,13 @@ def test_supercon_get_builder_from_protocol_default(
         builder.epw_final_iso.parameters.get_dict()["INPUTEPW"].get("tc_linear", False)
         is False
     )
-
     # epw_final_aniso check
     if "momentum_dependence" in builder.epw_final_aniso:
         assert builder.epw_final_aniso.momentum_dependence.value
         if "full_bandwidth" in builder.epw_final_aniso:
             assert builder.epw_final_aniso.full_bandwidth.value
         assert not builder.epw_final_aniso.real_axis.value
+    assert builder.epw_final_aniso.filirobj.value == "ir_nlambda6_ndigit8.dat"
 
 
 def test_epw_base_eliashberg_params(fixture_code, generate_structure):
