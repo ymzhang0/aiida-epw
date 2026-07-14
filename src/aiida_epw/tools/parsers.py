@@ -386,84 +386,156 @@ def _get_files_from_folder(folder):
         raise TypeError(f"Unsupported folder type: {type(folder)}")
 
 
-def parse_epw_imag_iso(folder, prefix="aiida"):
-    """Parse the isotropic gap functions from EPW isotropic Eliashberg equation calculation.
+def parse_epw_iso_gap_files(folder, prefix="aiida"):
+    """Parse isotropic EPW gap-function files.
 
-    :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
-    :param prefix: the prefix of the `imag_iso` files.
-    :returns: dictionary containing the isotropic gap functions keyed by temperature.
+    :param folder: pathlib.Path, orm.FolderData, dict, or list containing the output files.
+    :param prefix: the prefix of the gap files.
+    :returns: dictionary keyed by `(source, temperature)` with named column arrays.
     """
     if not folder:
         raise ValueError("No gap-function file contents provided.")
     parsed_data = {}
     pattern_iso = re.compile(
-        rf"^{prefix}\.(?:imag|real|pade|acon)_iso_(\d{{3}}\.\d{{2}})$"
+        rf"^{prefix}\.(imag|real|pade|acon)_iso_(\d{{3}}\.\d{{2}})$"
     )
 
     for filename, open_file in _get_files_from_folder(folder):
         match = pattern_iso.match(filename)
         if match:
-            temperature = float(match.group(1))
+            source = match.group(1)
+            temperature = float(match.group(2))
             try:
                 with open_file() as handle:
                     file_content = handle.read()
-                    gap_function = numpy.loadtxt(
-                        io.StringIO(preprocess_fortran_floats(file_content)),
-                        dtype=float,
-                        comments="#",
-                        skiprows=1,
-                    )
+                table = _load_numeric_table(
+                    preprocess_fortran_floats(file_content),
+                    comments="#",
+                    skiprows=1,
+                )
             except Exception as exc:
                 raise ValueError(
                     f"Failed to parse gap function file {filename}: {exc}"
                 ) from exc
-            parsed_data[temperature] = gap_function
+            parsed_data[(source, temperature)] = _columns_from_iso_gap_table(
+                table, filename
+            )
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_iso_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.(imag|real|pade|acon)_iso_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
-def parse_epw_imag_aniso_gap0(folder, prefix="aiida"):
-    """Parse the anisotropic gap functions from EPW anisotropic Eliashberg equation calculation.
+def parse_epw_imag_iso(folder, prefix="aiida"):
+    """Parse isotropic imaginary-axis gap files."""
+    return {
+        temperature: columns
+        for (source, temperature), columns in parse_epw_iso_gap_files(
+            folder, prefix=prefix
+        ).items()
+        if source == "imag"
+    }
 
-    :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
-    :param prefix: the prefix of the `imag_aniso_gap0` files.
-    :returns: dictionary containing the anisotropic gap functions keyed by temperature.
+
+def parse_epw_aniso_gap0_files(folder, prefix="aiida"):
+    """Parse anisotropic EPW gap0 distribution files.
+
+    :param folder: pathlib.Path, orm.FolderData, dict, or list containing the output files.
+    :param prefix: the prefix of the gap files.
+    :returns: dictionary keyed by `(source, temperature)` with named column arrays.
     """
     if not folder:
         raise ValueError("No gap-function file contents provided.")
     parsed_data = {}
     pattern_aniso_gap0 = re.compile(
-        rf"^{prefix}\.(?:imag|real|pade|acon)_aniso_gap0_(\d{{3}}\.\d{{2}})$"
+        rf"^{prefix}\.(imag|real|pade|acon)_aniso_gap0_(\d{{3}}\.\d{{2}})$"
     )
 
     for filename, open_file in _get_files_from_folder(folder):
         match = pattern_aniso_gap0.match(filename)
         if match:
-            temperature = float(match.group(1))
+            source = match.group(1)
+            temperature = float(match.group(2))
             try:
                 with open_file() as handle:
                     file_content = handle.read()
-                    gap_function = numpy.loadtxt(
-                        io.StringIO(preprocess_fortran_floats(file_content)),
-                        dtype=float,
-                        comments="#",
-                        skiprows=1,
-                    )
+                table = _load_numeric_table(
+                    preprocess_fortran_floats(file_content),
+                    comments="#",
+                )
             except Exception as exc:
                 raise ValueError(
                     f"Failed to parse gap function file {filename}: {exc}"
                 ) from exc
-            parsed_data[temperature] = gap_function
+            if table.shape[1] < 5:
+                raise ValueError(
+                    f"Malformed gap function file {filename}: Expected at least 5 columns, got {table.shape[1]}."
+                )
+            parsed_data[(source, temperature)] = {
+                "T_dist_scaled": table[:, 0],
+                "delta_nk": table[:, 1],
+                "T": table[:, 2],
+                "dist_scaled": table[:, 3],
+                "dist_not_scaled": table[:, 4],
+            }
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.imag_aniso_gap0_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.(imag|real|pade|acon)_aniso_gap0_XXX.XX' were parsed successfully."
         )
     return parsed_data
+
+
+def parse_epw_imag_aniso_gap0(folder, prefix="aiida"):
+    """Parse anisotropic imaginary-axis gap0 distribution files."""
+    return {
+        temperature: columns
+        for (source, temperature), columns in parse_epw_aniso_gap0_files(
+            folder, prefix=prefix
+        ).items()
+        if source == "imag"
+    }
+
+
+def _columns_from_iso_gap_table(table, filename):
+    """Return named isotropic gap columns for supported EPW table layouts."""
+    if table.shape[1] == 3:
+        return {
+            "omega": table[:, 0],
+            "znorm": table[:, 1],
+            "deltaw": table[:, 2],
+        }
+    if table.shape[1] == 4:
+        return {
+            "omega": table[:, 0],
+            "znorm": table[:, 1],
+            "deltaw": table[:, 2],
+            "shift": table[:, 3],
+        }
+    if table.shape[1] == 5:
+        return {
+            "omega": table[:, 0],
+            "znorm_real": table[:, 1],
+            "znorm_imag": table[:, 2],
+            "deltaw_real": table[:, 3],
+            "deltaw_imag": table[:, 4],
+        }
+    if table.shape[1] == 7:
+        return {
+            "omega": table[:, 0],
+            "znorm_real": table[:, 1],
+            "znorm_imag": table[:, 2],
+            "deltaw_real": table[:, 3],
+            "deltaw_imag": table[:, 4],
+            "shift_real": table[:, 5],
+            "shift_imag": table[:, 6],
+        }
+
+    raise ValueError(
+        f"Malformed gap function file {filename}: Expected 3, 4, 5 or 7 columns, got {table.shape[1]}."
+    )
 
 
 def parse_aniso_gap_FS(folder, prefix="aiida"):

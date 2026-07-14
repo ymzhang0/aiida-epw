@@ -402,12 +402,28 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                     "laniso", False
                 )
 
+            input_epw = parameters.get("INPUTEPW", {})
+            if "real_axis" in self.inputs:
+                run_imaginary_axis = not self.inputs.real_axis.value
+            else:
+                run_imaginary_axis = input_epw.get("limag", False)
+
+            run_pade = input_epw.get("lpade", False)
+            if "analytical_continuation" in self.inputs:
+                run_pade = self.inputs.analytical_continuation.value.lower() == "pade"
+
             if momentum_dependence:
                 retrieve_list.append(self._process_class._OUTPUT_LAMBDA_FS_FILE)
                 retrieve_list.append(self._process_class._OUTPUT_LAMBDA_K_PAIRS_FILE)
-                retrieve_list.append("aiida.imag_aniso*")
+                if run_imaginary_axis:
+                    retrieve_list.append("aiida.imag_aniso*")
+                if run_pade:
+                    retrieve_list.append("aiida.pade_aniso*")
             else:
-                retrieve_list.append("aiida.imag_iso_*")
+                if run_imaginary_axis:
+                    retrieve_list.append("aiida.imag_iso_*")
+                if run_pade:
+                    retrieve_list.append("aiida.pade_iso_*")
 
         return retrieve_list
 

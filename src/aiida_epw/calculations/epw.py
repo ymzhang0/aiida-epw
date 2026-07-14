@@ -21,12 +21,13 @@ from aiida_quantumespresso.utils.convert import convert_input_to_namelist_entry
 
 from aiida_epw.data import (
     A2fData,
+    AnisoGap0Data,
     PA2fData,
     DosData,
+    IsoGapData,
+    LambdaFSData,
     PDosData,
     PhDosData,
-    GapFunctionData,
-    LambdaFSData,
 )
 
 from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
@@ -398,15 +399,15 @@ class EpwCalculation(NamelistsCalculation):
         )
         spec.output(
             "iso_gap_functions",
-            valid_type=GapFunctionData,
+            valid_type=IsoGapData,
             required=False,
             help="The interpolated isotropic gap function.",
         )
         spec.output(
             "aniso_gap_functions",
-            valid_type=GapFunctionData,
+            valid_type=AnisoGap0Data,
             required=False,
-            help="The interpolated anisotropic gap function.",
+            help="The interpolated anisotropic gap0 distribution.",
         )
         spec.output(
             "aniso_gap_FS",

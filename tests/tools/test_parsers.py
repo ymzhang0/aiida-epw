@@ -181,7 +181,7 @@ def test_parse_epw_lambda_k_pairs():
     assert parsed["integrated_dos"] is None
 
 
-def test_parse_epw_imag_iso(files_path: Path, data_regression):
+def test_parse_epw_imag_iso(files_path: Path):
     """Parse isotropic ``imag_iso`` files from a folder mapping."""
     iso_dir = files_path / "tools" / "parsers" / "full_iso_eliashberg"
 
@@ -191,21 +191,33 @@ def test_parse_epw_imag_iso(files_path: Path, data_regression):
         if path.is_file()
     }
 
-    parsed = parsers.parse_epw_imag_iso(file_contents, prefix="aiida")
+    parsed = parsers.parse_epw_iso_gap_files(file_contents, prefix="aiida")
 
     assert parsed, "No temperatures were parsed from imag_iso files."
 
-    # Verify that passing Path directory directly yields identical results
-    parsed_dir = parsers.parse_epw_imag_iso(iso_dir, prefix="aiida")
+    columns = parsed[("imag", 3.0)]
+    assert set(columns) == {"omega", "znorm", "deltaw"}
+    assert columns["omega"][:3].tolist() == [
+        0.0008121645261,
+        0.0024364935783,
+        0.0040608226305,
+    ]
+    assert columns["deltaw"][:3].tolist() == [
+        0.0028019489018,
+        0.002726264343,
+        0.0025875737446,
+    ]
+
+    parsed_dir = parsers.parse_epw_iso_gap_files(iso_dir, prefix="aiida")
     assert parsed_dir.keys() == parsed.keys()
-    for T in parsed:
-        numpy.testing.assert_array_equal(parsed_dir[T], parsed[T])
+    for key in parsed:
+        for column in parsed[key]:
+            numpy.testing.assert_array_equal(
+                parsed_dir[key][column], parsed[key][column]
+            )
 
-    regression_data = {T: parsed[T].tolist()[:10] for T in sorted(parsed.keys())}
-    data_regression.check(regression_data)
 
-
-def test_parse_epw_imag_aniso_gap0(files_path: Path, data_regression):
+def test_parse_epw_imag_aniso_gap0(files_path: Path):
     """Parse anisotropic ``imag_aniso_gap0`` files from a folder mapping."""
     aniso_dir = files_path / "tools" / "parsers" / "fsr_aniso_eliashberg"
 
@@ -215,18 +227,60 @@ def test_parse_epw_imag_aniso_gap0(files_path: Path, data_regression):
         if path.is_file()
     }
 
-    parsed = parsers.parse_epw_imag_aniso_gap0(file_contents, prefix="aiida")
+    parsed = parsers.parse_epw_aniso_gap0_files(file_contents, prefix="aiida")
 
     assert parsed, "No temperatures were parsed from imag_aniso_gap0 files."
 
-    # Verify that passing Path directory directly yields identical results
-    parsed_dir = parsers.parse_epw_imag_aniso_gap0(aniso_dir, prefix="aiida")
-    assert parsed_dir.keys() == parsed.keys()
-    for T in parsed:
-        numpy.testing.assert_array_equal(parsed_dir[T], parsed[T])
+    columns = parsed[("imag", 3.0)]
+    assert set(columns) == {
+        "T_dist_scaled",
+        "delta_nk",
+        "T",
+        "dist_scaled",
+        "dist_not_scaled",
+    }
+    assert columns["T_dist_scaled"][:3].tolist() == [
+        3.0000006019,
+        3.0032008061,
+        3.0057098246,
+    ]
+    assert columns["dist_not_scaled"][:3].tolist() == [
+        0.026707472459,
+        142.02083213,
+        253.34682234,
+    ]
 
-    regression_data = {T: parsed[T].tolist()[:10] for T in sorted(parsed.keys())}
-    data_regression.check(regression_data)
+    parsed_dir = parsers.parse_epw_aniso_gap0_files(aniso_dir, prefix="aiida")
+    assert parsed_dir.keys() == parsed.keys()
+    for key in parsed:
+        for column in parsed[key]:
+            numpy.testing.assert_array_equal(
+                parsed_dir[key][column], parsed[key][column]
+            )
+
+
+def test_parse_epw_gap_files_accept_pade_names():
+    """Parse Pade gap files with the same column schemas as imaginary-axis files."""
+    iso = parsers.parse_epw_iso_gap_files(
+        {
+            "aiida.pade_iso_003.00": """w ReZ ImZ ReD ImD
+ 1.0 2.0 0.2 0.01 0.001
+"""
+        },
+        prefix="aiida",
+    )
+    assert iso[("pade", 3.0)]["deltaw_imag"].tolist() == [0.001]
+
+    aniso = parsers.parse_epw_aniso_gap0_files(
+        {
+            "aiida.pade_aniso_gap0_003.00": """# distribution
+# T_dist_scaled delta_nk T dist_scaled dist_not_scaled
+ 3.1 1.0 3.0 0.1 10.0
+"""
+        },
+        prefix="aiida",
+    )
+    assert aniso[("pade", 3.0)]["dist_not_scaled"].tolist() == [10.0]
 
 
 def test_parser_robust_exception_handling():

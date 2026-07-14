@@ -442,6 +442,10 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
             "aiida.imag_iso_*"
             in wc_iso.ctx.inputs.metadata["options"]["additional_retrieve_list"]
         )
+        assert (
+            "aiida.pade_iso_*"
+            in wc_iso.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
 
         # Test anisotropic imaginary axis (FSR-like)
         inputs_fsr = {
@@ -450,6 +454,7 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
             "momentum_dependence": orm.Bool(True),
             "full_bandwidth": orm.Bool(False),
             "real_axis": orm.Bool(False),
+            "analytical_continuation": orm.Str("pade"),
             "calculation_type": serialize_calculation_type("eliashberg"),
             "options": orm.Dict(dict={"resources": {"num_machines": 1}}),
             "parameters": orm.Dict(dict={"INPUTEPW": {}}),
@@ -465,6 +470,10 @@ def test_epw_base_eliashberg_params(fixture_code, generate_structure):
         assert not wc_fsr.ctx.inputs.real_axis.value
         assert (
             "aiida.imag_aniso*"
+            in wc_fsr.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+        assert (
+            "aiida.pade_aniso*"
             in wc_fsr.ctx.inputs.metadata["options"]["additional_retrieve_list"]
         )
         assert (
