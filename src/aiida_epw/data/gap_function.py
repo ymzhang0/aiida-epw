@@ -31,7 +31,7 @@ class _RaggedGapData(orm.ArrayData):
     ARRAY_TEMPERATURES = "temperatures"
 
     def set_gap_data(self, gap_data):
-        """Store a mapping keyed by `(source, temperature)` with named column arrays."""
+        """Store a mapping keyed by `(source, temperature)` as one table per entry."""
         if not gap_data:
             raise exceptions.ValidationError("`gap_data` cannot be empty.")
 
@@ -52,6 +52,7 @@ class _RaggedGapData(orm.ArrayData):
             label = f"{source}_{_temperature_label(temperature)}"
             row_count = None
             column_names = []
+            column_arrays = []
 
             for column_name, values in columns.items():
                 array = numpy.array(values, dtype=float)
@@ -66,15 +67,17 @@ class _RaggedGapData(orm.ArrayData):
                         f"Columns for {label} must have the same length."
                     )
 
-                array_name = f"{source}_{column_name}_{_temperature_label(temperature)}"
-                self.set_array(array_name, array)
                 column_names.append(column_name)
+                column_arrays.append(array)
+
+            self.set_array(label, numpy.column_stack(column_arrays))
 
             entries.append(
                 {
                     "source": source,
                     "temperature": temperature,
                     "label": label,
+                    "array_name": label,
                     "columns": column_names,
                 }
             )
@@ -93,12 +96,15 @@ class _RaggedGapData(orm.ArrayData):
     def get_data(self, temperature, *, source=None, atol=1e-8):
         """Return named arrays for a specific temperature and optional source."""
         entry = self._find_entry(temperature, source=source, atol=atol)
+        table = self.get_array(entry["array_name"])
         return {
-            column: self.get_array(
-                f"{entry['source']}_{column}_{_temperature_label(entry['temperature'])}"
-            )
-            for column in entry["columns"]
+            column: table[:, index] for index, column in enumerate(entry["columns"])
         }
+
+    def get_table(self, temperature, *, source=None, atol=1e-8):
+        """Return the stored two-dimensional table for a temperature/source entry."""
+        entry = self._find_entry(temperature, source=source, atol=atol)
+        return self.get_array(entry["array_name"])
 
     def get_iterdata(self, source=None):
         """Yield `(source, temperature, columns)` in stored order."""
@@ -142,10 +148,9 @@ class _RaggedGapData(orm.ArrayData):
     def _delete_gap_arrays(self):
         """Delete arrays referenced by previous gap-data entries."""
         for entry in self.base.attributes.get(self.ATTRIBUTE_ENTRIES, []):
-            for column in entry["columns"]:
-                array_name = f"{entry['source']}_{column}_{_temperature_label(entry['temperature'])}"
-                if array_name in self.get_arraynames():
-                    self.delete_array(array_name)
+            array_name = entry.get("array_name", entry.get("label"))
+            if array_name in self.get_arraynames():
+                self.delete_array(array_name)
         if self.ARRAY_TEMPERATURES in self.get_arraynames():
             self.delete_array(self.ARRAY_TEMPERATURES)
 
