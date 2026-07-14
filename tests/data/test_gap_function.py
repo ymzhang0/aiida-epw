@@ -29,7 +29,16 @@ def test_iso_gap_data_roundtrip_ragged_sources():
     )
 
     assert node.sources == ["imag", "pade"]
+    assert sorted(node.get_arraynames()) == [
+        "imag_003_00",
+        "pade_003_00",
+        "temperatures",
+    ]
     assert node.get_temperatures(source="imag").tolist() == [3.0]
+    assert node.get_table(3.0, source="imag").tolist() == [
+        [0.1, 1.0, 0.01],
+        [0.2, 1.1, 0.02],
+    ]
     assert node.get_data(3.0, source="imag")["deltaw"].tolist() == [0.01, 0.02]
     assert node.get_data(3.0, source="pade")["deltaw_imag"].tolist() == [0.001]
 
@@ -87,9 +96,7 @@ def test_gap_data_replaces_previous_arrays():
     )
 
     assert sorted(node.get_arraynames()) == [
-        "imag_deltaw_004_00",
-        "imag_omega_004_00",
-        "imag_znorm_004_00",
+        "imag_004_00",
         "temperatures",
     ]
 
