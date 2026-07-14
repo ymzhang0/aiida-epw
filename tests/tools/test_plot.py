@@ -102,3 +102,49 @@ def test_plot_anisotropic_gap_accepts_gap_series():
         ax=ax,
         fit=False,
     )
+
+
+def test_plot_anisotropic_frequency_gap_trims_low_frequencies():
+    """Test frequency-resolved anisotropic plotting trims the low-frequency tail."""
+    from matplotlib import pyplot
+
+    from aiida_epw.tools.plot import plot_anisotropic_frequency_gap
+
+    _, ax = pyplot.subplots()
+    plot_anisotropic_frequency_gap(
+        {
+            3.0: {
+                0.01: {"energy": [0.0], "delta": [-1.0e-5]},
+                0.2: {"energy": [0.0], "delta": [2.0e-4]},
+                "units": {"frequency": "eV", "energy": "eV", "delta": "eV"},
+            }
+        },
+        ax=ax,
+    )
+
+    assert len(ax.lines) == 2
+    plotted_gap_line = ax.lines[0]
+    assert plotted_gap_line.get_label() == r"$\omega$=0.2 eV"
+
+
+def test_plot_anisotropic_frequency_gap_accepts_explicit_frequencies():
+    """Test explicit frequency selection bypasses the default low-frequency trim."""
+    from matplotlib import pyplot
+
+    from aiida_epw.tools.plot import plot_anisotropic_frequency_gap
+
+    _, ax = pyplot.subplots()
+    plot_anisotropic_frequency_gap(
+        {
+            3.0: {
+                0.01: {"energy": [0.0], "delta": [-1.0e-5]},
+                0.2: {"energy": [0.0], "delta": [2.0e-4]},
+            }
+        },
+        frequencies=[0.01],
+        ax=ax,
+    )
+
+    assert len(ax.lines) == 2
+    plotted_gap_line = ax.lines[0]
+    assert plotted_gap_line.get_label() == r"$\omega$=0.01 eV"
