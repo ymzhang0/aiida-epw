@@ -173,6 +173,38 @@ class _RaggedGapData(orm.ArrayData):
 class IsoGapData(_RaggedGapData):
     """Store isotropic EPW gap-function columns by source and temperature."""
 
+    def get_gap_FS(self, source="imag", component=None, unit="meV", drop_nan=True):
+        """Return the Fermi-surface gap as a plain temperature series."""
+        factor = {"eV": 1.0, "meV": 1000.0}[unit]
+        temperatures = []
+        gaps = []
+
+        for _, temperature, columns in self.get_iterdata(source=source):
+            if component is None:
+                if "deltaw" in columns:
+                    column_name = "deltaw"
+                elif "deltaw_real" in columns:
+                    column_name = "deltaw_real"
+                else:
+                    raise KeyError(
+                        "Could not find a gap column; pass `component` explicitly."
+                    )
+            else:
+                column_name = component
+
+            gap = float(columns[column_name][0]) * factor
+            if drop_nan and numpy.isnan(gap):
+                continue
+
+            temperatures.append(float(temperature))
+            gaps.append(gap)
+
+        return {"T": temperatures, "gap": gaps, "unit": unit, "source": source}
+
+    def get_gap_fs(self, *args, **kwargs):
+        """Alias for :meth:`get_gap_FS` using conventional Python casing."""
+        return self.get_gap_FS(*args, **kwargs)
+
     @classmethod
     def from_files(cls, file_contents_or_paths, prefix="aiida"):
         """Instantiate and populate an `IsoGapData` node from isotropic gap files."""
@@ -206,6 +238,26 @@ class IsoGapData(_RaggedGapData):
 
 class AnisoGap0Data(_RaggedGapData):
     """Store anisotropic gap0 distribution columns by source and temperature."""
+
+    def get_multigap_averages(self, source="imag", bandwidth_factor=1.5):
+        """Return representative anisotropic gap values for each temperature."""
+        from aiida_epw.tools.gap import find_multigap_averages
+
+        temperatures = []
+        gaps = []
+
+        for _, temperature, _ in self.get_iterdata(source=source):
+            table = self.get_table(temperature, source=source)
+            temperatures.append(float(temperature))
+            gaps.append(
+                find_multigap_averages(
+                    table,
+                    temperature=temperature,
+                    bandwidth_factor=bandwidth_factor,
+                )
+            )
+
+        return {"T": temperatures, "gap": gaps, "source": source}
 
     @classmethod
     def from_files(cls, file_contents_or_paths, prefix="aiida"):

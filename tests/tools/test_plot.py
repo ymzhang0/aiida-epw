@@ -42,6 +42,21 @@ def test_gap_iso_imag_temp_accepts_plain_dict(monkeypatch):
     )
 
 
+def test_gap_iso_imag_temp_accepts_gap_series(monkeypatch):
+    """Test isotropic gap plotting accepts the compact Fermi-surface series."""
+    from matplotlib import pyplot
+
+    from aiida_epw.tools.plot import gap_iso_imag_temp
+
+    monkeypatch.setattr(pyplot, "show", lambda: None)
+
+    gap_iso_imag_temp(
+        {"T": [3.0, 4.0], "gap": [2.0, 1.0], "unit": "meV", "source": "imag"},
+        tempmax=5.0,
+        fit=False,
+    )
+
+
 def test_plot_anisotropic_gap_accepts_plain_dict():
     """Test anisotropic gap plotting accepts dictionaries from gap-data serialization."""
     from matplotlib import pyplot
@@ -70,6 +85,20 @@ def test_plot_anisotropic_gap_accepts_plain_dict():
                 }
             }
         },
+        ax=ax,
+        fit=False,
+    )
+
+
+def test_plot_anisotropic_gap_accepts_gap_series():
+    """Test anisotropic gap plotting accepts precomputed representative gaps."""
+    from matplotlib import pyplot
+
+    from aiida_epw.tools.plot import plot_anisotropic_gap
+
+    _, ax = pyplot.subplots()
+    plot_anisotropic_gap(
+        {"T": [3.0, 4.0, 5.0], "gap": [[1.2, 2.0], [1.0, 1.7], [0.8, 1.3]]},
         ax=ax,
         fit=False,
     )
