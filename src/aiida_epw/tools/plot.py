@@ -1,17 +1,12 @@
-"""Plotting functions copied from EPWpy: https://gitlab.com/epwpy/epwpy/-/blob/develop/EPWpy/plotting/plot_supercond.py?ref_type=heads.
-
-The code is adapted to AiiDA datatypes.
-"""
+"""Plotting functions copied and adapted from EPWpy."""
 
 import os
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as numpy
-from aiida import orm
 from scipy.optimize import curve_fit
 
-from aiida_epw.data import IsoGapData
 from aiida_epw.tools.calculators import bcs_gap_function
 
 
@@ -62,30 +57,72 @@ def plot_max_eigenvalue(temps, evs, ax=None, **kwargs):
     # ax.yaxis.set_minor_locator(ticker.AutoMinorLocator(2))
 
 
-def _iter_gap_functions(gap_functions):
-    """Yield `(temperature, table)` pairs from typed or legacy gap-function data."""
-    if isinstance(gap_functions, IsoGapData):
-        for _, temperature, columns in gap_functions.get_iterdata(source="imag"):
-            yield (
-                temperature,
-                numpy.column_stack(
-                    [columns["omega"], columns["znorm"], columns["deltaw"]]
-                ),
-            )
-        return
+def _source_mapping(gap_functions, source):
+    """Return a temperature mapping from plain gap dictionaries."""
+    if source in gap_functions and isinstance(gap_functions[source], dict):
+        return gap_functions[source]
+    return gap_functions
 
-    for arrayname, array in gap_functions.get_iterarrays():
-        yield float(arrayname.replace("_", ".")), array
+
+def _iter_iso_gap_data(gap_functions, source="imag"):
+    """Yield `(temperature, columns)` from plain isotropic gap dictionaries."""
+    for temperature, entry in sorted(_source_mapping(gap_functions, source).items()):
+        if isinstance(entry, dict) and "data" in entry:
+            yield float(temperature), entry["data"]
+        elif isinstance(entry, dict):
+            yield float(temperature), entry
+        else:
+            table = numpy.array(entry, dtype=float)
+            columns = {
+                "omega": table[:, 0],
+                "znorm": table[:, 1],
+                "deltaw": table[:, 2],
+            }
+            if table.shape[1] > 3:
+                columns["shift"] = table[:, 3]
+            yield float(temperature), columns
+
+
+def _iter_aniso_gap_tables(gap_functions, source="imag"):
+    """Yield `(temperature, table)` from plain anisotropic gap dictionaries."""
+    for temperature, entry in sorted(_source_mapping(gap_functions, source).items()):
+        if isinstance(entry, dict) and "table" in entry:
+            table = numpy.array(entry["table"], dtype=float)
+        elif isinstance(entry, dict) and "data" in entry:
+            data = entry["data"]
+            table = numpy.column_stack(
+                [
+                    data["T_dist_scaled"],
+                    data["delta_nk"],
+                    data["T"],
+                    data["dist_scaled"],
+                    data["dist_not_scaled"],
+                ]
+            )
+        elif isinstance(entry, dict):
+            table = numpy.column_stack(
+                [
+                    entry["T_dist_scaled"],
+                    entry["delta_nk"],
+                    entry["T"],
+                    entry["dist_scaled"],
+                    entry["dist_not_scaled"],
+                ]
+            )
+        else:
+            table = numpy.array(entry, dtype=float)
+        yield float(temperature), table
 
 
 #### Isotropic gap (Imaginary, real and ) vs. temeprature
 
 
 def gap_iso_imag_temp(
-    iso_gap_function: orm.ArrayData,
+    iso_gap_function,
     tempmax,
     font=12,
     prefix="aiida",
+    source="imag",
     fit=False,
     p0=None,
     destpath=None,
@@ -94,8 +131,8 @@ def gap_iso_imag_temp(
     imag_delta = []
     imag_temp = []
 
-    for temperature, array in _iter_gap_functions(iso_gap_function):
-        gap = array[0, -1] * 1000
+    for temperature, columns in _iter_iso_gap_data(iso_gap_function, source=source):
+        gap = columns["deltaw"][0] * 1000
         if numpy.isnan(gap):
             continue
         imag_delta.append(gap)  # Convert to meV
@@ -151,61 +188,36 @@ def fitting_function(T, p, delta_zero, Tc):
 
 
 def find_multigap_averages(data, T, bandwidth_factor=1.5):
-    """
-    使用自适应核密度估计 (KDE) 寻找能隙峰。
-    基于统计学自适应带宽，不限制任何峰的个数或物理距离。
-    """
+    """Find representative gap peaks from a smoothed gap-distribution signal."""
     from scipy.signal import find_peaks
-    from sklearn.neighbors import KernelDensity
 
     gaps = data[:, 1]
     base_value = numpy.min(data[:, 0])
     signal = data[:, 0] - base_value
 
-    # 1. 将直方图展开为一维点集
     max_sig = numpy.max(signal)
     if max_sig == 0:
         return [numpy.mean(gaps)]
 
-    virtual_samples = []
-    for g, w in zip(gaps, (signal / max_sig * 100).astype(int)):
-        if w > 0:
-            virtual_samples.extend([g] * w)
-    X = numpy.array(virtual_samples)
+    weights = signal / max_sig
+    window = max(3, int(len(weights) * 0.03 * bandwidth_factor))
+    if window % 2 == 0:
+        window += 1
+    kernel = numpy.ones(window) / window
+    density = numpy.convolve(weights, kernel, mode="same")
 
-    if len(X) < 10:
-        return [numpy.mean(gaps)]
-
-    # 2. 【核心步骤】：使用 Silverman 拇指法则计算统计学自适应带宽
-    std_dev = numpy.std(X)
-    n_samples = len(X)
-    # 标准 Silverman 公式: 1.06 * std * n**(-1/5)
-    silverman_bw = 1.06 * std_dev * (n_samples ** (-0.2))
-
-    # 稍微放大带宽因子（比如 1.5），用于把靠得极近的“双肩精细结构”融合成单峰
-    adaptive_bw = silverman_bw * bandwidth_factor
-
-    # 3. 拟合 KDE 曲线
-    kde = KernelDensity(kernel="gaussian", bandwidth=adaptive_bw).fit(X.reshape(-1, 1))
-
-    # 4. 在全能量区间上对拟合出的平滑曲线进行采样
-    x_eval = numpy.linspace(numpy.min(gaps), numpy.max(gaps), 300)
-    log_dens = kde.score_samples(x_eval.reshape(-1, 1))
-    density = numpy.exp(log_dens)
-
-    # 5. 寻找平滑曲线上的局部极大值
-    # 因为曲线已经被统计学带宽自然平滑，不需要再加 distance 限制
     peaks, _ = find_peaks(density, prominence=numpy.max(density) * 0.1)
 
     if len(peaks) == 0:
-        return [numpy.mean(gaps)]
+        return [gaps[numpy.argmax(density)]]
 
-    return sorted(x_eval[peaks].tolist())
+    return sorted(gaps[peaks].tolist())
 
 
 def plot_anisotropic_gap(
     aniso_gap_functions_dict,
     ax=None,
+    source="imag",
     fit=True,
     p0=None,
     destpath=None,
@@ -234,7 +246,8 @@ def plot_anisotropic_gap(
         )
         ax = axs[0, 0]
 
-    sorted_temps = sorted(aniso_gap_functions_dict.keys())
+    gap_tables = dict(_iter_aniso_gap_tables(aniso_gap_functions_dict, source=source))
+    sorted_temps = sorted(gap_tables.keys())
 
     # 用字典动态追踪不同的能隙分支：{branch_index: (list_of_T, list_of_delta)}
     branches = {}
@@ -245,7 +258,7 @@ def plot_anisotropic_gap(
         dT = 3.0
 
     for T in sorted_temps:
-        array = numpy.array(aniso_gap_functions_dict[T])
+        array = gap_tables[T]
 
         # 1. 改为传统的对称直方图（小提琴谱线形式）
         base_value = numpy.min(array[:, 0])
@@ -351,7 +364,7 @@ def plot_anisotropic_gap(
                     linestyle="--",
                     color=color_cycle[b_idx % len(color_cycle)],
                     linewidth=2,
-                    label=f"$\Delta_0$={delta_zero_fit:.2f}, $T_c$={Tc_fit:.1f} (K)",
+                    label=rf"$\Delta_0$={delta_zero_fit:.2f}, $T_c$={Tc_fit:.1f} (K)",
                 )
             except Exception as e:
                 print(f"Branch {b_idx + 1} fitting failed: {e}")
