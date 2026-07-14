@@ -8,6 +8,7 @@ import numpy as numpy
 from scipy.optimize import curve_fit
 
 from aiida_epw.tools.calculators import bcs_gap_function
+from aiida_epw.tools.gap import find_multigap_averages
 
 
 def plot_max_eigenvalue(temps, evs, ax=None, **kwargs):
@@ -66,6 +67,11 @@ def _source_mapping(gap_functions, source):
 
 def _iter_iso_gap_data(gap_functions, source="imag"):
     """Yield `(temperature, columns)` from plain isotropic gap dictionaries."""
+    if "T" in gap_functions and "gap" in gap_functions:
+        for temperature, gap in zip(gap_functions["T"], gap_functions["gap"]):
+            yield float(temperature), {"gap": numpy.array([gap], dtype=float)}
+        return
+
     for temperature, entry in sorted(_source_mapping(gap_functions, source).items()):
         if isinstance(entry, dict) and "data" in entry:
             yield float(temperature), entry["data"]
@@ -132,7 +138,7 @@ def gap_iso_imag_temp(
     imag_temp = []
 
     for temperature, columns in _iter_iso_gap_data(iso_gap_function, source=source):
-        gap = columns["deltaw"][0] * 1000
+        gap = columns["gap"][0] if "gap" in columns else columns["deltaw"][0] * 1000
         if numpy.isnan(gap):
             continue
         imag_delta.append(gap)  # Convert to meV
@@ -187,33 +193,6 @@ def fitting_function(T, p, delta_zero, Tc):
     return gap if len(gap) > 1 else gap[0]
 
 
-def find_multigap_averages(data, T, bandwidth_factor=1.5):
-    """Find representative gap peaks from a smoothed gap-distribution signal."""
-    from scipy.signal import find_peaks
-
-    gaps = data[:, 1]
-    base_value = numpy.min(data[:, 0])
-    signal = data[:, 0] - base_value
-
-    max_sig = numpy.max(signal)
-    if max_sig == 0:
-        return [numpy.mean(gaps)]
-
-    weights = signal / max_sig
-    window = max(3, int(len(weights) * 0.03 * bandwidth_factor))
-    if window % 2 == 0:
-        window += 1
-    kernel = numpy.ones(window) / window
-    density = numpy.convolve(weights, kernel, mode="same")
-
-    peaks, _ = find_peaks(density, prominence=numpy.max(density) * 0.1)
-
-    if len(peaks) == 0:
-        return [gaps[numpy.argmax(density)]]
-
-    return sorted(gaps[peaks].tolist())
-
-
 def plot_anisotropic_gap(
     aniso_gap_functions_dict,
     ax=None,
@@ -246,75 +225,76 @@ def plot_anisotropic_gap(
         )
         ax = axs[0, 0]
 
-    gap_tables = dict(_iter_aniso_gap_tables(aniso_gap_functions_dict, source=source))
-    sorted_temps = sorted(gap_tables.keys())
-
     # 用字典动态追踪不同的能隙分支：{branch_index: (list_of_T, list_of_delta)}
     branches = {}
 
-    if len(sorted_temps) > 1:
-        dT = numpy.mean(numpy.diff(sorted_temps))
+    if "T" in aniso_gap_functions_dict and "gap" in aniso_gap_functions_dict:
+        for T, rep_gaps in zip(
+            aniso_gap_functions_dict["T"], aniso_gap_functions_dict["gap"]
+        ):
+            if numpy.isscalar(rep_gaps):
+                rep_gaps = [rep_gaps]
+            for idx, vg in enumerate(rep_gaps):
+                branches.setdefault(idx, ([], []))
+                branches[idx][0].append(T)
+                branches[idx][1].append(vg)
+
+            if rep_gaps:
+                ax.scatter(
+                    [T] * len(rep_gaps),
+                    rep_gaps,
+                    color="red",
+                    edgecolors="black",
+                    s=25,
+                    zorder=5,
+                )
     else:
-        dT = 3.0
-
-    for T in sorted_temps:
-        array = gap_tables[T]
-
-        # 1. 改为传统的对称直方图（小提琴谱线形式）
-        base_value = numpy.min(array[:, 0])
-        signal = array[:, 0] - base_value
-        max_sig = numpy.max(signal)
-
-        if max_sig > 0:
-            # 缩放让直方图半宽最大不超过 dT 的 45%，防止互相严重重叠
-            scale = (dT * 0.45) / max_sig
-            ax.fill_betweenx(
-                y=array[:, 1],
-                x1=T - signal * scale,
-                x2=T + signal * scale,
-                color="tab:blue",
-                alpha=0.15,  # 透明度
-                edgecolor="tab:blue",  # 直方图轮廓线颜色
-                linewidth=0.5,  # 轮廓线粗细
-                zorder=1,
-            )
-
-        # max_density = numpy.max(array[:, 0])
-        # scale = dT * 0.8 / max_density if max_density > 0 else 1.0
-        # ax.barh(
-        #     y=array[:, 1],
-        #     width=array[:, 0] * scale,
-        #     left=T,
-        #     height=0.03,  # 条形图里每块的高度，对应你数据的能量网格间距（0.027 meV）
-        #     color='royalblue',
-        #     alpha=0.2,
-        #     edgecolor='none',
-        #     zorder=1
-        # )
-        # 2. 自动提取当前温度下的所有能隙中心点
-        rep_gaps = find_multigap_averages(
-            array,
-            T,
-            # kwargs.pop("prominence_ratio", 0.1),
-            # kwargs.pop("sigma", 2)
+        gap_tables = dict(
+            _iter_aniso_gap_tables(aniso_gap_functions_dict, source=source)
         )
+        sorted_temps = sorted(gap_tables.keys())
 
-        # 3. 将提取出的点分门别类归入各自的分支中（按从小到大的顺序分配索引 0, 1, 2...）
-        for idx, vg in enumerate(rep_gaps):
-            branches.setdefault(idx, ([], []))
-            branches[idx][0].append(T)
-            branches[idx][1].append(vg)
+        if len(sorted_temps) > 1:
+            dT = numpy.mean(numpy.diff(sorted_temps))
+        else:
+            dT = 3.0
 
-        # 绘制提取出来的代表性红点
-        if rep_gaps:
-            ax.scatter(
-                [T] * len(rep_gaps),
-                rep_gaps,
-                color="red",
-                edgecolors="black",
-                s=25,
-                zorder=5,
-            )
+        for T in sorted_temps:
+            array = gap_tables[T]
+
+            base_value = numpy.min(array[:, 0])
+            signal = array[:, 0] - base_value
+            max_sig = numpy.max(signal)
+
+            if max_sig > 0:
+                scale = (dT * 0.45) / max_sig
+                ax.fill_betweenx(
+                    y=array[:, 1],
+                    x1=T - signal * scale,
+                    x2=T + signal * scale,
+                    color="tab:blue",
+                    alpha=0.15,
+                    edgecolor="tab:blue",
+                    linewidth=0.5,
+                    zorder=1,
+                )
+
+            rep_gaps = find_multigap_averages(array, T)
+
+            for idx, vg in enumerate(rep_gaps):
+                branches.setdefault(idx, ([], []))
+                branches[idx][0].append(T)
+                branches[idx][1].append(vg)
+
+            if rep_gaps:
+                ax.scatter(
+                    [T] * len(rep_gaps),
+                    rep_gaps,
+                    color="red",
+                    edgecolors="black",
+                    s=25,
+                    zorder=5,
+                )
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)

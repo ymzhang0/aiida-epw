@@ -48,6 +48,18 @@ def test_iso_gap_data_roundtrip_ragged_sources():
         [0.2, 1.1, 0.02],
     ]
     assert as_dict["imag"][3.0]["data"]["deltaw"].tolist() == [0.01, 0.02]
+    assert node.get_gap_FS(source="imag") == {
+        "T": [3.0],
+        "gap": [10.0],
+        "unit": "meV",
+        "source": "imag",
+    }
+    assert node.get_gap_FS(source="pade", component="deltaw_real", unit="eV") == {
+        "T": [3.0],
+        "gap": [0.01],
+        "unit": "eV",
+        "source": "pade",
+    }
 
     with pytest.raises(KeyError, match="Multiple gap data entries"):
         node.get_data(3.0)
@@ -59,7 +71,7 @@ def test_aniso_gap0_data_roundtrip_ragged_temperatures():
     node.set_gap_data(
         {
             ("imag", 3.0): {
-                "T_dist_scaled": [3.0, 3.1],
+                "T_dist_scaled": [3.0, 3.0],
                 "delta_nk": [1.0, 1.1],
                 "T": [3.0, 3.0],
                 "dist_scaled": [0.0, 0.1],
@@ -78,6 +90,11 @@ def test_aniso_gap0_data_roundtrip_ragged_temperatures():
     assert node.get_temperatures(source="imag").tolist() == [3.0, 4.0]
     assert node.get_data(3.0, source="imag")["delta_nk"].shape == (2,)
     assert node.get_data(4.0, source="imag")["delta_nk"].shape == (1,)
+    assert node.get_multigap_averages(source="imag") == {
+        "T": [3.0, 4.0],
+        "gap": [[1.05], [1.4]],
+        "source": "imag",
+    }
 
 
 def test_gap_data_replaces_previous_arrays():
