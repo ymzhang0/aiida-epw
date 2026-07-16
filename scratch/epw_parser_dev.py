@@ -1,6 +1,5 @@
 """Parser for the EPW calculations."""
 
-import math
 import re
 from pathlib import Path
 
@@ -12,18 +11,14 @@ from packaging.version import Version
 from aiida_epw.calculations.epw import EpwCalculation
 from aiida_epw.data import (
     A2fData,
-    AnisoGap0Data,
     DosData,
-    IsoGapData,
+    GapFunctionData,
     LambdaFSData,
     PA2fData,
     PDosData,
     PhDosData,
 )
-from aiida_epw.parsers.schemas import (
-    REGEX_PATTERNS_LEGACY,
-    REGEX_PATTERNS_MODERN,
-)
+from aiida_epw.parsers.schemas import REGEX_PATTERNS_LEGACY, REGEX_PATTERNS_MODERN
 
 
 class EpwParser(BaseParser):
@@ -34,7 +29,6 @@ class EpwParser(BaseParser):
     class_error_map = {
         "Size of required memory exceeds max_memlt": "ERROR_MEMORY_EXCEEDS_MAX_MEMLT",
         "internal error, cannot bracket Ef": "ERROR_CANNOT_BRACKET_EF",
-        r"Error in routine mix_broyden \(\d+\):\s*factorization": "ERROR_FACTORIZATION",
     }
 
     @staticmethod
@@ -180,24 +174,24 @@ class EpwParser(BaseParser):
                 self.out(link_label, parser_func(contents))
 
         iso_gap_filecontents = self.get_retrieved_contents_matching(
-            re.compile(rf"{EpwCalculation._PREFIX}\.(imag|pade)_iso_\d+\.\d+$")
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_iso_\d+\.\d+$")
         )
         if iso_gap_filecontents:
             self.out(
                 "iso_gap_functions",
-                IsoGapData.from_files(
-                    iso_gap_filecontents, prefix=EpwCalculation._PREFIX
+                GapFunctionData.from_files(
+                    iso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="iso"
                 ),
             )
 
         aniso_gap_filecontents = self.get_retrieved_contents_matching(
-            re.compile(rf"{EpwCalculation._PREFIX}\.(imag|pade)_aniso_gap0_\d+\.\d+$")
+            re.compile(rf"{EpwCalculation._PREFIX}\.imag_aniso_gap0_\d+\.\d+$")
         )
         if aniso_gap_filecontents:
             self.out(
                 "aniso_gap_functions",
-                AnisoGap0Data.from_files(
-                    aniso_gap_filecontents, prefix=EpwCalculation._PREFIX
+                GapFunctionData.from_files(
+                    aniso_gap_filecontents, prefix=EpwCalculation._PREFIX, kind="aniso"
                 ),
             )
 
@@ -207,18 +201,7 @@ class EpwParser(BaseParser):
         if "Allen_Dynes_Tc" in parsed_data:
             parsed_data.setdefault("allen_dynes", parsed_data["Allen_Dynes_Tc"])
 
-        self.out("output_parameters", orm.Dict(self.clean_nans(parsed_data)))
-
-        if "ERROR_TEMPERATURE_OUT_OF_RANGE" in logs.error:
-            return self.exit(
-                self.exit_codes.get("ERROR_TEMPERATURE_OUT_OF_RANGE"), logs
-            )
-
-        if "ERROR_PADE_APPROXIMANTS" in logs.error:
-            return self.exit(self.exit_codes.get("ERROR_PADE_APPROXIMANTS"), logs)
-
-        if "ERROR_FACTORIZATION" in logs.error:
-            return self.exit(self.exit_codes.get("ERROR_FACTORIZATION"), logs)
+        self.out("output_parameters", orm.Dict(parsed_data))
 
         for exit_code in list(self.get_error_map().values()):
             if exit_code in logs.error:
@@ -230,23 +213,6 @@ class EpwParser(BaseParser):
             )
 
         return self.exit(logs=logs)
-
-    @staticmethod
-    def clean_nans(value):
-        """Recursively replace float('nan'), float('inf'), and float('-inf') in dictionaries/lists with None."""
-        import math
-
-        if isinstance(value, float):
-            if math.isnan(value) or math.isinf(value):
-                return None
-            return value
-        if isinstance(value, dict):
-            return {k: EpwParser.clean_nans(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [EpwParser.clean_nans(v) for v in value]
-        if isinstance(value, tuple):
-            return tuple(EpwParser.clean_nans(v) for v in value)
-        return value
 
     @staticmethod
     def parse_stdout(stdout, logs, code_version):
@@ -280,10 +246,10 @@ class EpwParser(BaseParser):
         stdout_lines = stdout.split("\n")
 
         for line_number, line in enumerate(stdout_lines):
-            for key, type_func, pattern in patterns:
-                match = pattern.search(line)
+            for entry in patterns:
+                match = entry.pattern.search(line)
                 if match:
-                    parsed_data[key] = type_func(match.group(1))
+                    parsed_data[entry.key] = entry.type_func(match.group(1))
 
             for (
                 data_key,
@@ -294,103 +260,6 @@ class EpwParser(BaseParser):
                     parsed_data[data_key] = block_parser(
                         "\n".join(stdout_lines[line_number:])
                     )
-
-        # Parse carrier mobility matrices (SERTA and iBTE)
-        from aiida_epw.tools.parsers import parse_transport_matrices
-        import numpy
-
-        # Identify SERTA block
-        serta_match = re.search(
-            r"BTE in the self-energy relaxation time approximation \(SERTA\)", stdout
-        )
-        # Identify BTE block (looking for standalone BTE header)
-        bte_match = re.search(r"\n\s+BTE\s*\n", stdout)
-
-        serta_idx = serta_match.start() if serta_match else -1
-        bte_idx = bte_match.start() if bte_match else -1
-
-        if serta_idx != -1:
-            end_serta = bte_idx if bte_idx > serta_idx else len(stdout)
-            serta_block = stdout[serta_idx:end_serta]
-            serta_data = parse_transport_matrices(serta_block)
-
-            for k, v in serta_data.items():
-                parsed_data[f"serta_{k}"] = v
-
-            # Maintain backward compatibility for mobility scalar
-            if "mobility" in serta_data:
-                parsed_data["mobility_SERTA"] = (
-                    numpy.trace(numpy.array(serta_data["mobility"])) / 3.0
-                )
-
-        if bte_idx != -1:
-            ibte_block = stdout[bte_idx:]
-            ibte_data = parse_transport_matrices(ibte_block)
-
-            for k, v in ibte_data.items():
-                parsed_data[f"ibte_{k}"] = v
-
-            # Maintain backward compatibility for mobility scalar
-            if "mobility" in ibte_data:
-                parsed_data["mobility_iBTE"] = (
-                    numpy.trace(numpy.array(ibte_data["mobility"])) / 3.0
-                )
-
-        # Parse Eliashberg temperature blocks
-        from aiida_epw.tools.parsers import parse_stdout_eliashberg
-
-        parsed_data.update(parse_stdout_eliashberg(stdout))
-
-        # Check for Pade approximation failure (NaN values under the pade table header)
-        pade_header_match = re.search(
-            r"pade\s+Re\[znorm\]\s+Re\[delta\]\s+\[meV\]\s+Re\[shift\]\s+\[meV\]",
-            stdout,
-        )
-        if pade_header_match:
-            start_idx = pade_header_match.end()
-            remaining = stdout[start_idx:].lstrip()
-            if remaining:
-                first_line = remaining.split("\n", 1)[0]
-                if "nan" in first_line.lower():
-                    logs.error.append("ERROR_PADE_APPROXIMANTS")
-
-        def get_last_finite_deltai(deltai):
-            for value in reversed(deltai):
-                if isinstance(value, (int, float)) and math.isfinite(value):
-                    return value
-            return None
-
-        def has_non_finite_iteration(iterations):
-            return any(
-                isinstance(value, (int, float)) and not math.isfinite(value)
-                for values in iterations.values()
-                for value in values
-            )
-
-        has_gap_collapse = False
-        has_iteration_failure = False
-        for eliashberg_key in ("isotropic_eliashberg", "anisotropic_eliashberg"):
-            if eliashberg_key not in parsed_data:
-                continue
-            for temp_data in parsed_data[eliashberg_key].values():
-                iterations = temp_data.get("iterations", {})
-                deltai = iterations.get("deltai", [])
-                last_finite_deltai = get_last_finite_deltai(deltai)
-                if last_finite_deltai is not None and abs(last_finite_deltai) < 1e-10:
-                    has_gap_collapse = True
-                if iterations and has_non_finite_iteration(iterations):
-                    has_iteration_failure = True
-
-        # Check for factorization / temperature out of range failure
-        has_factorization_error = re.search(
-            r"Error in routine mix_broyden \(\d+\):\s*factorization",
-            stdout,
-            re.IGNORECASE,
-        )
-        if has_gap_collapse and (has_factorization_error or has_iteration_failure):
-            logs.error.append("ERROR_TEMPERATURE_OUT_OF_RANGE")
-        elif has_factorization_error:
-            logs.error.append("ERROR_FACTORIZATION")
 
         return parsed_data, logs
 

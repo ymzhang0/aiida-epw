@@ -3,6 +3,7 @@ from aiida import orm
 from aiida.common import AttributeDict
 from pathlib import Path
 
+
 from aiida.engine import (
     BaseRestartWorkChain,
     ProcessHandlerReport,
@@ -65,11 +66,64 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
     if not any([_ in inputs for _ in ["qfpoints", "qfpoints_distance"]]):
         return "Either `qfpoints` or `qfpoints_distance` must be specified."
 
+    # Validation for new Eliashberg parameters
+    momentum_dependence = inputs.get("momentum_dependence", None)
+    full_bandwidth = inputs.get("full_bandwidth", None)
+    real_axis = inputs.get("real_axis", None)
+    analytical_continuation = inputs.get("analytical_continuation", None)
+
+    # 1. Validate analytical_continuation value
+    if analytical_continuation is not None:
+        ac_val = analytical_continuation.value
+        if ac_val.lower() not in ("pade", "acon", "none"):
+            return f"Invalid `analytical_continuation`: '{ac_val}' is not supported. Must be 'pade', 'acon', or 'none'."
+
+    # 2. Extract tc_linear from parameters
+    parameters = inputs.get("parameters", {})
+    if isinstance(parameters, orm.Dict):
+        parameters = parameters.get_dict()
+    inputepw = parameters.get("INPUTEPW", {})
+    tc_linear = inputepw.get("tc_linear", False)
+
+    # 3. Compatibility checks matching EPW's Fortran source code:
+    # - tc_linear cannot be used with lreal (real_axis=True) or laniso (momentum_dependence=True)
+    if tc_linear:
+        if real_axis is not None and real_axis.value:
+            return "Linearized Eliashberg (tc_linear=True) cannot be used with real_axis=True."
+        if momentum_dependence is not None and momentum_dependence.value:
+            return "Linearized Eliashberg (tc_linear=True) cannot be used with momentum_dependence=True (anisotropic)."
+        if full_bandwidth is not None and full_bandwidth.value:
+            return "Linearized Eliashberg (tc_linear=True) cannot be used with full_bandwidth=True."
+
+    # - lreal (real_axis=True) is implemented only for the isotropic case
+    if real_axis is not None and real_axis.value:
+        if momentum_dependence is not None and momentum_dependence.value:
+            return "Real axis solver (real_axis=True) is only implemented for the isotropic case (momentum_dependence=False)."
+
+    # - lpade (analytical_continuation) requires limag true (so real_axis must be False)
+    if real_axis is not None and real_axis.value:
+        if (
+            analytical_continuation is not None
+            and analytical_continuation.value.lower() != "none"
+        ):
+            return "Analytical continuation (analytical_continuation) cannot be used when solving on the real axis (real_axis=True)."
+
+    # - fbw (full_bandwidth=True) cannot be used with lacon (analytical_continuation="acon")
+    if full_bandwidth is not None and full_bandwidth.value:
+        if (
+            analytical_continuation is not None
+            and analytical_continuation.value.lower() == "acon"
+        ):
+            return "Analytic continuation method 'acon' is not implemented when full_bandwidth is True."
+
     return None
 
 
 class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
     """BaseWorkchain to run a epw.x calculation."""
+
+    _MAX_NSIW = 200
+    _MIN_NSIW = 20
 
     _process_class = EpwCalculation
 
@@ -136,6 +190,8 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 "[80, 80, 80]."
                 )
             )
+
+
 
         spec.input(
             "w90_chk_to_ukk_script",
@@ -220,6 +276,10 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         w90_chk_to_ukk_script=None,
         quadrupole_dir=None,
         protocol_filename="base.yaml",
+        momentum_dependence=None,
+        full_bandwidth=None,
+        real_axis=None,
+        analytical_continuation=None,
         **_,
     ):
         """Return a builder prepopulated with inputs selected according to the chosen protocol.
@@ -281,9 +341,91 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             else:
                 builder.quadrupole_dir = quadrupole_dir
 
+        if momentum_dependence is not None:
+            builder.momentum_dependence = to_aiida_type(momentum_dependence)
+        if full_bandwidth is not None:
+            builder.full_bandwidth = to_aiida_type(full_bandwidth)
+        if real_axis is not None:
+            builder.real_axis = to_aiida_type(real_axis)
+        if analytical_continuation is not None:
+            builder.analytical_continuation = to_aiida_type(analytical_continuation)
+        if "filirobj" in inputs:
+            builder.filirobj = to_aiida_type(inputs["filirobj"])
+
         # pylint: enable=no-member
 
         return builder
+
+    def get_additional_retrieve_list(self):
+        """Return additional files that should be retrieved for the configured EPW run."""
+        retrieve_list = []
+        parameters = self.ctx.inputs.parameters.get_dict()
+
+        if parameters.get("INPUTEPW", {}).get("band_plot"):
+            retrieve_list += [
+                self._process_class._output_elbands_file,
+                self._process_class._output_phbands_file,
+            ]
+
+        # Determine calculation type
+        calculation_type = None
+        if "calculation_type" in self.inputs:
+            calculation_type = self.inputs.calculation_type.get_member().value
+
+        if calculation_type == "eliashberg":
+            retrieve_list.append(self._process_class._OUTPUT_A2F_FILE)
+
+            # Determine whether it's a restart
+            is_restart = False
+            if "restart_type" in self.inputs:
+                restart_val = self.inputs.restart_type.get_member().value
+                if restart_val in ("ephread", "ephwrite_restart"):
+                    is_restart = True
+
+            if not is_restart:
+                retrieve_list.append(self._process_class._OUTPUT_A2F_PROJ_FILE)
+                retrieve_list.append(self._process_class._OUTPUT_PHDOS_FILE)
+                retrieve_list.append(self._process_class._OUTPUT_PHDOS_PROJ_FILE)
+                retrieve_list.append(
+                    Path(
+                        self._process_class._OUTPUT_SUBFOLDER,
+                        self._process_class._OUTPUT_DOS_FILE,
+                    ).as_posix()
+                )
+
+            # Determine whether anisotropic or isotropic files are produced
+            momentum_dependence = None
+            if "momentum_dependence" in self.inputs:
+                momentum_dependence = self.inputs.momentum_dependence.value
+            else:
+                momentum_dependence = parameters.get("INPUTEPW", {}).get(
+                    "laniso", False
+                )
+
+            input_epw = parameters.get("INPUTEPW", {})
+            if "real_axis" in self.inputs:
+                run_imaginary_axis = not self.inputs.real_axis.value
+            else:
+                run_imaginary_axis = input_epw.get("limag", False)
+
+            run_pade = input_epw.get("lpade", False)
+            if "analytical_continuation" in self.inputs:
+                run_pade = self.inputs.analytical_continuation.value.lower() == "pade"
+
+            if momentum_dependence:
+                retrieve_list.append(self._process_class._OUTPUT_LAMBDA_FS_FILE)
+                retrieve_list.append(self._process_class._OUTPUT_LAMBDA_K_PAIRS_FILE)
+                if run_imaginary_axis:
+                    retrieve_list.append("aiida.imag_aniso*")
+                if run_pade:
+                    retrieve_list.append("aiida.pade_aniso*")
+            else:
+                if run_imaginary_axis:
+                    retrieve_list.append("aiida.imag_iso_*")
+                if run_pade:
+                    retrieve_list.append("aiida.pade_iso_*")
+
+        return retrieve_list
 
     def setup(self):
         """Call the ``setup`` of the ``BaseRestartWorkChain`` and create the inputs dictionary in ``self.ctx.inputs``.
@@ -302,8 +444,6 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
 
         metadata["options"] = self.inputs.options.get_dict()
 
-        ## Didn't find the way to modify `metadata` in EpwCalculation.
-        ## It should be migrated into EpwCalculation in the future.
         if (
             "w90_chk_to_ukk_script" in self.inputs
             and "parent_folder_chk" in self.inputs
@@ -348,6 +488,16 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 )
 
         self.ctx.inputs.parameters = orm.Dict(parameters)
+
+        # Retrieve the additional files based on parameters and eliashberg_type
+        additional_retrieve = list(
+            metadata["options"].setdefault("additional_retrieve_list", [])
+        )
+        for item in self.get_additional_retrieve_list():
+            if item not in additional_retrieve:
+                additional_retrieve.append(item)
+        metadata["options"]["additional_retrieve_list"] = additional_retrieve
+        self.ctx.inputs.metadata = metadata
 
     # We should validate the kpoints and qpoints on the fly
     # because they are usually not determined at the creation of the inputs.
@@ -461,7 +611,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         self.report("{}<{}> failed with exit status {}: {}".format(*arguments))
         self.report(f"Action taken: {action}")
 
-    @process_handler(priority=600)
+    @process_handler(priority=10)
     def handle_unrecoverable_failure(self, calculation):
         """Handle calculations with an exit status below 400 which are unrecoverable, so abort the work chain."""
         if calculation.is_failed and calculation.exit_status < 400:
@@ -593,6 +743,245 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         # Could not diagnose or fix - let it fail
         self.report_error_handled(
             calculation, "Could not diagnose cause of exit code 312. Aborting."
+        )
+        return ProcessHandlerReport(
+            True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+        )
+
+    @process_handler(
+        priority=400,
+        exit_codes=[EpwCalculation.exit_codes.ERROR_PADE_APPROXIMANTS],
+    )
+    def handle_pade_approximants(self, calculation):
+        """Handle exit code 322 (Pade NaN failure) by reducing nsiw and popping successful temperatures."""
+        from aiida_epw.tools.workchain import pop_succeeded_temperatures
+
+        parameters = self.ctx.inputs.parameters.get_dict()
+        outputs = calculation.outputs.output_parameters.get_dict()
+
+        updated_params, succeeded_temps, remaining_temps, eliashberg_data = (
+            pop_succeeded_temperatures(parameters, outputs)
+        )
+
+        input_epw = parameters.get("INPUTEPW", {})
+
+        nsiw = None
+        for t in remaining_temps:
+            for k, data in eliashberg_data.items():
+                if abs(float(k) - t) < 1e-4:
+                    nsiw = data.get("nsiw")
+                    break
+            if nsiw is not None:
+                break
+
+        if nsiw is None:
+            nsiw = input_epw.get("nsiw")
+
+        current_npade = input_epw.get("npade", 90)
+
+        current_N = None
+        for t in remaining_temps:
+            for k, data in eliashberg_data.items():
+                if abs(float(k) - t) < 1e-4:
+                    current_N = data.get("pade", {}).get("nsiter")
+                    break
+            if current_N is not None:
+                break
+
+        if current_N is None and nsiw is not None:
+            fbw = input_epw.get("fbw", False)
+            positive_matsu = input_epw.get("positive_matsu", True)
+            if fbw and not positive_matsu:
+                current_N = int(current_npade * (nsiw / 2) / 100)
+            else:
+                current_N = int(current_npade * nsiw / 100)
+
+        target_npade = None
+        if current_N is not None and nsiw:
+            if current_N > self._MAX_NSIW:
+                target_N = self._MAX_NSIW
+            else:
+                target_N = max(self._MIN_NSIW, int(current_N * 0.5))
+
+            fbw = input_epw.get("fbw", False)
+            positive_matsu = input_epw.get("positive_matsu", True)
+            if fbw and not positive_matsu:
+                target_npade = int(target_N * 100 / (nsiw / 2))
+            else:
+                target_npade = int(target_N * 100 / nsiw)
+
+            target_npade = max(1, min(100, target_npade))
+            if target_npade == current_npade and current_npade > 1:
+                target_npade = max(1, current_npade - 5)
+
+        action_taken = ""
+        input_epw_new = updated_params.setdefault("INPUTEPW", {})
+
+        if target_npade is not None and target_npade != current_npade:
+            input_epw_new["npade"] = target_npade
+            action_taken += f"Reduced npade from {current_npade} to {target_npade}. "
+
+        if succeeded_temps:
+            action_taken += (
+                f"Removed successfully calculated temperatures: {succeeded_temps}. "
+            )
+
+        if not action_taken:
+            self.report_error_handled(
+                calculation,
+                "Cannot reduce npade further or pop temperatures. Aborting.",
+            )
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        try:
+            from aiida_epw.common.types import RestartType
+
+            self.ctx.inputs.restart_type = RestartType.EPHREAD
+        except ImportError:
+            input_epw_new["epwread"] = True
+
+        self.ctx.inputs.parameters = orm.Dict(updated_params)
+        self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
+
+        self.report_error_handled(calculation, action_taken)
+        return ProcessHandlerReport(True)
+
+    @process_handler(
+        priority=450,
+        exit_codes=[EpwCalculation.exit_codes.ERROR_TEMPERATURE_OUT_OF_RANGE],
+    )
+    def handle_temperature_out_of_range(self, calculation):
+        """Handle exit code 323 (Temperature out of range / phase transition reached).
+
+        Since the gap has converged to zero, we consider the physical calculation complete
+        and exit the workchain successfully.
+        """
+        self.ctx.is_finished = True
+        self.report_error_handled(
+            calculation,
+            "Temperature reached phase transition (delta converged to zero). Finishing workchain successfully.",
+        )
+        return ProcessHandlerReport(True)
+
+    @process_handler(
+        priority=650,
+        exit_codes=[
+            EpwCalculation.exit_codes.ERROR_OUT_OF_WALLTIME,
+            EpwCalculation.exit_codes.ERROR_SCHEDULER_OUT_OF_WALLTIME,
+        ],
+    )
+    def handle_out_of_walltime(self, calculation):
+        """Handle exit code 120 (scheduler walltime timeout) and 400 (software walltime timeout)."""
+        try:
+            from aiida_epw.common.types import CalculationTypes, RestartType
+
+            calculation_type = (
+                self.ctx.inputs.calculation_type.get_member()
+                if "calculation_type" in self.ctx.inputs
+                else None
+            )
+            restart_type = (
+                self.ctx.inputs.restart_type.get_member()
+                if "restart_type" in self.ctx.inputs
+                else None
+            )
+            is_valid_eliashberg_ephwrite = (
+                calculation_type == CalculationTypes.ELIASHBERG
+                and restart_type in (RestartType.EPHWRITE, RestartType.EPHWRITE_RESTART)
+            )
+            is_valid_eliashberg_ephread = (
+                calculation_type == CalculationTypes.ELIASHBERG
+                and restart_type == RestartType.EPHREAD
+            )
+            is_valid_eliashberg_wannierize = (
+                calculation_type == CalculationTypes.WANNIERIZE
+            )
+        except ImportError:
+            # Fallback for branches/environments where ports do not exist yet
+            parameters = self.ctx.inputs.parameters.get_dict()
+            input_epw = parameters.get("INPUTEPW", {})
+            is_eliashberg = input_epw.get("eliashberg", False)
+
+            is_valid_eliashberg_ephwrite = (
+                is_eliashberg
+                and input_epw.get("epwread", False)
+                and input_epw.get("ephwrite", True)
+            )
+            is_valid_eliashberg_ephread = (
+                is_eliashberg
+                and input_epw.get("epwread", False)
+                and not input_epw.get("ephwrite", True)
+            )
+            is_valid_eliashberg_wannierize = (
+                is_eliashberg
+                and input_epw.get("wannierize", False)
+                and not input_epw.get("epwread", False)
+            )
+
+        if is_valid_eliashberg_ephwrite:
+            # Set parent folder to the failed calculation's remote folder
+            self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
+
+            try:
+                from aiida_epw.common.types import RestartType
+
+                self.ctx.inputs.restart_type = RestartType.EPHWRITE_RESTART
+            except ImportError:
+                # Fallback: Modify the parameters to set restart = True
+                parameters = self.ctx.inputs.parameters.get_dict()
+                input_epw = parameters.setdefault("INPUTEPW", {})
+                input_epw["restart"] = True
+                self.ctx.inputs.parameters = orm.Dict(parameters)
+
+            self.report_error_handled(
+                calculation,
+                "Walltime reached during Eliashberg ephwrite calculation. Restarting from the last checkpoint.",
+            )
+            return ProcessHandlerReport(True)
+
+        elif is_valid_eliashberg_ephread:
+            from aiida_epw.tools.workchain import pop_succeeded_temperatures
+
+            parameters = self.ctx.inputs.parameters.get_dict()
+            outputs = calculation.outputs.output_parameters.get_dict()
+
+            updated_params, succeeded_temps, remaining_temps, _ = (
+                pop_succeeded_temperatures(parameters, outputs)
+            )
+
+            if succeeded_temps:
+                self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
+                self.ctx.inputs.parameters = orm.Dict(updated_params)
+                self.report_error_handled(
+                    calculation,
+                    f"Walltime reached during Eliashberg ephread calculation. "
+                    f"Removed successfully calculated temperatures: {succeeded_temps}. Restarting.",
+                )
+                return ProcessHandlerReport(True)
+            else:
+                self.report_error_handled(
+                    calculation,
+                    "Walltime reached during Eliashberg ephread calculation but no temperatures finished. Aborting.",
+                )
+                return ProcessHandlerReport(
+                    True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+                )
+
+        elif is_valid_eliashberg_wannierize:
+            self.report_error_handled(
+                calculation,
+                "Walltime reached during Wannierization. Resuming Wannierization via epbread is not implemented yet. Aborting.",
+            )
+            return ProcessHandlerReport(
+                True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
+            )
+
+        # For other cases, do not handle (let it fail/abort)
+        self.report_error_handled(
+            calculation,
+            "Walltime reached but this calculation/restart type is not supported for auto-recovery. Aborting.",
         )
         return ProcessHandlerReport(
             True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE

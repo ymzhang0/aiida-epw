@@ -1,14 +1,17 @@
 """Work chain for computing the critical temperature based on an `EpwWorkChain`."""
 
-from scipy.interpolate import interp1d
-
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, while_, if_, append_
 
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
+from aiida_epw.calculations.epw import (
+    serialize_calculation_type,
+    serialize_restart_type,
+)
 from aiida_epw.workflows.base import EpwBaseWorkChain
+from aiida_epw.tools.workchain import set_auto_temps
 
 from aiida.engine import calcfunction
 
@@ -34,20 +37,13 @@ def split_list(list_node: orm.List) -> dict:
     return {f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())}
 
 
-@calcfunction
-def calculate_tc(max_eigenvalue: orm.XyData) -> orm.Float:
-    me_array = max_eigenvalue.get_array("max_eigenvalue")
-    try:
-        return orm.Float(float(interp1d(me_array[:, 1], me_array[:, 0])(1.0)))
-    except ValueError:
-        return orm.Float(40.0)
-
-
 class SuperConWorkChain(ProtocolMixin, WorkChain):
     """This workchain will run a series of `EpwBaseWorkChain`s in interpolation mode to converge
     the Allen-Dynes Tc according to the interpolation distance, if converged or forced by `always_run_final`,
     it will then run the final isotropic and anisotropic `EpwBaseWorkChain`s to compute the
     critical temperature solving the isotropic and anisotropic Migdal-Eliashberg equations."""
+
+    DEFAULT_FILIROBJ = "ir_nlambda6_ndigit8.dat"
 
     @classmethod
     def define(cls, spec):
@@ -119,6 +115,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_chk",
                 "qfpoints",
                 "kfpoints",
+                "calculation_type",
+                "restart_type",
             ),
             namespace_options={
                 "help": (
@@ -137,6 +135,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_chk",
                 "qfpoints_distance",
                 "kfpoints_factor",
+                "calculation_type",
+                "restart_type",
             ),
             namespace_options={
                 "help": (
@@ -155,6 +155,8 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_chk",
                 "qfpoints_distance",
                 "kfpoints_factor",
+                "calculation_type",
+                "restart_type",
             ),
             namespace_options={
                 "help": (
@@ -169,6 +171,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 cls.run_conv,
                 cls.inspect_conv,
             ),
+            cls.inspect_interpolation,
             if_(cls.should_run_final)(
                 cls.run_final_epw_iso,
                 cls.inspect_final_epw_iso,
@@ -182,17 +185,6 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             valid_type=orm.Dict,
             help="The `output_parameters` output node of the final EPW calculation.",
         )
-        spec.output(
-            "max_eigenvalue",
-            valid_type=orm.XyData,
-            help="The temperature dependence of the max eigenvalue for the final EPW.",
-        )
-        spec.output(
-            "a2f",
-            valid_type=orm.XyData,
-            help="The contents of the `.a2f` file for the final EPW.",
-        )
-        spec.output("Tc_iso", valid_type=orm.Float, help="The critical temperature.")
 
         spec.exit_code(
             401,
@@ -271,14 +263,43 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             pass
 
         for epw_namespace in ("epw_interp", "epw_final_iso", "epw_final_aniso"):
-            epw_inputs = inputs.get(epw_namespace, None)
+            epw_inputs = inputs.get(epw_namespace, None) or {}
+
+            # Hardcode momentum_dependence: True for final anisotropic run, False otherwise
+            momentum_dependence = True if epw_namespace == "epw_final_aniso" else False
+
+            # Default full_bandwidth is True for final calculations (fbw instead of fsr)
+            default_fbw = (
+                True if epw_namespace in ("epw_final_iso", "epw_final_aniso") else False
+            )
+            full_bandwidth = epw_inputs.pop("full_bandwidth", default_fbw)
+
+            real_axis = epw_inputs.pop("real_axis", False)
+            analytical_continuation = epw_inputs.pop("analytical_continuation", None)
+            epw_inputs.pop("calculation_type", None)
+            epw_inputs.pop("restart_type", None)
+
+            # Check which input ports are supported by EpwBaseWorkChain dynamically for cross-branch compatibility
+            base_inputs = EpwBaseWorkChain.spec().inputs
+            kwargs = {}
+            if "momentum_dependence" in base_inputs:
+                kwargs["momentum_dependence"] = momentum_dependence
+            if "full_bandwidth" in base_inputs:
+                kwargs["full_bandwidth"] = full_bandwidth
+            if "real_axis" in base_inputs:
+                kwargs["real_axis"] = real_axis
+            if "analytical_continuation" in base_inputs:
+                kwargs["analytical_continuation"] = analytical_continuation
 
             epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
                 code=epw_code,
                 structure=structure,
                 protocol=protocol,
                 overrides=epw_inputs,
+                **kwargs,
             )
+            if epw_namespace == "epw_final_aniso" and "filirobj" not in epw_builder:
+                epw_builder.filirobj = orm.Str(cls.DEFAULT_FILIROBJ)
 
             if epw_namespace == "epw_interp" and scon_epw_code is not None:
                 epw_builder.code = scon_epw_code
@@ -374,6 +395,9 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         inputs.kfpoints_factor = self.inputs.epw_interp.kfpoints_factor
         inputs.qfpoints_distance = self.ctx.interpolation_list.pop()
 
+        inputs.calculation_type = serialize_calculation_type("eliashberg")
+        inputs.restart_type = serialize_restart_type("ephwrite")
+
         if self.ctx.degaussq:
             parameters = inputs.parameters.get_dict()
             parameters["INPUTEPW"]["degaussq"] = self.ctx.degaussq
@@ -413,31 +437,37 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 frequency = workchain.outputs.a2f.get_array("frequency")
                 self.ctx.degaussq = frequency[-1] / 100
 
-    def should_run_final(self):
-        """Check if the final EpwBaseWorkChain should be run."""
+    def inspect_interpolation(self):
+        """Verify that the interpolation stage produced a usable result."""
         if not self.ctx.epw_interp:
             self.report(
                 "Allen-Dynes interpolation was not successful, epw_interp list is empty."
             )
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_INTERP
 
-        if self.ctx.is_converged or self.inputs.always_run_final.value:
-            return True
-        else:
+        if not (self.ctx.is_converged or self.inputs.always_run_final.value):
             self.report("Allen-Dynes Tc is not converged.")
             return self.exit_codes.ERROR_ALLEN_DYNES_NOT_CONVERGED
+
+    def should_run_final(self):
+        """Check if the final EpwBaseWorkChain should be run."""
+        return self.ctx.is_converged or self.inputs.always_run_final.value
 
     def run_final_epw_iso(self):
         """Run the final EpwBaseWorkChain in isotropic mode."""
         inputs = AttributeDict(
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_final_iso")
         )
+        set_auto_temps(inputs, self.ctx.epw_interp[-1])
 
         inputs.structure = self.inputs.structure
         parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
         inputs.parent_folder_epw = parent_folder_epw
         inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
         inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
+
+        inputs.calculation_type = serialize_calculation_type("eliashberg")
+        inputs.restart_type = serialize_restart_type("ephread")
 
         if self.ctx.degaussq:
             parameters = inputs.parameters.get_dict()
@@ -468,12 +498,16 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         inputs = AttributeDict(
             self.exposed_inputs(EpwBaseWorkChain, namespace="epw_final_aniso")
         )
+        set_auto_temps(inputs, self.ctx.epw_interp[-1])
 
         inputs.structure = self.inputs.structure
         parent_folder_epw = self.ctx.epw_interp[-1].outputs.remote_folder
         inputs.parent_folder_epw = parent_folder_epw
         inputs.kfpoints = parent_folder_epw.creator.inputs.kfpoints
         inputs.qfpoints = parent_folder_epw.creator.inputs.qfpoints
+
+        inputs.calculation_type = serialize_calculation_type("eliashberg")
+        inputs.restart_type = serialize_restart_type("ephread")
 
         inputs.metadata.call_link_label = "epw_final_aniso"
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
@@ -495,10 +529,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
 
     def results(self):
         """TODO"""
-        self.out("Tc_iso", calculate_tc(self.ctx.final_epw_iso.outputs.max_eigenvalue))
         self.out("parameters", self.ctx.final_epw_iso.outputs.output_parameters)
-        self.out("max_eigenvalue", self.ctx.final_epw_iso.outputs.max_eigenvalue)
-        self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""

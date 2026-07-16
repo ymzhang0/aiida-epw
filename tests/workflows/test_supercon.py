@@ -151,18 +151,16 @@ def test_supercon_get_builder_from_protocol_base_failure(
         )
 
 
-def test_supercon_should_run_final():
-    """Test should_run_final with different states of epw_interp and convergence."""
+def test_supercon_inspect_interpolation():
+    """Test interpolation inspection before final workchains are considered."""
     from aiida_epw.workflows.supercon import SuperConWorkChain
     from types import SimpleNamespace
     from aiida.common.extendeddicts import AttributeDict
 
-    # Mock exit codes
     class FakeExitCodes:
         ERROR_SUB_PROCESS_EPW_INTERP = "ERROR_SUB_PROCESS_EPW_INTERP"
         ERROR_ALLEN_DYNES_NOT_CONVERGED = "ERROR_ALLEN_DYNES_NOT_CONVERGED"
 
-    # Define fake workchain helper
     def make_fake_workchain(epw_interp_list, is_converged, always_run_final):
         reports = []
         ctx = SimpleNamespace(
@@ -182,27 +180,329 @@ def test_supercon_should_run_final():
             reports=reports,
         )
 
-    # 1. epw_interp is empty -> should return ERROR_SUB_PROCESS_EPW_INTERP
     wc1 = make_fake_workchain(
         epw_interp_list=[], is_converged=True, always_run_final=True
     )
-    assert SuperConWorkChain.should_run_final(wc1) == "ERROR_SUB_PROCESS_EPW_INTERP"
+    assert (
+        SuperConWorkChain.inspect_interpolation(wc1) == "ERROR_SUB_PROCESS_EPW_INTERP"
+    )
     assert "empty" in wc1.reports[0]
 
-    # 2. epw_interp is not empty, converged -> should return True
     wc2 = make_fake_workchain(
         epw_interp_list=[object()], is_converged=True, always_run_final=False
     )
-    assert SuperConWorkChain.should_run_final(wc2) is True
+    assert SuperConWorkChain.inspect_interpolation(wc2) is None
 
-    # 3. epw_interp is not empty, not converged but always_run_final is True -> should return True
     wc3 = make_fake_workchain(
         epw_interp_list=[object()], is_converged=False, always_run_final=True
     )
-    assert SuperConWorkChain.should_run_final(wc3) is True
+    assert SuperConWorkChain.inspect_interpolation(wc3) is None
 
-    # 4. epw_interp is not empty, not converged, always_run_final is False -> should return ERROR_ALLEN_DYNES_NOT_CONVERGED
     wc4 = make_fake_workchain(
         epw_interp_list=[object()], is_converged=False, always_run_final=False
     )
-    assert SuperConWorkChain.should_run_final(wc4) == "ERROR_ALLEN_DYNES_NOT_CONVERGED"
+    assert (
+        SuperConWorkChain.inspect_interpolation(wc4)
+        == "ERROR_ALLEN_DYNES_NOT_CONVERGED"
+    )
+    assert "not converged" in wc4.reports[0]
+
+
+def test_supercon_should_run_final():
+    """Test final-workchain gating after interpolation inspection."""
+    from aiida_epw.workflows.supercon import SuperConWorkChain
+    from types import SimpleNamespace
+    from aiida.common.extendeddicts import AttributeDict
+
+    def make_fake_workchain(is_converged, always_run_final):
+        ctx = SimpleNamespace(is_converged=is_converged)
+        inputs = AttributeDict(
+            {
+                "always_run_final": SimpleNamespace(value=always_run_final),
+            }
+        )
+        return SimpleNamespace(inputs=inputs, ctx=ctx)
+
+    wc1 = make_fake_workchain(is_converged=True, always_run_final=False)
+    assert SuperConWorkChain.should_run_final(wc1) is True
+
+    wc2 = make_fake_workchain(is_converged=False, always_run_final=True)
+    assert SuperConWorkChain.should_run_final(wc2) is True
+
+    wc3 = make_fake_workchain(is_converged=False, always_run_final=False)
+    assert SuperConWorkChain.should_run_final(wc3) is False
+
+
+def test_supercon_get_builder_from_protocol_default(
+    fixture_code,
+    generate_structure,
+    generate_remote_data,
+    fixture_localhost,
+):
+    """Test get_builder_from_protocol for SuperConWorkChain builds all namespaces with hardcoded defaults."""
+    from aiida_epw.workflows.supercon import SuperConWorkChain
+
+    epw_code = fixture_code("epw.epw")
+    structure = generate_structure()
+    remote_stash = generate_remote_data(fixture_localhost, "/tmp/remote_stash")
+
+    # Mock the EpwBaseWorkChain parent node
+    parent_epw = MagicMock()
+    parent_epw.process_label = "EpwBaseWorkChain"
+    parent_epw.inputs = MagicMock()
+    parent_epw.inputs.structure = structure
+    parent_epw.inputs.code = epw_code
+    parent_epw.inputs.kpoints = orm.KpointsData()
+    parent_epw.inputs.qpoints = orm.KpointsData()
+    parent_epw.outputs = MagicMock()
+    parent_epw.outputs.remote_stash = remote_stash
+
+    builder = SuperConWorkChain.get_builder_from_protocol(
+        epw_code=epw_code,
+        parent_epw=parent_epw,
+        protocol="fast",
+    )
+    assert "code" in builder.epw_interp
+    assert "code" in builder.epw_final_iso
+    assert "code" in builder.epw_final_aniso
+    # epw_final_iso check
+    if "momentum_dependence" in builder.epw_final_iso:
+        assert not builder.epw_final_iso.momentum_dependence.value
+        if "full_bandwidth" in builder.epw_final_iso:
+            assert builder.epw_final_iso.full_bandwidth.value
+        assert not builder.epw_final_iso.real_axis.value
+    assert (
+        builder.epw_final_iso.parameters.get_dict()["INPUTEPW"].get("tc_linear", False)
+        is False
+    )
+    # epw_final_aniso check
+    if "momentum_dependence" in builder.epw_final_aniso:
+        assert builder.epw_final_aniso.momentum_dependence.value
+        if "full_bandwidth" in builder.epw_final_aniso:
+            assert builder.epw_final_aniso.full_bandwidth.value
+        assert not builder.epw_final_aniso.real_axis.value
+    assert builder.epw_final_aniso.filirobj.value == "ir_nlambda6_ndigit8.dat"
+
+
+def test_epw_base_eliashberg_params(fixture_code, generate_structure):
+    """Test that EpwBaseWorkChain correctly resolves Eliashberg parameters in get_builder_from_protocol, setup, and validate_inputs."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    from aiida.common import AttributeDict
+
+    epw_code = fixture_code("epw.epw")
+    structure = generate_structure()
+
+    # 1. Test builder creation with new flags
+    builder = EpwBaseWorkChain.get_builder_from_protocol(
+        code=epw_code,
+        structure=structure,
+        protocol="fast",
+        momentum_dependence=True,
+        full_bandwidth=False,
+        real_axis=False,
+        analytical_continuation="pade",
+    )
+    assert builder.momentum_dependence.value
+    assert not builder.full_bandwidth.value
+    assert not builder.real_axis.value
+    assert builder.analytical_continuation.value == "pade"
+
+    # 2. Test input validation checks
+    # - validate incorrect analytical_continuation value
+    inputs_invalid_ac = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "analytical_continuation": orm.Str("invalid_method"),
+    }
+    assert (
+        "Invalid `analytical_continuation`"
+        in EpwBaseWorkChain.spec().inputs.validator(inputs_invalid_ac)
+    )
+
+    # - validate linearized Eliashberg constraints (tc_linear=True with real_axis=True)
+    inputs_tc_real = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "real_axis": orm.Bool(True),
+        "parameters": orm.Dict(dict={"INPUTEPW": {"tc_linear": True}}),
+    }
+    assert (
+        "Linearized Eliashberg (tc_linear=True) cannot be used with real_axis=True"
+        in EpwBaseWorkChain.spec().inputs.validator(inputs_tc_real)
+    )
+
+    # - validate linearized Eliashberg constraints (tc_linear=True with momentum_dependence=True)
+    inputs_tc_aniso = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "momentum_dependence": orm.Bool(True),
+        "parameters": orm.Dict(dict={"INPUTEPW": {"tc_linear": True}}),
+    }
+    assert (
+        "Linearized Eliashberg (tc_linear=True) cannot be used with momentum_dependence=True"
+        in EpwBaseWorkChain.spec().inputs.validator(inputs_tc_aniso)
+    )
+
+    # - validate real_axis anisotropic solver constraint (real_axis=True with momentum_dependence=True)
+    inputs_real_aniso = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "real_axis": orm.Bool(True),
+        "momentum_dependence": orm.Bool(True),
+    }
+    assert (
+        "Real axis solver (real_axis=True) is only implemented for the isotropic case"
+        in EpwBaseWorkChain.spec().inputs.validator(inputs_real_aniso)
+    )
+
+    # - validate continuation and real_axis mutual exclusivity
+    inputs_real_ac = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "real_axis": orm.Bool(True),
+        "analytical_continuation": orm.Str("pade"),
+    }
+    assert (
+        "Analytical continuation (analytical_continuation) cannot be used when solving on the real axis"
+        in EpwBaseWorkChain.spec().inputs.validator(inputs_real_ac)
+    )
+
+    # - validate that 'none' continuation and real_axis are allowed together
+    inputs_real_ac_none = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "real_axis": orm.Bool(True),
+        "analytical_continuation": orm.Str("none"),
+    }
+    assert EpwBaseWorkChain.spec().inputs.validator(inputs_real_ac_none) is None
+
+    # - validate full_bandwidth and ACON mutual exclusivity
+    inputs_fbw_acon = {
+        "kfpoints_factor": orm.Int(2),
+        "qfpoints_distance": orm.Float(0.1),
+        "full_bandwidth": orm.Bool(True),
+        "analytical_continuation": orm.Str("acon"),
+    }
+    assert (
+        "Analytic continuation method 'acon' is not implemented when full_bandwidth is True"
+        in EpwBaseWorkChain.spec().inputs.validator(inputs_fbw_acon)
+    )
+
+    # 3. Test setup method logic by executing a mock workchain setup
+    class MockWorkChain(EpwBaseWorkChain):
+        @property
+        def inputs(self):
+            return self._inputs_dict
+
+        @inputs.setter
+        def inputs(self, value):
+            self._inputs_dict = value
+
+        @property
+        def ctx(self):
+            return self._ctx_dict
+
+        @ctx.setter
+        def ctx(self, value):
+            self._ctx_dict = value
+
+        def setup(self):
+            # Call the actual setup logic from EpwBaseWorkChain
+            EpwBaseWorkChain.setup(self)
+
+    # Mock BaseRestartWorkChain.setup which is super().setup()
+    import unittest.mock
+
+    with unittest.mock.patch(
+        "aiida.engine.BaseRestartWorkChain.setup", return_value=None
+    ):
+        from aiida_epw.calculations.epw import serialize_calculation_type
+
+        # Test isotropic imaginary axis with Pade continuation
+        inputs_iso = {
+            "code": epw_code,
+            "structure": structure,
+            "momentum_dependence": orm.Bool(False),
+            "real_axis": orm.Bool(False),
+            "analytical_continuation": orm.Str("pade"),
+            "calculation_type": serialize_calculation_type("eliashberg"),
+            "options": orm.Dict(dict={"resources": {"num_machines": 1}}),
+            "parameters": orm.Dict(dict={"INPUTEPW": {}}),
+        }
+        wc_iso = MockWorkChain.__new__(MockWorkChain)
+        wc_iso.inputs = AttributeDict(inputs_iso)
+        wc_iso.ctx = AttributeDict()
+        wc_iso.exposed_inputs = lambda *args, **kwargs: AttributeDict(inputs_iso)
+        wc_iso.setup()
+
+        assert not wc_iso.ctx.inputs.momentum_dependence.value
+        assert not wc_iso.ctx.inputs.real_axis.value
+        assert wc_iso.ctx.inputs.analytical_continuation.value == "pade"
+        assert (
+            "aiida.imag_iso_*"
+            in wc_iso.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+        assert (
+            "aiida.pade_iso_*"
+            in wc_iso.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+
+        # Test anisotropic imaginary axis (FSR-like)
+        inputs_fsr = {
+            "code": epw_code,
+            "structure": structure,
+            "momentum_dependence": orm.Bool(True),
+            "full_bandwidth": orm.Bool(False),
+            "real_axis": orm.Bool(False),
+            "analytical_continuation": orm.Str("pade"),
+            "calculation_type": serialize_calculation_type("eliashberg"),
+            "options": orm.Dict(dict={"resources": {"num_machines": 1}}),
+            "parameters": orm.Dict(dict={"INPUTEPW": {}}),
+        }
+        wc_fsr = MockWorkChain.__new__(MockWorkChain)
+        wc_fsr.inputs = AttributeDict(inputs_fsr)
+        wc_fsr.ctx = AttributeDict()
+        wc_fsr.exposed_inputs = lambda *args, **kwargs: AttributeDict(inputs_fsr)
+        wc_fsr.setup()
+
+        assert wc_fsr.ctx.inputs.momentum_dependence.value
+        assert not wc_fsr.ctx.inputs.full_bandwidth.value
+        assert not wc_fsr.ctx.inputs.real_axis.value
+        assert (
+            "aiida.imag_aniso*"
+            in wc_fsr.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+        assert (
+            "aiida.pade_aniso*"
+            in wc_fsr.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+        assert (
+            "aiida.lambda_FS"
+            in wc_fsr.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+        assert (
+            "aiida.lambda_k_pairs"
+            in wc_fsr.ctx.inputs.metadata["options"]["additional_retrieve_list"]
+        )
+
+
+def test_epw_base_restart_types(fixture_code, generate_structure):
+    """Test that EpwBaseWorkChain exposes restart_type and calculation_type from EpwCalculation."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    from aiida_epw.common import RestartType, CalculationTypes
+
+    epw_code = fixture_code("epw.epw")
+    structure = generate_structure()
+
+    builder = EpwBaseWorkChain.get_builder_from_protocol(
+        code=epw_code,
+        structure=structure,
+        protocol="fast",
+    )
+
+    # We should be able to set and access restart_type and calculation_type on the builder
+    builder.restart_type = RestartType.EPHWRITE
+    assert builder.restart_type == RestartType.EPHWRITE
+
+    builder.calculation_type = CalculationTypes.WANNIERIZE
+    assert builder.calculation_type == CalculationTypes.WANNIERIZE

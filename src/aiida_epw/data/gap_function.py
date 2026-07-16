@@ -12,18 +12,6 @@ def _temperature_label(temperature):
     return f"{float(temperature):06.2f}".replace(".", "_")
 
 
-def _read_file_contents(file_contents_or_paths):
-    """Return a filename-to-content mapping from paths or an existing mapping."""
-    if isinstance(file_contents_or_paths, dict):
-        return file_contents_or_paths
-
-    file_contents = {}
-    for filepath in file_contents_or_paths:
-        path = Path(filepath)
-        file_contents[path.name] = path.read_text(encoding="utf-8")
-    return file_contents
-
-
 class _RaggedGapData(orm.ArrayData):
     """Store gap output tables without assuming equal row counts across temperatures."""
 
@@ -212,9 +200,7 @@ class IsoGapData(_RaggedGapData):
 
         node = cls()
         node.set_gap_data(
-            parse_epw_iso_gap_files(
-                _read_file_contents(file_contents_or_paths), prefix=prefix
-            )
+            parse_epw_iso_gap_files(file_contents_or_paths, prefix=prefix)
         )
         return node
 
@@ -288,9 +274,7 @@ class AnisoGap0Data(_RaggedGapData):
 
         node = cls()
         node.set_gap_data(
-            parse_epw_aniso_gap0_files(
-                _read_file_contents(file_contents_or_paths), prefix=prefix
-            )
+            parse_epw_aniso_gap0_files(file_contents_or_paths, prefix=prefix)
         )
         return node
 

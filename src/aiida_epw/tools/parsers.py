@@ -8,6 +8,17 @@ import numpy
 Ry2eV = 13.605662285137
 
 
+def preprocess_fortran_floats(content_str):
+    """Replace Fortran scientific formats (e.g. 1.0+100, 1.0d-100) to python compatible floats."""
+    if not content_str:
+        return ""
+    # Replace D/d exponent characters to e
+    content_str = re.sub(r"(?<=[0-9])[dD](?=[+-]?[0-9])", "e", content_str)
+    # Replace sign exponent without E (e.g. 1.23+100 -> 1.23e+100)
+    content_str = re.sub(r"(?<=[0-9])(?=[+-][0-9])", "e", content_str)
+    return content_str
+
+
 def parse_epw_bands(file_content):
     """Parse the contents of a `band.eig`-style EPW bands file."""
     header_match = re.search(r"&plot nbnd=\s+(\d+), nks=\s+(\d+)", file_content)
@@ -150,7 +161,11 @@ def parse_epw_max_eigenvalue(file_content):
 def parse_epw_dos(file_content):
     """Parse the contents of the electronic DOS file produced by EPW."""
     try:
-        dos = numpy.loadtxt(io.StringIO(file_content), dtype=float, comments="#")
+        dos = numpy.loadtxt(
+            io.StringIO(preprocess_fortran_floats(file_content)),
+            dtype=float,
+            comments="#",
+        )
     except Exception as exc:
         raise ValueError(
             f"Malformed electronic DOS file: Failed to load tabular data: {exc}"
@@ -184,7 +199,11 @@ def parse_epw_phdos(file_content):
     num_smearings = int(smearing_match.group(1))
 
     try:
-        phdos = numpy.loadtxt(io.StringIO(file_content), dtype=float, skiprows=1)
+        phdos = numpy.loadtxt(
+            io.StringIO(preprocess_fortran_floats(file_content)),
+            dtype=float,
+            skiprows=1,
+        )
     except Exception as exc:
         raise ValueError(
             f"Malformed phonon DOS file: Failed to load tabular data: {exc}"
@@ -327,25 +346,73 @@ def _parse_epw_lambda_distribution(file_content, file_label, *, x_key, y_key):
     }
 
 
-def parse_epw_iso_gap_files(file_contents, prefix="aiida"):
+def _get_files_from_folder(folder):
+    """Yield tuples of (filename, open_callable) from pathlib.Path, FolderData, or dict."""
+    import pathlib
+
+    if isinstance(folder, (str, pathlib.Path)):
+        path = pathlib.Path(folder)
+        if not path.is_dir():
+            raise ValueError(f"Path '{folder}' is not a directory.")
+        # pathlib.Path.walk is standard in Python 3.12+
+        if hasattr(path, "walk"):
+            for root, _, filenames in path.walk():
+                for name in filenames:
+                    yield name, lambda n=name, r=root: (r / n).open("r")
+        else:
+            for p in path.rglob("*"):
+                if p.is_file():
+                    yield p.name, lambda file_path=p: file_path.open("r")
+
+    elif hasattr(folder, "walk") and hasattr(folder, "open"):
+        # AiiDA FolderData (which implements walk and open methods)
+        for root, _, filenames in folder.walk():
+            for name in filenames:
+                rel_path = (root / name).as_posix()
+                yield name, lambda rp=rel_path: folder.open(rp, "r")
+
+    elif isinstance(folder, (list, tuple)):
+        for p in folder:
+            path = pathlib.Path(p)
+            yield path.name, lambda file_path=path: file_path.open("r")
+
+    elif isinstance(folder, dict):
+        for name, content in folder.items():
+            if isinstance(content, bytes):
+                content = content.decode("utf-8")
+            yield name, lambda c=content: io.StringIO(c)
+
+    else:
+        raise TypeError(f"Unsupported folder type: {type(folder)}")
+
+
+def parse_epw_iso_gap_files(folder, prefix="aiida"):
     """Parse isotropic EPW gap-function files.
 
-    :param file_contents: mapping of file names to file contents.
+    :param folder: pathlib.Path, orm.FolderData, dict, or list containing the output files.
     :param prefix: the prefix of the gap files.
     :returns: dictionary keyed by `(source, temperature)` with named column arrays.
     """
-    if not file_contents:
+    if not folder:
         raise ValueError("No gap-function file contents provided.")
     parsed_data = {}
-    pattern_iso = re.compile(rf"^{prefix}\.(imag|pade)_iso_(\d{{3}}\.\d{{2}})$")
+    pattern_iso = re.compile(
+        rf"^{prefix}\.(imag|real|pade|acon)_iso_(\d{{3}}\.\d{{2}})$"
+    )
 
-    for filename, file_content in file_contents.items():
+    for filename, open_file in _get_files_from_folder(folder):
         match = pattern_iso.match(filename)
         if match:
             source = match.group(1)
             temperature = float(match.group(2))
             try:
-                table = _load_numeric_table(file_content, comments="#", skiprows=1)
+                with open_file() as handle:
+                    file_content = handle.read()
+                table = _load_numeric_table(
+                    preprocess_fortran_floats(file_content),
+                    comments="#",
+                    skiprows=1,
+                )
             except Exception as exc:
                 raise ValueError(
                     f"Failed to parse gap function file {filename}: {exc}"
@@ -356,43 +423,48 @@ def parse_epw_iso_gap_files(file_contents, prefix="aiida"):
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.(imag|pade)_iso_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.(imag|real|pade|acon)_iso_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
-def parse_epw_imag_iso(file_contents, prefix="aiida"):
+def parse_epw_imag_iso(folder, prefix="aiida"):
     """Parse isotropic imaginary-axis gap files."""
     return {
         temperature: columns
         for (source, temperature), columns in parse_epw_iso_gap_files(
-            file_contents, prefix=prefix
+            folder, prefix=prefix
         ).items()
         if source == "imag"
     }
 
 
-def parse_epw_aniso_gap0_files(file_contents, prefix="aiida"):
+def parse_epw_aniso_gap0_files(folder, prefix="aiida"):
     """Parse anisotropic EPW gap0 distribution files.
 
-    :param file_contents: mapping of file names to file contents.
+    :param folder: pathlib.Path, orm.FolderData, dict, or list containing the output files.
     :param prefix: the prefix of the gap files.
     :returns: dictionary keyed by `(source, temperature)` with named column arrays.
     """
-    if not file_contents:
+    if not folder:
         raise ValueError("No gap-function file contents provided.")
     parsed_data = {}
     pattern_aniso_gap0 = re.compile(
-        rf"^{prefix}\.(imag|pade)_aniso_gap0_(\d{{3}}\.\d{{2}})$"
+        rf"^{prefix}\.(imag|real|pade|acon)_aniso_gap0_(\d{{3}}\.\d{{2}})$"
     )
 
-    for filename, file_content in file_contents.items():
+    for filename, open_file in _get_files_from_folder(folder):
         match = pattern_aniso_gap0.match(filename)
         if match:
             source = match.group(1)
             temperature = float(match.group(2))
             try:
-                table = _load_numeric_table(file_content, comments="#")
+                with open_file() as handle:
+                    file_content = handle.read()
+                table = _load_numeric_table(
+                    preprocess_fortran_floats(file_content),
+                    comments="#",
+                )
             except Exception as exc:
                 raise ValueError(
                     f"Failed to parse gap function file {filename}: {exc}"
@@ -411,17 +483,17 @@ def parse_epw_aniso_gap0_files(file_contents, prefix="aiida"):
 
     if not parsed_data:
         raise ValueError(
-            f"No files matching the template '{prefix}.(imag|pade)_aniso_gap0_XXX.XX' were parsed successfully."
+            f"No files matching the template '{prefix}.(imag|real|pade|acon)_aniso_gap0_XXX.XX' were parsed successfully."
         )
     return parsed_data
 
 
-def parse_epw_imag_aniso_gap0(file_contents, prefix="aiida"):
+def parse_epw_imag_aniso_gap0(folder, prefix="aiida"):
     """Parse anisotropic imaginary-axis gap0 distribution files."""
     return {
         temperature: columns
         for (source, temperature), columns in parse_epw_aniso_gap0_files(
-            file_contents, prefix=prefix
+            folder, prefix=prefix
         ).items()
         if source == "imag"
     }
@@ -466,90 +538,137 @@ def _columns_from_iso_gap_table(table, filename):
     )
 
 
-def parse_aniso_FS(file_content):
-    """Parse the contents of the `imag_aniso_gap_FS` file.
+def parse_aniso_gap_FS(folder, prefix="aiida"):
+    """Parse the anisotropic gap functions on Fermi surface from a folder mapping.
 
-    :param file_content: the string content of the `imag_aniso_gap_FS` file.
-    :returns: dictionary containing arrays classified by the 4th column 'Band', and their units.
+    :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
+    :param prefix: prefix of the files.
+    :returns: dictionary containing the parsed data keyed by temperature.
     """
-    try:
-        data = _load_numeric_table(file_content, comments="#")
-    except Exception as exc:
-        raise ValueError(
-            f"Malformed imag_aniso_gap_FS file: Failed to parse numeric table: {exc}"
-        ) from exc
-
-    if data.shape[1] < 6:
-        raise ValueError(
-            f"Malformed imag_aniso_gap_FS file: Expected at least 6 columns, got {data.shape[1]}."
-        )
-
+    if not folder:
+        raise ValueError("No folder or dict provided.")
     parsed_data = {}
-    bands = data[:, 3].astype(int)
-    unique_bands = numpy.unique(bands)
+    pattern = re.compile(rf"^{prefix}\.imag_aniso_gap_FS_(\d{{3}}\.\d{{2}})$")
 
-    for band in unique_bands:
-        band_mask = bands == band
-        band_data = data[band_mask]
-        parsed_data[int(band)] = {
-            "kpoints": band_data[:, :3],
-            "energy": band_data[:, 4],
-            "delta": band_data[:, 5],
-        }
+    for filename, open_file in _get_files_from_folder(folder):
+        match = pattern.match(filename)
+        if match:
+            temperature = float(match.group(1))
+            try:
+                with open_file() as handle:
+                    file_content = handle.read()
+                    data = _load_numeric_table(file_content, comments="#")
+            except Exception as exc:
+                raise ValueError(
+                    f"Failed to parse gap function file {filename}: {exc}"
+                ) from exc
 
-    parsed_data["units"] = {
-        "kpoints": "crystal",
-        "energy": "eV",
-        "delta": "meV",
-    }
+            if data.shape[1] < 6:
+                raise ValueError(
+                    f"Malformed imag_aniso_gap_FS file {filename}: Expected at least 6 columns, got {data.shape[1]}."
+                )
+
+            temp_data = {}
+            bands = data[:, 3].astype(int)
+            unique_bands = numpy.unique(bands)
+
+            for band in unique_bands:
+                band_mask = bands == band
+                band_data = data[band_mask]
+                temp_data[int(band)] = {
+                    "kpoints": band_data[:, :3],
+                    "energy": band_data[:, 4],
+                    "delta": band_data[:, 5],
+                }
+
+            temp_data["units"] = {
+                "energy": "eV",
+                "delta": "meV",
+            }
+            parsed_data[temperature] = temp_data
+
+    if not parsed_data:
+        raise ValueError(
+            f"No files matching the template '{prefix}.imag_aniso_gap_FS_XXX.XX' were parsed successfully."
+        )
     return parsed_data
 
 
-def parse_aniso(file_content):
-    """Parse the contents of the `imag_aniso` file.
+def parse_aniso(folder, prefix="aiida", restriction="fsr"):
+    """Parse the anisotropic gap functions from a folder mapping.
 
-    :param file_content: the string content of the `imag_aniso` file.
-    :returns: dictionary containing arrays classified by the 1st column 'w', and their units.
+    :param folder: pathlib.Path, orm.FolderData, or dict containing the output files.
+    :param prefix: prefix of the files.
+    :param restriction: "fsr" (at least 4 columns) or "fbw" (at least 5 columns).
+    :returns: dictionary containing the parsed data keyed by temperature.
     """
-    try:
-        data = _load_numeric_table(file_content, comments="#")
-    except Exception as exc:
-        raise ValueError(
-            f"Malformed imag_aniso file: Failed to parse numeric table: {exc}"
-        ) from exc
-
-    if data.shape[1] < 5:
-        raise ValueError(
-            f"Malformed imag_aniso file: Expected at least 5 columns, got {data.shape[1]}."
-        )
-
+    if not folder:
+        raise ValueError("No folder or dict provided.")
+    if restriction not in ("fsr", "fbw"):
+        raise ValueError(f"Invalid restriction: {restriction}. Must be 'fsr' or 'fbw'.")
     parsed_data = {}
-    frequencies = data[:, 0]
-    unique_frequencies = numpy.unique(frequencies)
+    pattern = re.compile(rf"^{prefix}\.imag_aniso_(\d{{3}}\.\d{{2}})$")
 
-    for w in unique_frequencies:
-        mask = frequencies == w
-        subset = data[mask]
-        parsed_data[float(w)] = {
-            "energy": subset[:, 1],
-            "znorm": subset[:, 2],
-            "delta": subset[:, 3],
-            "shift": subset[:, 4],
-        }
+    for filename, open_file in _get_files_from_folder(folder):
+        match = pattern.match(filename)
+        if match:
+            temperature = float(match.group(1))
+            try:
+                with open_file() as handle:
+                    file_content = handle.read()
+                    data = _load_numeric_table(file_content, comments="#")
+            except Exception as exc:
+                raise ValueError(
+                    f"Failed to parse imag_aniso file {filename}: {exc}"
+                ) from exc
 
-    parsed_data["units"] = {
-        "frequency": "eV",
-        "energy": "eV",
-        "znorm": "",
-        "delta": "eV",
-        "shift": "eV",
-    }
+            min_cols = 5 if restriction == "fbw" else 4
+            if data.shape[1] < min_cols:
+                raise ValueError(
+                    f"Malformed imag_aniso file {filename}: Expected at least {min_cols} columns, got {data.shape[1]}."
+                )
+
+            temp_data = {}
+            frequencies = data[:, 0]
+            unique_frequencies = numpy.unique(frequencies)
+
+            for w in unique_frequencies:
+                mask = frequencies == w
+                subset = data[mask]
+                w_data = {
+                    "energy": subset[:, 1],
+                    "znorm": subset[:, 2],
+                    "delta": subset[:, 3],
+                }
+                if restriction == "fbw":
+                    w_data["shift"] = subset[:, 4]
+                temp_data[float(w)] = w_data
+
+            units = {
+                "frequency": "eV",
+                "energy": "eV",
+                "znorm": "",
+                "delta": "eV",
+            }
+            if restriction == "fbw":
+                units["shift"] = "eV"
+            temp_data["units"] = units
+            parsed_data[temperature] = temp_data
+
+    if not parsed_data:
+        raise ValueError(
+            f"No files matching the template '{prefix}.imag_aniso_XXX.XX' were parsed successfully."
+        )
     return parsed_data
 
 
 def _load_numeric_table(file_content, **kwargs):
     """Load a numeric table from in-memory text and preserve 2D shape for single-row tables."""
-    table = numpy.loadtxt(io.StringIO(file_content), dtype=float, **kwargs)
+    table = numpy.loadtxt(
+        io.StringIO(preprocess_fortran_floats(file_content)),
+        dtype=float,
+        **kwargs,
+    )
     if table.ndim == 1:
         table = table[numpy.newaxis, :]
 

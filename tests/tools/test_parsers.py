@@ -208,6 +208,14 @@ def test_parse_epw_imag_iso(files_path: Path):
         0.0025875737446,
     ]
 
+    parsed_dir = parsers.parse_epw_iso_gap_files(iso_dir, prefix="aiida")
+    assert parsed_dir.keys() == parsed.keys()
+    for key in parsed:
+        for column in parsed[key]:
+            numpy.testing.assert_array_equal(
+                parsed_dir[key][column], parsed[key][column]
+            )
+
 
 def test_parse_epw_imag_aniso_gap0(files_path: Path):
     """Parse anisotropic ``imag_aniso_gap0`` files from a folder mapping."""
@@ -241,6 +249,14 @@ def test_parse_epw_imag_aniso_gap0(files_path: Path):
         142.02083213,
         253.34682234,
     ]
+
+    parsed_dir = parsers.parse_epw_aniso_gap0_files(aniso_dir, prefix="aiida")
+    assert parsed_dir.keys() == parsed.keys()
+    for key in parsed:
+        for column in parsed[key]:
+            numpy.testing.assert_array_equal(
+                parsed_dir[key][column], parsed[key][column]
+            )
 
 
 def test_parse_epw_gap_files_accept_pade_names():
@@ -308,3 +324,86 @@ def test_parser_robust_exception_handling():
         match="Could not parse the number of smearing values from the header",
     ):
         parsers.parse_epw_phdos("w[meV] phdos[states/meV]\n0.1 1.0")
+
+
+def test_parse_aniso_gap_FS():
+    """Test parse_aniso_gap_FS with synthetic files."""
+    # Columns: kx, ky, kz, band, energy, delta
+    content = """# kx ky kz band energy delta
+  0.0 0.0 0.0 1 0.1 1.5
+  0.1 0.1 0.1 2 0.2 2.5
+"""
+    folder = {
+        "aiida.imag_aniso_gap_FS_003.00": content,
+    }
+    parsed = parsers.parse_aniso_gap_FS(folder, prefix="aiida")
+    assert 3.0 in parsed
+    assert 1 in parsed[3.0]
+    assert 2 in parsed[3.0]
+    numpy.testing.assert_array_equal(parsed[3.0][1]["kpoints"], [[0.0, 0.0, 0.0]])
+    assert parsed[3.0][1]["energy"] == [0.1]
+    assert parsed[3.0][1]["delta"] == [1.5]
+    assert parsed[3.0]["units"] == {
+        "energy": "eV",
+        "delta": "meV",
+    }
+
+
+def test_parse_aniso():
+    """Test parse_aniso with synthetic files."""
+    # Columns: w, energy, znorm, delta
+    content = """# w energy znorm delta
+  0.1 0.2 1.0 0.3
+  0.2 0.3 1.1 0.4
+"""
+    folder = {
+        "aiida.imag_aniso_003.00": content,
+    }
+    parsed = parsers.parse_aniso(folder, prefix="aiida")
+    assert 3.0 in parsed
+    assert 0.1 in parsed[3.0]
+    assert 0.2 in parsed[3.0]
+    assert parsed[3.0][0.1]["energy"] == [0.2]
+    assert parsed[3.0][0.1]["znorm"] == [1.0]
+    assert parsed[3.0][0.1]["delta"] == [0.3]
+
+
+def test_parse_aniso_fbw():
+    """Test parse_aniso with restriction='fbw' using synthetic files."""
+    # Columns: w, energy, znorm, delta, shift
+    content = """# w energy znorm delta shift
+  0.1 0.2 1.0 0.3 0.4
+  0.2 0.3 1.1 0.4 0.5
+"""
+    folder = {
+        "aiida.imag_aniso_003.00": content,
+    }
+    parsed = parsers.parse_aniso(folder, prefix="aiida", restriction="fbw")
+    assert 3.0 in parsed
+    assert 0.1 in parsed[3.0]
+    assert 0.2 in parsed[3.0]
+    assert parsed[3.0][0.1]["energy"] == [0.2]
+    assert parsed[3.0][0.1]["znorm"] == [1.0]
+    assert parsed[3.0][0.1]["delta"] == [0.3]
+    assert parsed[3.0][0.1]["shift"] == [0.4]
+
+
+def test_preprocess_fortran_floats():
+    """Test preprocess_fortran_floats correctly parses Fortran scientific formats."""
+    from aiida_epw.tools.parsers import preprocess_fortran_floats
+
+    # 1. exponent sign without E
+    assert preprocess_fortran_floats("1.4305144185+100") == "1.4305144185e+100"
+    assert preprocess_fortran_floats("1.4305144185-100") == "1.4305144185e-100"
+
+    # 2. D/d exponent characters
+    assert preprocess_fortran_floats("1.4305144185d-100") == "1.4305144185e-100"
+    assert preprocess_fortran_floats("1.4305144185D+100") == "1.4305144185e+100"
+
+    # 3. standard scientific notation should not be changed
+    assert preprocess_fortran_floats("1.4305144185e+100") == "1.4305144185e+100"
+    assert preprocess_fortran_floats("1.4305144185E-100") == "1.4305144185E-100"
+
+    # 4. negative values and normal floats
+    assert preprocess_fortran_floats("-1.4305144185") == "-1.4305144185"
+    assert preprocess_fortran_floats("1.4305144185") == "1.4305144185"

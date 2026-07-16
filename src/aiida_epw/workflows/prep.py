@@ -35,6 +35,9 @@ except ImportError:
     PhononBandsWorkChain = None
     DynamicalMatrixWorkChain = None
 
+from aiida_epw.common.types import WannierType
+from aiida_epw.calculations.epw import serialize_wannier_type
+
 logger = logging.getLogger(__name__)
 
 
@@ -189,6 +192,14 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
             ),
         )
         spec.input("bandplot", valid_type=orm.Int, default=lambda: orm.Int(0))
+        spec.input(
+            "wannier_type",
+            valid_type=orm.EnumData,
+            required=False,
+            default=lambda: orm.EnumData(WannierType.EXTERNAL),
+            serializer=serialize_wannier_type,
+            help="Wannierization mode: EPW or external.",
+        )
         if PhononBandsWorkChain is not None:
             spec.expose_inputs(
                 PhononBandsWorkChain,
@@ -276,6 +287,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "parent_folder_nscf",
                 "parent_folder_epw",
                 "parent_folder_chk",
+                "calculation_type",
+                "restart_type",
+                "wannier_type",
             ),
             namespace_options={"help": "Inputs for the `EpwBaseWorkChain`."},
         )
@@ -292,6 +306,9 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 "qfpoints_distance",
                 "kfpoints_factor",
                 "parent_folder_epw",
+                "calculation_type",
+                "restart_type",
+                "wannier_type",
             ),
             namespace_options={
                 "help": "Inputs namespace for `EpwBaseWorkChain` that runs the `epw.x` calculation in interpolation mode, i.e. the interpolated electron and phonon band structures."
@@ -457,19 +474,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         if "ph_base" in config:
             config["ph_main"] = config.pop("ph_base")
         return config
-
-    @classmethod
-    def _get_ph_base_config(cls, inputs):
-        """Return PhBaseWorkChain overrides from the unified ph_bands section."""
-        ph_bands_config = inputs.get("ph_bands", {})
-        dynamical_matrix_config = ph_bands_config.get("dynamical_matrix", {})
-        ph_base_config = dynamical_matrix_config.get("ph_base")
-        if ph_base_config is None:
-            return None
-
-        ph_base_config = dict(ph_base_config)
-        ph_base_config.pop("parallelize_qpoints", None)
-        return ph_base_config
 
     @classmethod
     def get_builder_from_protocol(
@@ -651,19 +655,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         builder.w90_bands = w90_bands
 
-        # Construction of builder for `PhBaseWorkChain`
-        if bandplot:
-            builder.pop("ph_base", None)
-        else:
-            args = (codes["ph"], None, protocol)
-            ph_base = PhBaseWorkChain.get_builder_from_protocol(
-                *args, overrides=cls._get_ph_base_config(inputs), **kwargs
-            )
-            ph_base.pop("clean_workdir", None)
-            ph_base.pop("qpoints_distance")
-            builder.ph_base = ph_base
-
-        # Construction of builder for `EPWBaseWorkChain`s
         epw_builder_namespaces = ("epw_base", "epw_bands")
         for namespace in epw_builder_namespaces:
             epw_inputs = inputs.get(namespace, None)
@@ -707,9 +698,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         builder.kpoints_factor_nscf = orm.Int(inputs["kpoints_factor_nscf"])
         builder.clean_workdir = orm.Bool(inputs["clean_workdir"])
 
-        # Set bandplot flag and prebuild PhononBandsWorkChain inputs from YAML.
+        # Set ph_base or ph_bands based on bandplot flag.
         if bandplot:
             builder.bandplot = orm.Int(1)
+            builder.pop("ph_base", None)
             ph_bands_config = inputs.get("ph_bands")
             if ph_bands_config is None:
                 raise ValueError(
@@ -726,6 +718,14 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 builder.ph_bands[key] = value
         else:
             builder.pop("ph_bands", None)
+            ph_base_overrides = inputs.get("ph_base", {}) or {}
+            args = (codes["ph"], None, protocol)
+            ph_base = PhBaseWorkChain.get_builder_from_protocol(
+                *args, overrides=ph_base_overrides, **kwargs
+            )
+            ph_base.pop("clean_workdir", None)
+            ph_base.pop("qpoints_distance", None)
+            builder.ph_base = ph_base
 
         return builder
 
@@ -1189,6 +1189,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         inputs.metadata.call_link_label = "epw_base"
 
+        from aiida_epw.common.types import CalculationTypes, RestartType
+
+        inputs.calculation_type = CalculationTypes.WANNIERIZE
+        inputs.restart_type = RestartType.NONE
+        inputs.wannier_type = self.inputs.wannier_type
+
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in transformation mode"
@@ -1265,6 +1271,12 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         inputs.kfpoints = bands_kpoints
         inputs.parent_folder_epw = self.ctx.workchain_epw.outputs.remote_folder
         inputs.metadata.call_link_label = "epw_bands"
+
+        from aiida_epw.common.types import CalculationTypes, RestartType
+
+        inputs.calculation_type = CalculationTypes.BANDS
+        inputs.restart_type = RestartType.EPWREAD
+
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(
             f"launching EpwBaseWorkChain<{workchain_node.pk}> in bands interpolation mode"

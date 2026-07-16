@@ -10,6 +10,7 @@ from aiida_quantumespresso.calculations.ph import PhCalculation
 from aiida_quantumespresso.calculations.pw import PwCalculation
 
 from aiida_epw.calculations.epw import EpwCalculation
+from aiida_epw.common import RestartType, WannierType
 
 
 def generate_kpoints_mesh(mesh):
@@ -103,6 +104,14 @@ def test_epw_writes_explicit_fine_point_files(
     [
         ("outdir", "./custom-out"),
         ("nk1", 8),
+        ("wannierize", True),
+        ("epwread", True),
+        ("epwwrite", True),
+        ("restart", True),
+        ("ep_coupling", True),
+        ("elph", True),
+        ("ephwrite", True),
+        ("epmatkqread", True),
     ],
 )
 def test_epw_rejects_plugin_managed_keywords(
@@ -183,117 +192,6 @@ def test_epw_accepts_parser_options_setting(
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
 
     assert calc_info.retrieve_list == ["aiida.out"]
-
-
-def test_epw_retrieves_iso_gap_files_for_imag_and_pade(
-    fixture_sandbox, generate_calc_job, generate_inputs_epw
-):
-    """Test isotropic Eliashberg runs retrieve both imaginary-axis and Pade gap files."""
-    inputs = generate_inputs_epw(
-        parameters={
-            "INPUTEPW": {
-                "eliashberg": True,
-                "liso": True,
-                "limag": True,
-                "lpade": True,
-            }
-        }
-    )
-
-    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-    assert "aiida.imag_iso_*" in calc_info.retrieve_list
-    assert "aiida.pade_iso_*" in calc_info.retrieve_list
-
-
-def test_epw_retrieves_aniso_gap_files_for_imag_and_pade(
-    fixture_sandbox, generate_calc_job, generate_inputs_epw
-):
-    """Test anisotropic Eliashberg runs retrieve both imaginary-axis and Pade gap files."""
-    inputs = generate_inputs_epw(
-        parameters={
-            "INPUTEPW": {
-                "eliashberg": True,
-                "laniso": True,
-                "limag": True,
-                "lpade": True,
-            }
-        }
-    )
-
-    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-    assert "aiida.imag_aniso_gap*" in calc_info.retrieve_list
-    assert "aiida.pade_aniso_gap*" in calc_info.retrieve_list
-
-
-def test_epw_accepts_manual_proj_for_wannierize(
-    fixture_sandbox,
-    fixture_localhost,
-    generate_calc_job,
-    generate_inputs_epw,
-    generate_remote_data,
-):
-    """Direct EPW Wannierization should accept manual `proj` lists."""
-    inputs = generate_inputs_epw(
-        parameters={"INPUTEPW": {"wannierize": True, "proj": ["Si:s", "Si:p"]}},
-        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
-    )
-
-    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
-    assert "wannierize = .true." in input_contents
-    assert "proj(1) = 'Si:s'" in input_contents
-    assert "proj(2) = 'Si:p'" in input_contents
-
-
-def test_epw_requires_nscf_parent_for_wannierize(
-    fixture_sandbox, generate_calc_job, generate_inputs_epw
-):
-    """Direct EPW Wannierization should always stage an NSCF parent."""
-    inputs = generate_inputs_epw(
-        parameters={"INPUTEPW": {"wannierize": True, "proj": ["Si:s"]}}
-    )
-
-    with pytest.raises(ValueError, match="parent_folder_nscf"):
-        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-
-def test_epw_rejects_auto_projections_for_wannierize(
-    fixture_sandbox,
-    fixture_localhost,
-    generate_calc_job,
-    generate_inputs_epw,
-    generate_remote_data,
-):
-    """Only manual `proj` entries are supported for EPW Wannierization."""
-    inputs = generate_inputs_epw(
-        parameters={
-            "INPUTEPW": {"wannierize": True, "auto_projections": True, "proj": ["Si:s"]}
-        },
-        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
-    )
-
-    with pytest.raises(ValueError, match="auto_projections"):
-        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-
-def test_epw_requires_manual_proj_for_wannierize(
-    fixture_sandbox,
-    fixture_localhost,
-    generate_calc_job,
-    generate_inputs_epw,
-    generate_remote_data,
-):
-    """Direct EPW Wannierization should require explicit manual projections."""
-    inputs = generate_inputs_epw(
-        parameters={"INPUTEPW": {"wannierize": True}},
-        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
-    )
-
-    with pytest.raises(ValueError, match="Manual `proj` entries"):
-        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
 
 
 def test_epw_additional_retrieve_list_emits_deprecation_warning(
@@ -477,7 +375,7 @@ def test_epw_stages_epw_restart_files_without_copying_epmatwp(
     """Test that EPW restart staging links the large `epmatwp` file and copies metadata files."""
     parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
     inputs = generate_inputs_epw(
-        parameters={"INPUTEPW": {"epwread": True, "elph": True}},
+        restart_type="ephwrite",
         parent_folder_epw=parent_folder,
     )
 
@@ -539,3 +437,405 @@ def test_epw_stages_ph_stash_folder_by_target_basepath(
         ).as_posix(),
         "save",
     ) in calc_info.remote_copy_list
+
+
+def test_epw_stages_dos_when_ephwrite_disabled(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that EpwCalculation stages prefix.dos when eliashberg is True and ephwrite is False."""
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
+    inputs = generate_inputs_epw(
+        restart_type="ephread",
+        calculation_type="eliashberg",
+        momentum_dependence=orm.Bool(False),
+        parent_folder_epw=parent_folder,
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    assert (
+        Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.dos").as_posix() in copied_targets
+    )
+    assert "aiida.a2f" not in copied_targets
+
+
+def test_epw_eliashberg_parameters(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that Eliashberg parameters are correctly written to the EPW input file."""
+    from aiida_epw.common.types import CalculationTypes
+
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.ELIASHBERG),
+        momentum_dependence=orm.Bool(True),
+        full_bandwidth=orm.Bool(False),
+        real_axis=orm.Bool(False),
+        analytical_continuation=orm.Str("pade"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .true." in input_contents
+    assert "laniso = .true." in input_contents
+    assert "liso = .false." in input_contents
+    assert "fbw = .false." in input_contents
+    assert "lreal = .false." in input_contents
+    assert "limag = .true." in input_contents
+    assert "lpade = .true." in input_contents
+    assert "lacon = .false." in input_contents
+
+
+def test_epw_eliashberg_parameters_continuation_none(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that analytical_continuation='none' writes lpade/lacon as False."""
+    from aiida_epw.common.types import CalculationTypes
+
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.ELIASHBERG),
+        momentum_dependence=orm.Bool(False),
+        full_bandwidth=orm.Bool(False),
+        real_axis=orm.Bool(True),
+        analytical_continuation=orm.Str("none"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .true." in input_contents
+    assert "laniso = .false." in input_contents
+    assert "liso = .true." in input_contents
+    assert "fbw = .false." in input_contents
+    assert "lreal = .true." in input_contents
+    assert "limag = .false." in input_contents
+    assert "lpade = .false." in input_contents
+    assert "lacon = .false." in input_contents
+
+
+def test_epw_restart_type_parameter(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that specifying `restart_type` updates the namelist correctly in the input file."""
+
+    # 2. EPHWRITE
+    inputs_write = generate_inputs_epw(
+        restart_type=RestartType.EPHWRITE,
+        parent_folder_epw=generate_remote_data(fixture_localhost, "/remote/epw"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_write)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "epwread = .true." in input_contents
+    assert "epwwrite = .false." in input_contents
+    assert "restart = .false." in input_contents
+    assert "ep_coupling = .true." in input_contents
+    assert "elph = .true." in input_contents
+    assert "ephwrite = .true." in input_contents
+
+    # 3. EPHREAD (without scattering)
+    inputs_read1 = generate_inputs_epw(
+        restart_type=RestartType.EPHREAD,
+        parent_folder_epw=generate_remote_data(fixture_localhost, "/remote/epw"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_read1)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "epwread = .true." in input_contents
+    assert "restart = .false." in input_contents
+    assert "ep_coupling = .false." in input_contents
+    assert "elph = .false." in input_contents
+    assert "ephwrite = .false." in input_contents
+    assert "epmatkqread" not in input_contents
+
+    # 4. EPHREAD (with scattering)
+    from aiida_epw.common.types import CalculationTypes
+
+    inputs_read2 = generate_inputs_epw(
+        restart_type=RestartType.EPHREAD,
+        calculation_type=CalculationTypes.TRANSPORT,
+        parent_folder_epw=generate_remote_data(fixture_localhost, "/remote/epw"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_read2)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "epwread = .true." in input_contents
+    assert "restart = .false." in input_contents
+    assert "ep_coupling = .false." in input_contents
+    assert "elph = .false." in input_contents
+    assert "ephwrite = .false." in input_contents
+    assert "epmatkqread = .true." in input_contents
+
+    # 5. EPHWRITE_RESTART
+    inputs_write_restart = generate_inputs_epw(
+        restart_type=RestartType.EPHWRITE_RESTART,
+        parent_folder_epw=generate_remote_data(fixture_localhost, "/remote/epw"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_write_restart)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "epwread = .true." in input_contents
+    assert "epwwrite = .false." in input_contents
+    assert "restart = .true." in input_contents
+    assert "ep_coupling = .true." in input_contents
+    assert "elph = .true." in input_contents
+    assert "ephwrite = .true." in input_contents
+
+
+def test_epw_calculation_type_parameter(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that calculation_type correctly overrides the namelist parameters."""
+    from aiida_epw.common.types import CalculationTypes
+    from aiida_epw.calculations.epw import EpwCalculation
+    import pytest
+
+    # 1. Test Eliashberg mode
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.ELIASHBERG),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .true." in input_contents
+    assert "scattering = .false." in input_contents
+    assert "plrn = .false." in input_contents
+
+    # 2. Test Transport mode
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.TRANSPORT),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .false." in input_contents
+    assert "scattering = .true." in input_contents
+    assert "plrn = .false." in input_contents
+
+    # 3. Test Polaron mode
+    inputs = generate_inputs_epw(
+        calculation_type=orm.EnumData(CalculationTypes.POLARON),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "eliashberg = .false." in input_contents
+    assert "scattering = .false." in input_contents
+    assert "plrn = .true." in input_contents
+
+    # 4. Test validation of Eliashberg inputs in non-Eliashberg modes
+    if "real_axis" in EpwCalculation.spec().inputs:
+        with pytest.raises(
+            ValueError,
+            match="Eliashberg parameter 'real_axis' cannot be specified",
+        ):
+            inputs_invalid = generate_inputs_epw(
+                calculation_type=orm.EnumData(CalculationTypes.TRANSPORT),
+                real_axis=orm.Bool(True),
+            )
+            generate_calc_job(fixture_sandbox, "epw.epw", inputs_invalid)
+
+    # 5. Test blocked parameter validation
+    with pytest.raises(ValueError, match="parameters.INPUTEPW.scattering"):
+        inputs_blocked = generate_inputs_epw(
+            parameters={"INPUTEPW": {"scattering": True}}
+        )
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs_blocked)
+
+
+def test_epw_ephread_eliashberg_staging(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test optimized staging logic for EPHREAD + ELIASHBERG calculation."""
+    from aiida_epw.common.types import CalculationTypes, RestartType
+
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
+    inputs = generate_inputs_epw(
+        restart_type=RestartType.EPHREAD,
+        calculation_type=CalculationTypes.ELIASHBERG,
+        parent_folder_epw=parent_folder,
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    # ephmat should be in remote_symlink_list
+    assert (
+        parent_folder.computer.uuid,
+        Path(
+            parent_folder.get_remote_path(),
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.ephmat",
+        ).as_posix(),
+        Path(
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.ephmat"
+        ).as_posix(),
+    ) in calc_info.remote_symlink_list
+
+    # epmatwp should not be in remote_symlink_list or remote_copy_list
+    assert not any(
+        "epmatwp" in entry[1]
+        for entry in calc_info.remote_symlink_list + calc_info.remote_copy_list
+    )
+
+    # basic metadata, dos should be copied
+    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    assert "crystal.fmt" in copied_targets
+    assert "epwdata.fmt" in copied_targets
+    assert "selecq.fmt" in copied_targets
+    assert "wigner.fmt" in copied_targets
+    assert "aiida.phdos" not in copied_targets
+    assert (
+        Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.dos").as_posix() in copied_targets
+    )
+
+    # save/ and Wannier checkpoint files should be excluded
+    assert "save" not in copied_targets
+    assert "aiida.chk" not in copied_targets
+    assert "aiida.mmn" not in copied_targets
+    assert "quadrupole.fmt" not in copied_targets
+    assert not any("decay" in target for target in copied_targets)
+
+
+def test_epw_ephread_transport_staging(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test optimized staging logic for EPHREAD + TRANSPORT calculation."""
+    from aiida_epw.common.types import CalculationTypes, RestartType
+
+    parent_folder = generate_remote_data(fixture_localhost, "/remote/epw")
+    inputs = generate_inputs_epw(
+        restart_type=RestartType.EPHREAD,
+        calculation_type=CalculationTypes.TRANSPORT,
+        parent_folder_epw=parent_folder,
+    )
+
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    # epmatwp should be in remote_symlink_list
+    assert (
+        parent_folder.computer.uuid,
+        Path(
+            parent_folder.get_remote_path(),
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.epmatwp",
+        ).as_posix(),
+        Path(
+            f"{EpwCalculation._OUTPUT_SUBFOLDER}/{EpwCalculation._PREFIX}.epmatwp"
+        ).as_posix(),
+    ) in calc_info.remote_symlink_list
+
+    # ephmat should not be in remote_symlink_list or remote_copy_list
+    assert not any(
+        "ephmat" in entry[1]
+        for entry in calc_info.remote_symlink_list + calc_info.remote_copy_list
+    )
+
+    # basic metadata + dme/vme should be copied
+    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    assert "crystal.fmt" in copied_targets
+    assert "epwdata.fmt" in copied_targets
+    assert "dmedata.fmt" in copied_targets
+    assert "vmedata.fmt" in copied_targets
+
+    # quadrupole and decay should be excluded
+    assert "quadrupole.fmt" not in copied_targets
+    assert not any("decay" in target for target in copied_targets)
+
+
+def test_epw_wannier_type_parameter(
+    fixture_sandbox,
+    fixture_localhost,
+    generate_calc_job,
+    generate_inputs_epw,
+    generate_remote_data,
+):
+    """Test that `wannier_type` correctly updates `wannierize` parameter."""
+    from aiida_epw.common.types import CalculationTypes
+
+    # 1. WannierType.EPW (internal)
+    inputs_epw = generate_inputs_epw(
+        calculation_type=CalculationTypes.WANNIERIZE,
+        wannier_type=WannierType.EPW,
+        parameters={"INPUTEPW": {"proj": ["Si:s"]}},
+        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
+        parent_folder_chk=generate_remote_data(fixture_localhost, "/remote/chk"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_epw)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .true." in input_contents
+
+    # 2. WannierType.EXTERNAL (external)
+    inputs_ext = generate_inputs_epw(
+        calculation_type=CalculationTypes.WANNIERIZE,
+        wannier_type=WannierType.EXTERNAL,
+        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
+        parent_folder_chk=generate_remote_data(fixture_localhost, "/remote/chk"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_ext)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .false." in input_contents
+
+    # 3. Default to EXTERNAL
+    inputs_default = generate_inputs_epw(
+        calculation_type=CalculationTypes.WANNIERIZE,
+        parent_folder_nscf=generate_remote_data(fixture_localhost, "/remote/nscf"),
+        parent_folder_chk=generate_remote_data(fixture_localhost, "/remote/chk"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_default)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "wannierize = .false." in input_contents
+
+
+def test_epw_filirobj_parameter(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """Test that `filirobj` input is correctly staged and configured in epw.x input."""
+    import io
+
+    # 1. Test using a packaged file
+    inputs_packaged = generate_inputs_epw(
+        filirobj=orm.Str("ir_nlambda6_ndigit8.dat"),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_packaged)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "filirobj = 'ir_nlambda6_ndigit8.dat'" in input_contents
+    assert Path(fixture_sandbox.abspath, "ir_nlambda6_ndigit8.dat").exists()
+
+    # 2. Test using a custom SinglefileData
+    file_content = b"custom ir basis data content"
+    custom_file = orm.SinglefileData(
+        io.BytesIO(file_content), filename="custom_basis.dat"
+    )
+    inputs_custom = generate_inputs_epw(
+        filirobj=custom_file,
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_custom)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "filirobj = 'custom_basis.dat'" in input_contents
+    assert (
+        Path(fixture_sandbox.abspath, "custom_basis.dat").read_bytes() == file_content
+    )
+
+    # 3. Test invalid packaged file raises ValueError
+    inputs_invalid = generate_inputs_epw(
+        filirobj=orm.Str("nonexistent_file.dat"),
+    )
+    with pytest.raises(
+        ValueError, match="Built-in basis file 'nonexistent_file.dat' not found"
+    ):
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs_invalid)
+
+    # 4. momentum_dependence alone should not imply a sparse-IR basis file
+    inputs_md = generate_inputs_epw(
+        momentum_dependence=orm.Bool(True),
+    )
+    generate_calc_job(fixture_sandbox, "epw.epw", inputs_md)
+    input_contents = Path(fixture_sandbox.abspath, "aiida.in").read_text()
+    assert "filirobj" not in input_contents
+    assert "gridsamp" not in input_contents

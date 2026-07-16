@@ -7,6 +7,7 @@ from pathlib import Path
 from aiida import orm
 from aiida.common import datastructures, exceptions
 from aiida.common.warnings import AiidaDeprecationWarning
+from aiida.orm.nodes.data.base import to_aiida_type
 from aiida_quantumespresso.calculations import (
     BasePwCpInputGenerator,
     _pop_parser_options,
@@ -30,10 +31,71 @@ from aiida_epw.data import (
 )
 
 from aiida_epw.tools.workchain import get_parent_ph_qpoint_ibz_count
+from aiida_epw.common.types import WannierType
 
 
 def _lowercase_dict(dictionary, dict_name):
     return _case_transform_dict(dictionary, dict_name, "_lowercase_dict", str.lower)
+
+
+def serialize_calculation_type(value):
+    """Serialize input parameter into an AiiDA EnumData for CalculationTypes."""
+    from aiida.orm import EnumData
+    from aiida_epw.common.types import CalculationTypes
+
+    if isinstance(value, EnumData):
+        return value
+    if isinstance(value, CalculationTypes):
+        return EnumData(value)
+    if isinstance(value, str):
+        try:
+            return EnumData(CalculationTypes(value.lower()))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid calculation type '{value}'. Supported values: "
+                f"{[member.value for member in CalculationTypes]}"
+            ) from exc
+    raise TypeError(f"Cannot serialize {value} to EnumData of CalculationTypes")
+
+
+def serialize_restart_type(value):
+    """Serialize input parameter into an AiiDA EnumData for RestartType."""
+    from aiida.orm import EnumData
+    from aiida_epw.common.types import RestartType
+
+    if isinstance(value, EnumData):
+        return value
+    if isinstance(value, RestartType):
+        return EnumData(value)
+    if isinstance(value, str):
+        try:
+            return EnumData(RestartType(value.lower()))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid restart type '{value}'. Supported values: "
+                f"{[member.value for member in RestartType]}"
+            ) from exc
+    raise TypeError(f"Cannot serialize {value} to EnumData of RestartType")
+
+
+def serialize_wannier_type(value):
+    """Serialize input parameter into an AiiDA EnumData for WannierType."""
+    from aiida.orm import EnumData
+    from aiida_epw.common.types import WannierType
+
+    if isinstance(value, EnumData):
+        return value
+    if isinstance(value, WannierType):
+        return EnumData(value)
+    if isinstance(value, str):
+        try:
+            return EnumData(WannierType(value.lower()))
+        except ValueError as exc:
+            raise ValueError(
+                f"Invalid wannier type '{value}'. Supported values: "
+                f"{[member.value for member in WannierType]}"
+            ) from exc
+    raise TypeError(f"Cannot serialize {value} to EnumData of WannierType")
 
 
 class EpwCalculation(NamelistsCalculation):
@@ -56,6 +118,25 @@ class EpwCalculation(NamelistsCalculation):
         ("INPUTEPW", "nkf1"),
         ("INPUTEPW", "nkf2"),
         ("INPUTEPW", "nkf3"),
+        ("INPUTEPW", "wannierize"),
+        ("INPUTEPW", "epwread"),
+        ("INPUTEPW", "epwwrite"),
+        ("INPUTEPW", "restart"),
+        ("INPUTEPW", "ep_coupling"),
+        ("INPUTEPW", "elph"),
+        ("INPUTEPW", "ephwrite"),
+        ("INPUTEPW", "epmatkqread"),
+        ("INPUTEPW", "eliashberg"),
+        ("INPUTEPW", "liso"),
+        ("INPUTEPW", "laniso"),
+        ("INPUTEPW", "fbw"),
+        ("INPUTEPW", "lreal"),
+        ("INPUTEPW", "limag"),
+        ("INPUTEPW", "lpade"),
+        ("INPUTEPW", "lacon"),
+        ("INPUTEPW", "scattering"),
+        ("INPUTEPW", "plrn"),
+        ("INPUTEPW", "band_plot"),
     ]
 
     _use_kpoints = True
@@ -102,6 +183,62 @@ class EpwCalculation(NamelistsCalculation):
             "parameters",
             valid_type=orm.Dict,
             help="Parameters for the `epw.x` input file.",
+        )
+        spec.input(
+            "calculation_type",
+            valid_type=orm.EnumData,
+            required=False,
+            serializer=serialize_calculation_type,
+            help="EPW calculation type: Eliashberg, transport, or polaron.",
+        )
+        spec.input(
+            "momentum_dependence",
+            valid_type=orm.Bool,
+            required=False,
+            serializer=to_aiida_type,
+            help="Isotropic (False) or anisotropic (True) Eliashberg calculation.",
+        )
+        spec.input(
+            "full_bandwidth",
+            valid_type=orm.Bool,
+            required=False,
+            serializer=to_aiida_type,
+            help="Solve full bandwidth (True) or restrict to Fermi surface (False).",
+        )
+        spec.input(
+            "real_axis",
+            valid_type=orm.Bool,
+            required=False,
+            serializer=to_aiida_type,
+            help="Solve the Eliashberg equations on the real axis (True) or imaginary axis (False).",
+        )
+        spec.input(
+            "analytical_continuation",
+            valid_type=orm.Str,
+            required=False,
+            serializer=to_aiida_type,
+            help="Analytical continuation method: 'pade' or 'acon'.",
+        )
+        spec.input(
+            "restart_type",
+            valid_type=orm.EnumData,
+            required=False,
+            serializer=serialize_restart_type,
+            help="EPW restart type: Wannierize, ephwrite, or ephread.",
+        )
+        spec.input(
+            "wannier_type",
+            valid_type=orm.EnumData,
+            required=False,
+            default=lambda: orm.EnumData(WannierType.EXTERNAL),
+            serializer=serialize_wannier_type,
+            help="Wannierization mode: EPW or external.",
+        )
+        spec.input(
+            "filirobj",
+            valid_type=(orm.SinglefileData, orm.Str),
+            required=False,
+            help="Sparse-IR basis file (SinglefileData) or the filename of a pre-shipped basis (Str).",
         )
         spec.input(
             "kpoints",
@@ -272,6 +409,18 @@ class EpwCalculation(NamelistsCalculation):
             required=False,
             help="The interpolated anisotropic gap0 distribution.",
         )
+        spec.output(
+            "aniso_gap_FS",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The anisotropic gap on the Fermi surface.",
+        )
+        spec.output(
+            "aniso_gap_imag",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The anisotropic gap on the imaginary axis.",
+        )
 
         spec.exit_code(
             300,
@@ -300,6 +449,21 @@ class EpwCalculation(NamelistsCalculation):
         )
         # yapf: enable
         spec.exit_code(
+            321,
+            "ERROR_FACTORIZATION",
+            message="Error in routine mix_broyden (5): factorization.",
+        )
+        spec.exit_code(
+            322,
+            "ERROR_PADE_APPROXIMANTS",
+            message="The Pade approximants calculation failed (NaN values detected).",
+        )
+        spec.exit_code(
+            323,
+            "ERROR_TEMPERATURE_OUT_OF_RANGE",
+            message="Temperature is out of range (reached phase transition, delta converged to zero).",
+        )
+        spec.exit_code(
             314,
             "ERROR_PARAMETERS_NOT_VALID",
             message="The parameters are not valid.",
@@ -308,6 +472,16 @@ class EpwCalculation(NamelistsCalculation):
             320,
             "ERROR_CANNOT_BRACKET_EF",
             message="Internal error, cannot bracket Ef.",
+        )
+        spec.exit_code(
+            321,
+            "ERROR_FACTORIZATION",
+            message="Error in routine mix_broyden (5): factorization.",
+        )
+        spec.exit_code(
+            322,
+            "ERROR_PADE_APPROXIMANTS",
+            message="The Pade approximants calculation failed (NaN values detected).",
         )
 
     @classmethod
@@ -348,23 +522,64 @@ class EpwCalculation(NamelistsCalculation):
     @classmethod
     def validate_restart_inputs(cls, parameters, inputs):
         """Validate restart-related input combinations against the EPW parameters."""
-        inputepw = parameters["INPUTEPW"]
+        from aiida_epw.common import RestartType
 
-        if not inputepw.get("wannierize", False):
-            return
+        restart_type = None
+        if "restart_type" in inputs:
+            restart_node = inputs["restart_type"]
+            if hasattr(restart_node, "get_member"):
+                restart_type = restart_node.get_member()
+            elif hasattr(restart_node, "value"):
+                try:
+                    restart_type = RestartType(restart_node.value)
+                except Exception:
+                    pass
+            elif isinstance(restart_node, RestartType):
+                restart_type = restart_node
+            elif isinstance(restart_node, str):
+                try:
+                    restart_type = RestartType(restart_node.lower())
+                except ValueError:
+                    pass
 
-        for input_name in ("parent_folder_epw", "parent_folder_chk"):
-            if input_name in inputs:
+        calc_type = None
+        calculation_type = inputs.get("calculation_type", None)
+        if calculation_type is not None:
+            calc_type = calculation_type.get_member()
+
+        from aiida_epw.common.types import CalculationTypes
+
+        is_initial_stage = calc_type is CalculationTypes.WANNIERIZE
+
+        if is_initial_stage:
+            if "parent_folder_epw" in inputs:
                 raise exceptions.InputValidationError(
-                    f"`{input_name}` cannot be specified when "
-                    "`parameters.INPUTEPW.wannierize` is true."
+                    "`parent_folder_epw` cannot be specified during the WANNIERIZE calculation stage."
                 )
-
-        if "parent_folder_nscf" not in inputs:
-            raise exceptions.InputValidationError(
-                "`parent_folder_nscf` must be specified when "
-                "`parameters.INPUTEPW.wannierize` is true."
-            )
+            if "parent_folder_nscf" not in inputs:
+                raise exceptions.InputValidationError(
+                    "`parent_folder_nscf` must be specified during the WANNIERIZE calculation stage."
+                )
+        else:
+            if restart_type in (
+                RestartType.EPHWRITE,
+                RestartType.EPHREAD,
+                RestartType.EPHWRITE_RESTART,
+            ):
+                if "parent_folder_epw" not in inputs:
+                    raise exceptions.InputValidationError(
+                        f"`parent_folder_epw` must be specified when "
+                        f"restart_type is '{restart_type.value}'."
+                    )
+            if "parent_folder_epw" in inputs and restart_type not in (
+                RestartType.EPHWRITE,
+                RestartType.EPHREAD,
+                RestartType.EPHWRITE_RESTART,
+            ):
+                raise exceptions.InputValidationError(
+                    "`restart_type` must be specified and set to 'ephwrite', 'ephread' or 'ephwrite_restart' "
+                    "when `parent_folder_epw` is provided."
+                )
 
     @staticmethod
     def has_manual_projections(inputepw):
@@ -387,7 +602,25 @@ class EpwCalculation(NamelistsCalculation):
         cls.validate_restart_inputs(parameters, inputs)
 
         inputepw = parameters["INPUTEPW"]
-        if inputepw.get("wannierize", False):
+
+        is_wannierize = False
+        calculation_type = inputs.get("calculation_type", None)
+        if calculation_type is not None:
+            calc_type = calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type is CalculationTypes.WANNIERIZE:
+                from aiida_epw.common.types import WannierType
+
+                wannier_val = WannierType.EXTERNAL
+                if "wannier_type" in inputs:
+                    wannier_val = inputs["wannier_type"].get_member()
+                if wannier_val is WannierType.EPW:
+                    is_wannierize = True
+        if not is_wannierize:
+            is_wannierize = inputepw.get("wannierize", False)
+
+        if is_wannierize:
             if inputepw.get("auto_projections", False):
                 raise exceptions.InputValidationError(
                     "`parameters.INPUTEPW.auto_projections` is not supported; "
@@ -408,8 +641,76 @@ class EpwCalculation(NamelistsCalculation):
 
             if not cls.has_manual_projections(inputepw):
                 raise exceptions.InputValidationError(
-                    "Manual `proj` entries must be provided when "
-                    "`parameters.INPUTEPW.wannierize` is true."
+                    "Manual `proj` entries must be provided when wannierize is enabled."
+                )
+
+        # Validate Eliashberg parameters
+        momentum_dependence = inputs.get("momentum_dependence", None)
+        full_bandwidth = inputs.get("full_bandwidth", None)
+        real_axis = inputs.get("real_axis", None)
+        analytical_continuation = inputs.get("analytical_continuation", None)
+        calculation_type = inputs.get("calculation_type", None)
+
+        if calculation_type is not None:
+            calc_type = calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type != CalculationTypes.ELIASHBERG:
+                for f in (
+                    "momentum_dependence",
+                    "full_bandwidth",
+                    "real_axis",
+                    "analytical_continuation",
+                ):
+                    if f in inputs:
+                        raise exceptions.InputValidationError(
+                            f"Eliashberg parameter '{f}' cannot be specified when "
+                            f"calculation_type is '{calc_type.value}'."
+                        )
+
+        if analytical_continuation is not None:
+            ac_val = analytical_continuation.value
+            if ac_val.lower() not in ("pade", "acon", "none"):
+                raise exceptions.InputValidationError(
+                    f"Invalid `analytical_continuation`: '{ac_val}' is not supported. Must be 'pade', 'acon', or 'none'."
+                )
+
+        tc_linear = inputepw.get("tc_linear", False)
+
+        if tc_linear:
+            if real_axis is not None and real_axis.value:
+                raise exceptions.InputValidationError(
+                    "Linearized Eliashberg (tc_linear=True) cannot be used with real_axis=True."
+                )
+            if momentum_dependence is not None and momentum_dependence.value:
+                raise exceptions.InputValidationError(
+                    "Linearized Eliashberg (tc_linear=True) cannot be used with momentum_dependence=True (anisotropic)."
+                )
+            if full_bandwidth is not None and full_bandwidth.value:
+                raise exceptions.InputValidationError(
+                    "Linearized Eliashberg (tc_linear=True) cannot be used with full_bandwidth=True."
+                )
+
+        if real_axis is not None and real_axis.value:
+            if momentum_dependence is not None and momentum_dependence.value:
+                raise exceptions.InputValidationError(
+                    "Real axis solver (real_axis=True) is only implemented for the isotropic case (momentum_dependence=False)."
+                )
+            if (
+                analytical_continuation is not None
+                and analytical_continuation.value.lower() != "none"
+            ):
+                raise exceptions.InputValidationError(
+                    "Analytical continuation (analytical_continuation) cannot be used when solving on the real axis (real_axis=True)."
+                )
+
+        if full_bandwidth is not None and full_bandwidth.value:
+            if (
+                analytical_continuation is not None
+                and analytical_continuation.value.lower() == "acon"
+            ):
+                raise exceptions.InputValidationError(
+                    "Analytic continuation method 'acon' is not implemented when full_bandwidth is True."
                 )
 
     @classmethod
@@ -574,6 +875,111 @@ class EpwCalculation(NamelistsCalculation):
 
         self.cap_nstemp(inputepw_parameters)
 
+        # Override calculation type settings in parameters if calculation_type is specified
+        if "calculation_type" in self.inputs:
+            calc_type = self.inputs.calculation_type.get_member()
+            from aiida_epw.common.types import CalculationTypes
+
+            if calc_type == CalculationTypes.ELIASHBERG:
+                inputepw_parameters["eliashberg"] = True
+                inputepw_parameters["scattering"] = False
+                inputepw_parameters["plrn"] = False
+
+                if "momentum_dependence" in self.inputs:
+                    momentum_dependence = self.inputs.momentum_dependence.value
+                    inputepw_parameters["laniso"] = momentum_dependence
+                    inputepw_parameters["liso"] = not momentum_dependence
+
+                if "full_bandwidth" in self.inputs:
+                    fbw = self.inputs.full_bandwidth.value
+                    inputepw_parameters["fbw"] = fbw
+                    if fbw:
+                        inputepw_parameters["tc_linear"] = False
+
+                if "real_axis" in self.inputs:
+                    real_axis = self.inputs.real_axis.value
+                    inputepw_parameters["lreal"] = real_axis
+                    inputepw_parameters["limag"] = not real_axis
+
+                if "analytical_continuation" in self.inputs:
+                    ac_method = self.inputs.analytical_continuation.value.lower()
+                    if ac_method == "pade":
+                        inputepw_parameters["lpade"] = True
+                        inputepw_parameters["lacon"] = False
+                        inputepw_parameters["limag"] = True
+                        inputepw_parameters["lreal"] = False
+                    elif ac_method == "acon":
+                        inputepw_parameters["lpade"] = True
+                        inputepw_parameters["lacon"] = True
+                        inputepw_parameters["limag"] = True
+                        inputepw_parameters["lreal"] = False
+                    elif ac_method == "none":
+                        inputepw_parameters["lpade"] = False
+                        inputepw_parameters["lacon"] = False
+            elif calc_type == CalculationTypes.TRANSPORT:
+                inputepw_parameters["eliashberg"] = False
+                inputepw_parameters["scattering"] = True
+                inputepw_parameters["plrn"] = False
+            elif calc_type == CalculationTypes.POLARON:
+                inputepw_parameters["eliashberg"] = False
+                inputepw_parameters["scattering"] = False
+                inputepw_parameters["plrn"] = True
+            elif calc_type == CalculationTypes.WANNIERIZE:
+                inputepw_parameters["epwread"] = False
+                inputepw_parameters["epwwrite"] = True
+                inputepw_parameters.setdefault("restart", False)
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+                inputepw_parameters["epbwrite"] = True
+                inputepw_parameters["epbread"] = False
+
+                from aiida_epw.common.types import WannierType
+
+                wannier_val = self.inputs.wannier_type.get_member()
+                inputepw_parameters["wannierize"] = wannier_val is WannierType.EPW
+            elif calc_type == CalculationTypes.BANDS:
+                inputepw_parameters["band_plot"] = True
+                inputepw_parameters["eliashberg"] = False
+                inputepw_parameters["scattering"] = False
+                inputepw_parameters["plrn"] = False
+
+        if "restart_type" in self.inputs:
+            restart_val = self.inputs.restart_type.get_member()
+            from aiida_epw.common import RestartType
+
+            if restart_val is RestartType.NONE:
+                pass
+            elif restart_val is RestartType.EPHWRITE:
+                inputepw_parameters["epwread"] = True
+                inputepw_parameters["epwwrite"] = False
+                inputepw_parameters.setdefault("restart", False)
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+                inputepw_parameters["ephwrite"] = True
+            elif restart_val is RestartType.EPHWRITE_RESTART:
+                inputepw_parameters["epwread"] = True
+                inputepw_parameters["epwwrite"] = False
+                inputepw_parameters["restart"] = True
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+                inputepw_parameters["ephwrite"] = True
+            elif restart_val is RestartType.EPHREAD:
+                inputepw_parameters["epwread"] = True
+                inputepw_parameters.setdefault("restart", False)
+                inputepw_parameters["ep_coupling"] = False
+                inputepw_parameters["elph"] = False
+                inputepw_parameters["ephwrite"] = False
+                if inputepw_parameters.get("scattering", False):
+                    inputepw_parameters["epmatkqread"] = True
+            elif restart_val is RestartType.EPWREAD:
+                inputepw_parameters["epwread"] = True
+                inputepw_parameters["epwwrite"] = False
+                inputepw_parameters["epbwrite"] = False
+                inputepw_parameters["epbread"] = False
+                inputepw_parameters.setdefault("restart", False)
+                inputepw_parameters["ep_coupling"] = True
+                inputepw_parameters["elph"] = True
+
         inputepw_parameters["outdir"] = self._OUTPUT_SUBFOLDER
         inputepw_parameters["dvscf_dir"] = self._FOLDER_SAVE
         inputepw_parameters["prefix"] = self._PREFIX
@@ -631,41 +1037,6 @@ class EpwCalculation(NamelistsCalculation):
             )
 
         return parameters
-
-    def get_additional_retrieve_list(self, parameters):
-        """Return additional files that should be retrieved for the configured EPW run."""
-        retrieve_list = []
-
-        if parameters["INPUTEPW"].get("band_plot"):
-            retrieve_list += [self._output_elbands_file, self._output_phbands_file]
-
-        if parameters["INPUTEPW"].get("eliashberg", False):
-            retrieve_list.append(self._OUTPUT_A2F_FILE)
-            if not parameters["INPUTEPW"].get("restart", False):
-                retrieve_list.append(self._OUTPUT_A2F_PROJ_FILE)
-                retrieve_list.append(self._OUTPUT_PHDOS_FILE)
-                retrieve_list.append(self._OUTPUT_PHDOS_PROJ_FILE)
-                retrieve_list.append(
-                    Path(self._OUTPUT_SUBFOLDER, self._OUTPUT_DOS_FILE).as_posix()
-                )
-
-        if parameters["INPUTEPW"].get("liso", False) and not parameters["INPUTEPW"].get(
-            "tc_linear", False
-        ):
-            if parameters["INPUTEPW"].get("limag", False):
-                retrieve_list.append("aiida.imag_iso_*")
-            if parameters["INPUTEPW"].get("lpade", False):
-                retrieve_list.append("aiida.pade_iso_*")
-
-        if parameters["INPUTEPW"].get("laniso", False):
-            retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
-            retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
-            if parameters["INPUTEPW"].get("limag", False):
-                retrieve_list.append("aiida.imag_aniso_gap*")
-            if parameters["INPUTEPW"].get("lpade", False):
-                retrieve_list.append("aiida.pade_aniso_gap*")
-
-        return retrieve_list
 
     @staticmethod
     def get_parent_folder_path(parent_folder):
@@ -780,60 +1151,37 @@ class EpwCalculation(NamelistsCalculation):
         parent_folder_epw = self.inputs.parent_folder_epw
         epw_path = self.get_parent_folder_path(parent_folder_epw)
 
-        file_list = [
-            "selecq.fmt",
-            "crystal.fmt",
-            "epwdata.fmt",
-            "dmedata.fmt",
-            "vmedata.fmt",
-            "wigner.fmt",
-            "quadrupole.fmt",
-            "decay.H",
-            "decay.v",
-            "decay.P",
-            "decay.dynmat",
-            "decay.epmate",
-            "decay.epmatp",
-            f"{self._PREFIX}.kgmap",
-            f"{self._PREFIX}.kmap",
-            f"{self._PREFIX}.ukk",
-            f"{self._PREFIX}.mmn",
-            f"{self._PREFIX}.bvec",
-            self._FOLDER_SAVE,
-        ]
-        if parameters["INPUTEPW"].get("restart", False):
-            file_list.append("restart.fmt")
+        # Retrieve restart_type and calculation_type from input ports
+        restart_type = (
+            self.inputs.restart_type.get_member()
+            if "restart_type" in self.inputs
+            else None
+        )
+        calculation_type = (
+            self.inputs.calculation_type.get_member()
+            if "calculation_type" in self.inputs
+            else None
+        )
 
-        if parameters["INPUTEPW"].get("epwread", False) and parameters["INPUTEPW"].get(
-            "elph", False
-        ):
-            remote_symlink_list.append(
-                (
-                    parent_folder_epw.computer.uuid,
-                    Path(
-                        epw_path,
-                        f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
-                    ).as_posix(),
-                    Path(f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp").as_posix(),
-                )
-            )
+        from aiida_epw.common.types import CalculationTypes, RestartType
 
-        if parameters["INPUTEPW"].get("eliashberg", False):
-            if parameters["INPUTEPW"].get("ephwrite", True):
-                if parameters["INPUTEPW"].get("restart", False):
-                    remote_symlink_list.append(
-                        (
-                            parent_folder_epw.computer.uuid,
-                            Path(
-                                epw_path,
-                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat",
-                            ).as_posix(),
-                            Path(
-                                f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
-                            ).as_posix(),
-                        )
-                    )
-            else:
+        is_eliashberg = calculation_type == CalculationTypes.ELIASHBERG
+
+        if restart_type == RestartType.EPHREAD:
+            # EPHREAD mode: Only copy matrix files, basic metadata, and DOS/a2f outputs
+            # Strictly exclude quadrupole.fmt and decay.* files based on source code analysis
+            file_list = [
+                "selecq.fmt",
+                "crystal.fmt",
+                "epwdata.fmt",
+                "wigner.fmt",
+                "dmedata.fmt",
+                "vmedata.fmt",
+                Path(self._OUTPUT_SUBFOLDER, f"{self._PREFIX}.dos").as_posix(),
+            ]
+
+            # Solvers-specific large matrix elements (always symlink)
+            if is_eliashberg:
                 remote_symlink_list.append(
                     (
                         parent_folder_epw.computer.uuid,
@@ -843,6 +1191,53 @@ class EpwCalculation(NamelistsCalculation):
                         ).as_posix(),
                         Path(
                             f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.ephmat"
+                        ).as_posix(),
+                    )
+                )
+            else:
+                # Symlink epmatwp file for transport/polaron
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(
+                            epw_path,
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
+                        ).as_posix(),
+                        Path(
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
+                        ).as_posix(),
+                    )
+                )
+
+        else:
+            # EPHWRITE, WANNIERIZE, or Fallback: copy/symlink default files
+            # Strictly exclude quadrupole.fmt and decay.* files based on source code analysis
+            file_list = [
+                "selecq.fmt",
+                "crystal.fmt",
+                "epwdata.fmt",
+                "dmedata.fmt",
+                "vmedata.fmt",
+                "wigner.fmt",
+                f"{self._PREFIX}.kgmap",
+                f"{self._PREFIX}.kmap",
+                f"{self._PREFIX}.ukk",
+                f"{self._PREFIX}.mmn",
+                f"{self._PREFIX}.bvec",
+                self._FOLDER_SAVE,
+            ]
+
+            # Symlink epmatwp if in EPHWRITE mode
+            if restart_type == RestartType.EPHWRITE:
+                remote_symlink_list.append(
+                    (
+                        parent_folder_epw.computer.uuid,
+                        Path(
+                            epw_path,
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp",
+                        ).as_posix(),
+                        Path(
+                            f"{self._OUTPUT_SUBFOLDER}/{self._PREFIX}.epmatwp"
                         ).as_posix(),
                     )
                 )
@@ -1018,11 +1413,44 @@ class EpwCalculation(NamelistsCalculation):
         settings = self.get_settings()
         parameters = self.prepare_input_parameters(folder, self.get_parameters())
 
+        filirobj_input = None
+        if "filirobj" in self.inputs:
+            filirobj_input = self.inputs.filirobj
+
+        if filirobj_input is not None:
+            if isinstance(filirobj_input, orm.SinglefileData):
+                filename = filirobj_input.filename
+                with filirobj_input.open(mode="rb") as f:
+                    content = f.read()
+                with folder.open(filename, "wb") as handle:
+                    handle.write(content)
+            else:
+                from importlib_resources import files
+                from aiida_epw.common.resources import irobjs
+
+                filename = (
+                    filirobj_input.value
+                    if isinstance(filirobj_input, orm.Str)
+                    else filirobj_input
+                )
+                resource_path = files(irobjs) / filename
+                if not resource_path.exists():
+                    raise ValueError(
+                        f"Built-in basis file '{filename}' not found in resources."
+                    )
+                with folder.open(filename, "wb") as handle:
+                    handle.write(resource_path.read_bytes())
+
+            inputepw = parameters.setdefault("INPUTEPW", {})
+            inputepw["filirobj"] = filename
+            if "gridsamp" not in inputepw:
+                inputepw["gridsamp"] = 2
+
         self.stage_parent_folders(
             folder, parameters, settings, remote_copy_list, remote_symlink_list
         )
 
-        retrieve_list = self.get_additional_retrieve_list(parameters)
+        retrieve_list = []
         self.write_input_file(folder, parameters, settings)
 
         # Stage quadrupole files if present
