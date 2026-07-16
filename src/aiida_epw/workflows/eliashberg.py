@@ -79,6 +79,58 @@ class EliashbergWorkChain(WorkChain):
             message="The expected gap output was not produced.",
         )
 
+    @classmethod
+    def get_builder_from_protocol(
+        cls,
+        code,
+        structure,
+        protocol=None,
+        overrides=None,
+        options=None,
+        w90_chk_to_ukk_script=None,
+        quadrupole_dir=None,
+        protocol_filename="base.yaml",
+        momentum_dependence=None,
+        full_bandwidth=None,
+        real_axis=None,
+        analytical_continuation=None,
+        adaptive=None,
+        max_iterations=None,
+        sampling=None,
+        **kwargs,
+    ):
+        """Return a builder prepopulated from the EPW base protocol."""
+        epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
+            code=code,
+            structure=structure,
+            protocol=protocol,
+            overrides=overrides,
+            options=options,
+            w90_chk_to_ukk_script=w90_chk_to_ukk_script,
+            quadrupole_dir=quadrupole_dir,
+            protocol_filename=protocol_filename,
+            momentum_dependence=momentum_dependence,
+            full_bandwidth=full_bandwidth,
+            real_axis=real_axis,
+            analytical_continuation=analytical_continuation,
+            **kwargs,
+        )
+
+        builder = cls.get_builder()
+        for name in epw_builder:
+            if name == "calculation_type":
+                continue
+            builder[name] = epw_builder[name]
+
+        if adaptive is not None:
+            builder.adaptive = orm.Bool(adaptive)
+        if max_iterations is not None:
+            builder.max_iterations = orm.Int(max_iterations)
+        if sampling is not None:
+            builder.sampling = orm.Dict(dict=sampling)
+
+        return builder
+
     def setup(self):
         """Initialize adaptive-sampling state."""
         self.ctx.iteration = 0

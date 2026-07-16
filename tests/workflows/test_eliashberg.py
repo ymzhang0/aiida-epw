@@ -5,6 +5,16 @@ from aiida.common import AttributeDict
 from aiida.plugins import WorkflowFactory
 
 
+class MockBuilder(dict):
+    """Minimal process-builder stand-in for protocol tests."""
+
+    def __getattr__(self, key):
+        return self[key]
+
+    def __setattr__(self, key, value):
+        self[key] = value
+
+
 def test_eliashberg_workchain_entry_point():
     """Test the workflow is registered through ``aiida.workflows``."""
     from aiida_epw.workflows.eliashberg import EliashbergWorkChain
@@ -48,6 +58,47 @@ def test_setup_locks_calculation_type_to_eliashberg():
         workchain.ctx.inputs.calculation_type.get_member()
         is CalculationTypes.ELIASHBERG
     )
+
+
+def test_get_builder_from_protocol_locks_calculation_type(
+    fixture_code, generate_structure, monkeypatch
+):
+    """Test protocol builder wraps the base builder without exposing calculation type."""
+    from aiida_epw.common.types import CalculationTypes
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    from aiida_epw.workflows.eliashberg import EliashbergWorkChain
+
+    def mock_get_builder_from_protocol(**kwargs):
+        builder = MockBuilder()
+        builder.code = kwargs["code"]
+        builder.structure = kwargs["structure"]
+        builder.parameters = orm.Dict(dict={"INPUTEPW": {"temps": [1.0, 2.0]}})
+        builder.calculation_type = orm.EnumData(CalculationTypes.TRANSPORT)
+        return builder
+
+    monkeypatch.setattr(
+        EpwBaseWorkChain,
+        "get_builder_from_protocol",
+        mock_get_builder_from_protocol,
+    )
+
+    code = fixture_code("epw.epw")
+    structure = generate_structure()
+    builder = EliashbergWorkChain.get_builder_from_protocol(
+        code=code,
+        structure=structure,
+        protocol="fast",
+        adaptive=False,
+        max_iterations=2,
+        sampling={"refine_points": 3},
+    )
+
+    assert builder.code is code
+    assert builder.structure is structure
+    assert "calculation_type" not in builder
+    assert builder.adaptive.value is False
+    assert builder.max_iterations.value == 2
+    assert builder.sampling.get_dict() == {"refine_points": 3}
 
 
 def test_extract_gap_series_infers_isotropic_from_inputs():
