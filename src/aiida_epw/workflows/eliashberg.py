@@ -47,6 +47,12 @@ class EliashbergWorkChain(WorkChain):
             help="Maximum number of EPW calculations for adaptive sampling.",
         )
         spec.input(
+            "temps",
+            valid_type=orm.List,
+            required=False,
+            help="Initial temperatures, in kelvin, for the Eliashberg sampling.",
+        )
+        spec.input(
             "sampling",
             valid_type=orm.Dict,
             required=False,
@@ -96,6 +102,7 @@ class EliashbergWorkChain(WorkChain):
         analytical_continuation=None,
         adaptive=None,
         max_iterations=None,
+        temps=None,
         sampling=None,
         **kwargs,
     ):
@@ -126,6 +133,8 @@ class EliashbergWorkChain(WorkChain):
             builder.adaptive = orm.Bool(adaptive)
         if max_iterations is not None:
             builder.max_iterations = orm.Int(max_iterations)
+        if temps is not None:
+            builder.temps = orm.List(list=temps)
         if sampling is not None:
             builder.sampling = orm.Dict(dict=sampling)
 
@@ -139,7 +148,11 @@ class EliashbergWorkChain(WorkChain):
         self.ctx.inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain))
         self.ctx.inputs.calculation_type = orm.EnumData(CalculationTypes.ELIASHBERG)
         parameters = self.ctx.inputs.parameters.get_dict()
-        temperatures = get_temperature_list(parameters)
+        temperatures = (
+            [float(temperature) for temperature in self.inputs.temps.get_list()]
+            if "temps" in self.inputs
+            else get_temperature_list(parameters)
+        )
         if temperatures:
             self.ctx.inputs.parameters = orm.Dict(
                 set_temperature_list(parameters, temperatures)

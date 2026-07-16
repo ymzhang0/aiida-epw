@@ -24,6 +24,7 @@ def test_eliashberg_workchain_entry_point():
     assert "calculation_type" not in EliashbergWorkChain.spec().inputs
     assert "max_iterations" in EliashbergWorkChain.spec().inputs
     assert "max_sampling_iterations" not in EliashbergWorkChain.spec().inputs
+    assert "temps" in EliashbergWorkChain.spec().inputs
     assert "result" in EliashbergWorkChain.spec().outputs
     assert "sampling_report" not in EliashbergWorkChain.spec().outputs
     assert hasattr(EliashbergWorkChain, "should_run_epw")
@@ -40,6 +41,7 @@ def test_setup_locks_calculation_type_to_eliashberg():
     class FakeWorkChain:
         def __init__(self):
             self.ctx = AttributeDict()
+            self.inputs = AttributeDict()
 
         def exposed_inputs(self, workchain_class):
             assert workchain_class is EpwBaseWorkChain
@@ -58,6 +60,35 @@ def test_setup_locks_calculation_type_to_eliashberg():
         workchain.ctx.inputs.calculation_type.get_member()
         is CalculationTypes.ELIASHBERG
     )
+
+
+def test_setup_uses_initial_temps_input():
+    """Test explicit initial temperatures override protocol parameters."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    from aiida_epw.workflows.eliashberg import EliashbergWorkChain
+
+    class FakeWorkChain:
+        def __init__(self):
+            self.ctx = AttributeDict()
+            self.inputs = AttributeDict({"temps": orm.List(list=[3.0, 1.0])})
+
+        def exposed_inputs(self, workchain_class):
+            assert workchain_class is EpwBaseWorkChain
+            return AttributeDict(
+                {
+                    "parameters": orm.Dict(
+                        dict={"INPUTEPW": {"temps": [10.0, 20.0], "nstemp": 2}}
+                    ),
+                }
+            )
+
+    workchain = FakeWorkChain()
+
+    EliashbergWorkChain.setup(workchain)
+
+    input_epw = workchain.ctx.inputs.parameters.get_dict()["INPUTEPW"]
+    assert input_epw["temps"] == [1.0, 3.0]
+    assert "nstemp" not in input_epw
 
 
 def test_get_builder_from_protocol_locks_calculation_type(
@@ -90,6 +121,7 @@ def test_get_builder_from_protocol_locks_calculation_type(
         protocol="fast",
         adaptive=False,
         max_iterations=2,
+        temps=[1.0, 2.0],
         sampling={"refine_points": 3},
     )
 
@@ -98,6 +130,7 @@ def test_get_builder_from_protocol_locks_calculation_type(
     assert "calculation_type" not in builder
     assert builder.adaptive.value is False
     assert builder.max_iterations.value == 2
+    assert builder.temps.get_list() == [1.0, 2.0]
     assert builder.sampling.get_dict() == {"refine_points": 3}
 
 
