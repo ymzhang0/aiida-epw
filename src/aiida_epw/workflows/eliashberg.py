@@ -3,6 +3,7 @@
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, append_, while_
+from aiida_quantumespresso.workflows.protocols.utils import recursive_merge
 
 from aiida_epw.common.types import CalculationTypes
 from aiida_epw.tools.eliashberg import (
@@ -96,7 +97,7 @@ class EliashbergWorkChain(WorkChain):
         parent_folder_epw=None,
         w90_chk_to_ukk_script=None,
         quadrupole_dir=None,
-        protocol_filename="base.yaml",
+        protocol_filename="eliashberg.yaml",
         momentum_dependence=None,
         full_bandwidth=None,
         real_axis=None,
@@ -141,11 +142,15 @@ class EliashbergWorkChain(WorkChain):
                 )
             parent_folder_epw = epw_source.outputs.remote_stash
 
+        protocol_inputs = EpwBaseWorkChain.get_protocol_inputs(
+            protocol, overrides, filename=protocol_filename
+        )
+        epw_overrides = recursive_merge(protocol_inputs, overrides or {})
         epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
             code=epw_code,
             structure=structure,
             protocol=protocol,
-            overrides=overrides,
+            overrides=epw_overrides,
             options=options,
             w90_chk_to_ukk_script=w90_chk_to_ukk_script,
             quadrupole_dir=quadrupole_dir,
@@ -165,6 +170,15 @@ class EliashbergWorkChain(WorkChain):
             if name == "calculation_type":
                 continue
             builder[name] = epw_builder[name]
+
+        if adaptive is None:
+            adaptive = protocol_inputs.get("adaptive")
+        if max_iterations is None:
+            max_iterations = protocol_inputs.get("max_iterations")
+        if temps is None:
+            temps = protocol_inputs.get("temps")
+        if sampling is None:
+            sampling = protocol_inputs.get("sampling")
 
         if adaptive is not None:
             builder.adaptive = orm.Bool(adaptive)

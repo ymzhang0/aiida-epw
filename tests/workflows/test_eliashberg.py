@@ -156,6 +156,56 @@ def test_get_builder_from_protocol_uses_parent_epw(
     assert builder.sampling.get_dict() == {"refine_points": 3}
 
 
+def test_get_builder_from_protocol_uses_eliashberg_protocol(
+    fixture_code,
+    generate_structure,
+    generate_remote_data,
+    fixture_localhost,
+    monkeypatch,
+):
+    """Test workflow defaults are loaded from the Eliashberg protocol file."""
+    from aiida_epw.workflows.base import EpwBaseWorkChain
+    from aiida_epw.workflows.eliashberg import EliashbergWorkChain
+
+    def mock_get_builder_from_protocol(**kwargs):
+        builder = MockBuilder()
+        builder.code = kwargs["code"]
+        builder.structure = kwargs["structure"]
+        builder.parameters = orm.Dict(dict={"INPUTEPW": {}})
+        return builder
+
+    monkeypatch.setattr(
+        EpwBaseWorkChain,
+        "get_builder_from_protocol",
+        mock_get_builder_from_protocol,
+    )
+
+    code = fixture_code("epw.epw")
+    structure = generate_structure()
+    parent_epw = MagicMock()
+    parent_epw.process_label = "EpwBaseWorkChain"
+    parent_epw.inputs = MagicMock()
+    parent_epw.inputs.structure = structure
+    parent_epw.inputs.code = code
+    parent_epw.inputs.kpoints = orm.KpointsData()
+    parent_epw.inputs.qpoints = orm.KpointsData()
+    parent_epw.outputs = MagicMock()
+    parent_epw.outputs.remote_stash = generate_remote_data(
+        fixture_localhost, "/tmp/remote_stash"
+    )
+
+    builder = EliashbergWorkChain.get_builder_from_protocol(
+        epw_code=code,
+        parent_epw=parent_epw,
+        protocol="fast",
+    )
+
+    assert builder.adaptive.value is True
+    assert builder.max_iterations.value == 2
+    assert builder.temps.get_list() == [1.0, 5.0]
+    assert builder.sampling.get_dict() == {"refine_points": 5}
+
+
 def test_extract_gap_series_infers_isotropic_from_inputs():
     """Test isotropic gap extraction is inferred from ``momentum_dependence``."""
     from aiida_epw.workflows.eliashberg import extract_gap_series
