@@ -54,17 +54,16 @@ class EliashbergWorkChain(WorkChain):
 
         spec.outline(
             cls.setup,
-            while_(cls.should_run_sampling)(
+            while_(cls.should_run_epw)(
                 cls.run_epw,
                 cls.inspect_epw,
-                cls.analyze_sampling,
             ),
             cls.results,
         )
 
         spec.expose_outputs(EpwBaseWorkChain)
         spec.output(
-            "sampling_report",
+            "result",
             valid_type=orm.Dict,
             help="Summary of the adaptive temperature-sampling decisions.",
         )
@@ -92,7 +91,7 @@ class EliashbergWorkChain(WorkChain):
                 set_temperature_list(parameters, temperatures)
             )
 
-    def should_run_sampling(self):
+    def should_run_epw(self):
         """Return whether another EPW calculation should be submitted."""
         return self.ctx.should_run
 
@@ -112,7 +111,7 @@ class EliashbergWorkChain(WorkChain):
         return {"epw": append_(workchain_node)}
 
     def inspect_epw(self):
-        """Check the EPW subprocess status."""
+        """Check the EPW subprocess status and update temperature sampling."""
         workchain = self.ctx.epw[-1]
         if not workchain.is_finished_ok:
             self.report(
@@ -121,9 +120,6 @@ class EliashbergWorkChain(WorkChain):
             )
             return self.exit_codes.ERROR_SUB_PROCESS_EPW
 
-    def analyze_sampling(self):
-        """Analyze gap outputs and update the next temperature list if needed."""
-        workchain = self.ctx.epw[-1]
         gap_series = self._extract_gap_series(workchain)
         if gap_series is None:
             return self.exit_codes.ERROR_GAP_OUTPUT_MISSING
@@ -161,7 +157,7 @@ class EliashbergWorkChain(WorkChain):
         final_workchain = self.ctx.epw[-1]
         self.out_many(self.exposed_outputs(final_workchain, EpwBaseWorkChain))
         self.out(
-            "sampling_report",
+            "result",
             orm.Dict(
                 {
                     "iterations": self.ctx.iteration,

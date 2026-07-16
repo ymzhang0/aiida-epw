@@ -10,6 +10,11 @@ def test_eliashberg_workchain_entry_point():
 
     assert WorkflowFactory("epw.eliashberg") is EliashbergWorkChain
     assert "target" not in EliashbergWorkChain.spec().inputs
+    assert "result" in EliashbergWorkChain.spec().outputs
+    assert "sampling_report" not in EliashbergWorkChain.spec().outputs
+    assert hasattr(EliashbergWorkChain, "should_run_epw")
+    assert not hasattr(EliashbergWorkChain, "should_run_sampling")
+    assert not hasattr(EliashbergWorkChain, "analyze_sampling")
 
 
 def test_extract_gap_series_infers_isotropic_from_inputs():
