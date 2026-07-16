@@ -1,5 +1,7 @@
 """Tests for the adaptive Eliashberg work chain."""
 
+from unittest.mock import MagicMock
+
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.plugins import WorkflowFactory
@@ -91,10 +93,14 @@ def test_setup_uses_initial_temps_input():
     assert "nstemp" not in input_epw
 
 
-def test_get_builder_from_protocol_locks_calculation_type(
-    fixture_code, generate_structure, monkeypatch
+def test_get_builder_from_protocol_uses_parent_epw(
+    fixture_code,
+    generate_structure,
+    generate_remote_data,
+    fixture_localhost,
+    monkeypatch,
 ):
-    """Test protocol builder wraps the base builder without exposing calculation type."""
+    """Test protocol builder starts from a parent Wannier-representation EPW run."""
     from aiida_epw.common.types import CalculationTypes
     from aiida_epw.workflows.base import EpwBaseWorkChain
     from aiida_epw.workflows.eliashberg import EliashbergWorkChain
@@ -115,9 +121,22 @@ def test_get_builder_from_protocol_locks_calculation_type(
 
     code = fixture_code("epw.epw")
     structure = generate_structure()
+    remote_stash = generate_remote_data(fixture_localhost, "/tmp/remote_stash")
+    kpoints = orm.KpointsData()
+    qpoints = orm.KpointsData()
+    parent_epw = MagicMock()
+    parent_epw.process_label = "EpwBaseWorkChain"
+    parent_epw.inputs = MagicMock()
+    parent_epw.inputs.structure = structure
+    parent_epw.inputs.code = code
+    parent_epw.inputs.kpoints = kpoints
+    parent_epw.inputs.qpoints = qpoints
+    parent_epw.outputs = MagicMock()
+    parent_epw.outputs.remote_stash = remote_stash
+
     builder = EliashbergWorkChain.get_builder_from_protocol(
-        code=code,
-        structure=structure,
+        epw_code=code,
+        parent_epw=parent_epw,
         protocol="fast",
         adaptive=False,
         max_iterations=2,
@@ -127,6 +146,9 @@ def test_get_builder_from_protocol_locks_calculation_type(
 
     assert builder.code is code
     assert builder.structure is structure
+    assert builder.parent_folder_epw is remote_stash
+    assert builder.kpoints is kpoints
+    assert builder.qpoints is qpoints
     assert "calculation_type" not in builder
     assert builder.adaptive.value is False
     assert builder.max_iterations.value == 2

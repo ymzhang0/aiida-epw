@@ -88,11 +88,12 @@ class EliashbergWorkChain(WorkChain):
     @classmethod
     def get_builder_from_protocol(
         cls,
-        code,
-        structure,
+        epw_code=None,
+        parent_epw=None,
         protocol=None,
         overrides=None,
         options=None,
+        parent_folder_epw=None,
         w90_chk_to_ukk_script=None,
         quadrupole_dir=None,
         protocol_filename="base.yaml",
@@ -104,11 +105,44 @@ class EliashbergWorkChain(WorkChain):
         max_iterations=None,
         temps=None,
         sampling=None,
+        code=None,
         **kwargs,
     ):
-        """Return a builder prepopulated from the EPW base protocol."""
+        """Return a builder prepopulated from a parent Wannier-representation EPW run."""
+        if epw_code is None:
+            epw_code = code
+        if epw_code is None:
+            raise ValueError("The `epw_code` input is required.")
+        if parent_epw is None:
+            raise ValueError("The `parent_epw` input is required.")
+
+        if parent_epw.process_label == "EpwPrepWorkChain":
+            epw_source = (
+                parent_epw.base.links.get_outgoing(link_label_filter="epw_base")
+                .first()
+                .node
+            )
+            structure = parent_epw.inputs.structure
+        elif parent_epw.process_label == "EpwBaseWorkChain":
+            epw_source = parent_epw
+            try:
+                structure = parent_epw.inputs.structure
+            except AttributeError as exc:
+                raise ValueError(
+                    "The `parent_epw` (EpwBaseWorkChain) does not contain `structure` in its inputs."
+                ) from exc
+        else:
+            raise ValueError(f"Invalid parent_epw process: {parent_epw.process_label}")
+
+        if parent_folder_epw is None:
+            if epw_source.inputs.code.computer.hostname != epw_code.computer.hostname:
+                raise ValueError(
+                    "The `epw_code` must be configured on the same computer as that where the `parent_epw` was run."
+                )
+            parent_folder_epw = epw_source.outputs.remote_stash
+
         epw_builder = EpwBaseWorkChain.get_builder_from_protocol(
-            code=code,
+            code=epw_code,
             structure=structure,
             protocol=protocol,
             overrides=overrides,
@@ -122,6 +156,9 @@ class EliashbergWorkChain(WorkChain):
             analytical_continuation=analytical_continuation,
             **kwargs,
         )
+        epw_builder.kpoints = epw_source.inputs.kpoints
+        epw_builder.qpoints = epw_source.inputs.qpoints
+        epw_builder.parent_folder_epw = parent_folder_epw
 
         builder = cls.get_builder()
         for name in epw_builder:
