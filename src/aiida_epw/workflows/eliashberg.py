@@ -4,6 +4,7 @@ from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, append_, while_
 
+from aiida_epw.common.types import CalculationTypes
 from aiida_epw.tools.eliashberg import (
     get_temperature_list,
     set_temperature_list,
@@ -32,7 +33,7 @@ class EliashbergWorkChain(WorkChain):
         """Define the work chain specification."""
         super().define(spec)
 
-        spec.expose_inputs(EpwBaseWorkChain)
+        spec.expose_inputs(EpwBaseWorkChain, exclude=("calculation_type",))
         spec.input(
             "adaptive",
             valid_type=orm.Bool,
@@ -84,6 +85,7 @@ class EliashbergWorkChain(WorkChain):
         self.ctx.should_run = True
         self.ctx.reports = []
         self.ctx.inputs = AttributeDict(self.exposed_inputs(EpwBaseWorkChain))
+        self.ctx.inputs.calculation_type = orm.EnumData(CalculationTypes.ELIASHBERG)
         parameters = self.ctx.inputs.parameters.get_dict()
         temperatures = get_temperature_list(parameters)
         if temperatures:
