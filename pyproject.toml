@@ -48,6 +48,7 @@ Source = "https://github.com/aiidaplugins/aiida-epw"
 
 [project.entry-points.'aiida.workflows']
 'epw.base' = 'aiida_epw.workflows.base:EpwBaseWorkChain'
+'epw.eliashberg' = 'aiida_epw.workflows.eliashberg:EliashbergWorkChain'
 'epw.epw_prep' = 'aiida_epw.workflows.prep:EpwPrepWorkChain'
 'epw.supercon' = 'aiida_epw.workflows.supercon:SuperConWorkChain'
 'epw.mobility' = 'aiida_epw.workflows.mobility:MobilityWorkChain'
