@@ -40,7 +40,7 @@ class EliashbergWorkChain(WorkChain):
             help="Whether to refine the temperature list from parsed gap data.",
         )
         spec.input(
-            "max_sampling_iterations",
+            "max_iterations",
             valid_type=orm.Int,
             default=lambda: orm.Int(4),
             help="Maximum number of EPW calculations for adaptive sampling.",
@@ -137,7 +137,7 @@ class EliashbergWorkChain(WorkChain):
         should_stop = (
             not self.inputs.adaptive.value
             or report["status"] in ("GOOD", "BAD_DATA")
-            or self.ctx.iteration >= self.inputs.max_sampling_iterations.value
+            or self.ctx.iteration >= self.inputs.max_iterations.value
             or report["temperatures"] == temperatures
         )
         if should_stop:

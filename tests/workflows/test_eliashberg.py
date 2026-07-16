@@ -10,6 +10,8 @@ def test_eliashberg_workchain_entry_point():
 
     assert WorkflowFactory("epw.eliashberg") is EliashbergWorkChain
     assert "target" not in EliashbergWorkChain.spec().inputs
+    assert "max_iterations" in EliashbergWorkChain.spec().inputs
+    assert "max_sampling_iterations" not in EliashbergWorkChain.spec().inputs
     assert "result" in EliashbergWorkChain.spec().outputs
     assert "sampling_report" not in EliashbergWorkChain.spec().outputs
     assert hasattr(EliashbergWorkChain, "should_run_epw")
