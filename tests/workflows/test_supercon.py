@@ -308,3 +308,37 @@ def test_supercon_get_builder_from_protocol_default(
         from aiida_epw.common import RestartType
 
         assert builder.epw_final_aniso.restart_type == RestartType.EPHREAD
+
+
+def test_supercon_on_terminated_ignores_runtime_error():
+    """Test that on_terminated catches RuntimeError when cleaning remote folders."""
+    from plumpy.base.utils import call_with_super_check
+    from aiida_epw.workflows.supercon import SuperConWorkChain
+    from types import SimpleNamespace
+
+    class FakeCalcJobNode(orm.CalcJobNode):
+        def __init__(self):
+            pass
+
+        @property
+        def pk(self):
+            return 123
+
+        @property
+        def outputs(self):
+            return SimpleNamespace(
+                remote_folder=SimpleNamespace(
+                    _clean=MagicMock(side_effect=RuntimeError("Cannot clean"))
+                )
+            )
+
+    calc_node = FakeCalcJobNode()
+    wc = MagicMock(spec=SuperConWorkChain)
+    wc._enable_persistence = False
+    wc.on_terminated = SuperConWorkChain.on_terminated.__get__(wc)
+    wc.inputs = SimpleNamespace(clean_workdir=SimpleNamespace(value=True))
+    wc.node.called_descendants = [calc_node]
+    wc.report = MagicMock()
+
+    # Should not raise exception
+    call_with_super_check(wc.on_terminated)
