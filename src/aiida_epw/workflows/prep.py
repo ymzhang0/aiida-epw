@@ -461,19 +461,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         return config
 
     @classmethod
-    def _get_ph_base_config(cls, inputs):
-        """Return PhBaseWorkChain overrides from the unified ph_bands section."""
-        ph_bands_config = inputs.get("ph_bands", {})
-        dynamical_matrix_config = ph_bands_config.get("dynamical_matrix", {})
-        ph_base_config = dynamical_matrix_config.get("ph_base")
-        if ph_base_config is None:
-            return None
-
-        ph_base_config = dict(ph_base_config)
-        ph_base_config.pop("parallelize_qpoints", None)
-        return ph_base_config
-
-    @classmethod
     def get_builder_from_protocol(
         cls,
         codes,
@@ -653,19 +640,6 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         builder.w90_bands = w90_bands
 
-        # Construction of builder for `PhBaseWorkChain`
-        if bandplot:
-            builder.pop("ph_base", None)
-        else:
-            args = (codes["ph"], None, protocol)
-            ph_base = PhBaseWorkChain.get_builder_from_protocol(
-                *args, overrides=cls._get_ph_base_config(inputs), **kwargs
-            )
-            ph_base.pop("clean_workdir", None)
-            ph_base.pop("qpoints_distance")
-            builder.ph_base = ph_base
-
-        # Construction of builder for `EPWBaseWorkChain`s
         epw_builder_namespaces = ("epw_base", "epw_bands")
         for namespace in epw_builder_namespaces:
             epw_inputs = inputs.get(namespace, None)
@@ -709,9 +683,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         builder.kpoints_factor_nscf = orm.Int(inputs["kpoints_factor_nscf"])
         builder.clean_workdir = orm.Bool(inputs["clean_workdir"])
 
-        # Set bandplot flag and prebuild PhononBandsWorkChain inputs from YAML.
+        # Set ph_base or ph_bands based on bandplot flag.
         if bandplot:
             builder.bandplot = orm.Int(1)
+            builder.pop("ph_base", None)
             ph_bands_config = inputs.get("ph_bands")
             if ph_bands_config is None:
                 raise ValueError(
@@ -728,6 +703,14 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 builder.ph_bands[key] = value
         else:
             builder.pop("ph_bands", None)
+            ph_base_overrides = inputs.get("ph_base", {}) or {}
+            args = (codes["ph"], None, protocol)
+            ph_base = PhBaseWorkChain.get_builder_from_protocol(
+                *args, overrides=ph_base_overrides, **kwargs
+            )
+            ph_base.pop("clean_workdir", None)
+            ph_base.pop("qpoints_distance", None)
+            builder.ph_base = ph_base
 
         return builder
 

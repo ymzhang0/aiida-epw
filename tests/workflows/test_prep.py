@@ -205,31 +205,6 @@ class TestBandplotRunPhInputs:
             reports=reports,
         )
 
-    def test_non_bandplot_ph_base_config_comes_from_ph_bands(self):
-        """Non-bandplot phonons use ph_bands.dynamical_matrix.ph_base."""
-        from aiida_epw.workflows.prep import EpwPrepWorkChain
-
-        config = {
-            "ph_bands": {
-                "dynamical_matrix": {
-                    "ph_base": {
-                        "parallelize_qpoints": True,
-                        "ph": {
-                            "settings": {"PREPARE_FOR_EPW": True},
-                            "parameters": {"INPUTPH": {"epsil": True}},
-                        },
-                    }
-                }
-            }
-        }
-
-        assert EpwPrepWorkChain._get_ph_base_config(config) == {
-            "ph": {
-                "settings": {"PREPARE_FOR_EPW": True},
-                "parameters": {"INPUTPH": {"epsil": True}},
-            }
-        }
-
     def test_bandplot_requires_optional_phonon_bands_dependency(self, monkeypatch):
         """Bandplot mode should report a clear error without the optional package."""
         import aiida_epw.workflows.prep as prep_module
