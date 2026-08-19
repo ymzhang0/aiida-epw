@@ -752,13 +752,8 @@ class EpwCalculation(NamelistsCalculation):
             )
             inputepw_parameters["nstemp"] = self._MAX_NSTEMP
 
-    def prepare_input_parameters(self, folder, parameters):
-        """Populate plugin-managed EPW parameters before writing the input file."""
-        inputepw_parameters = parameters["INPUTEPW"]
-
-        self.cap_nstemp(inputepw_parameters)
-
-        # Override Eliashberg settings in parameters if inputs are specified
+    def set_eliashberg_parameters(self, inputepw_parameters):
+        """Set Eliashberg parameters in INPUTEPW based on explicit calculation inputs."""
         if "momentum_dependence" in self.inputs:
             momentum_dependence = self.inputs.momentum_dependence.value
             inputepw_parameters["laniso"] = momentum_dependence
@@ -788,57 +783,25 @@ class EpwCalculation(NamelistsCalculation):
                 inputepw_parameters["lpade"] = False
                 inputepw_parameters["lacon"] = False
 
+    def set_restart_parameters(self, inputepw_parameters):
+        """Set restart parameters in INPUTEPW based on the restart_type input."""
         if "restart_type" in self.inputs:
-            from aiida_epw.common.types import RestartType
+            from aiida_epw.common.types import RESTART_TYPE_DEFAULTS, RestartType
 
             restart_type = self.inputs.restart_type.get_member()
-            if restart_type is RestartType.NONE:
-                inputepw_parameters.update(
-                    {
-                        "epwread": False,
-                        "epwwrite": True,
-                        "restart": False,
-                        "ep_coupling": True,
-                        "elph": True,
-                        "epbwrite": True,
-                        "epbread": False,
-                    }
-                )
-            elif restart_type in (RestartType.EPHWRITE, RestartType.EPHWRITE_RESTART):
-                inputepw_parameters.update(
-                    {
-                        "epwread": True,
-                        "epwwrite": False,
-                        "restart": restart_type is RestartType.EPHWRITE_RESTART,
-                        "ep_coupling": True,
-                        "elph": True,
-                        "ephwrite": True,
-                    }
-                )
-            elif restart_type in (RestartType.EPHREAD, RestartType.EPHREAD_RESTART):
-                inputepw_parameters.update(
-                    {
-                        "epwread": True,
-                        "restart": restart_type is RestartType.EPHREAD_RESTART,
-                        "ep_coupling": False,
-                        "elph": False,
-                        "ephwrite": False,
-                    }
-                )
+            inputepw_parameters.update(RESTART_TYPE_DEFAULTS[restart_type])
+
+            if restart_type in (RestartType.EPHREAD, RestartType.EPHREAD_RESTART):
                 if inputepw_parameters.get("scattering", False):
                     inputepw_parameters["epmatkqread"] = True
-            elif restart_type is RestartType.EPWREAD:
-                inputepw_parameters.update(
-                    {
-                        "epwread": True,
-                        "epwwrite": False,
-                        "epbwrite": False,
-                        "epbread": False,
-                        "ep_coupling": True,
-                        "elph": True,
-                    }
-                )
-                inputepw_parameters.setdefault("restart", False)
+
+    def prepare_input_parameters(self, folder, parameters):
+        """Populate plugin-managed EPW parameters before writing the input file."""
+        inputepw_parameters = parameters["INPUTEPW"]
+
+        self.cap_nstemp(inputepw_parameters)
+        self.set_eliashberg_parameters(inputepw_parameters)
+        self.set_restart_parameters(inputepw_parameters)
 
         inputepw_parameters["outdir"] = self._OUTPUT_SUBFOLDER
         inputepw_parameters["dvscf_dir"] = self._FOLDER_SAVE
