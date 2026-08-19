@@ -557,7 +557,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 try:
                     called_descendant.outputs.remote_folder._clean()  # pylint: disable=protected-access
                     cleaned_calcs.append(called_descendant.pk)
-                except (IOError, OSError, KeyError):
+                except (IOError, OSError, KeyError, RuntimeError):
                     pass
 
         if cleaned_calcs:
