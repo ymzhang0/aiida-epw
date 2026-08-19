@@ -435,7 +435,7 @@ class EpwCalculation(NamelistsCalculation):
         parameters = cls.normalize_parameters(value["parameters"].get_dict())
 
         try:
-            cls.validate_parameters_inputs(parameters, value)
+            cls.validate_parameters(parameters, value)
         except exceptions.InputValidationError as exception:
             return str(exception)
 
@@ -493,7 +493,7 @@ class EpwCalculation(NamelistsCalculation):
         return any(key.startswith("proj(") for key in inputepw)
 
     @classmethod
-    def validate_parameters_inputs(cls, parameters, inputs):
+    def validate_parameters(cls, parameters, inputs):
         """Validate normalized EPW parameters against the provided inputs."""
         if "INPUTEPW" not in parameters:
             raise exceptions.InputValidationError(
@@ -529,11 +529,23 @@ class EpwCalculation(NamelistsCalculation):
                     "`parameters.INPUTEPW.wannierize` is true."
                 )
 
-        cls.validate_eliashberg_inputs(inputepw, inputs)
+        cls.validate_eliashberg_parameters(inputepw, inputs)
 
     @staticmethod
-    def validate_eliashberg_inputs(inputepw, inputs):
+    def validate_eliashberg_parameters(inputepw, inputs):
         """Validate combinations of the explicit Eliashberg input ports."""
+        eliashberg_any = any(
+            f in inputs
+            for f in (
+                "momentum_dependence",
+                "full_bandwidth",
+                "real_axis",
+                "analytical_continuation",
+            )
+        )
+        if eliashberg_any:
+            inputepw["eliashberg"] = True
+
         momentum_dependence = inputs.get("momentum_dependence", None)
         full_bandwidth = inputs.get("full_bandwidth", None)
         real_axis = inputs.get("real_axis", None)
@@ -726,7 +738,7 @@ class EpwCalculation(NamelistsCalculation):
         else:
             parameters = {}
 
-        self.validate_parameters_inputs(parameters, self.inputs)
+        self.validate_parameters(parameters, self.inputs)
 
         return parameters
 
@@ -747,22 +759,10 @@ class EpwCalculation(NamelistsCalculation):
         self.cap_nstemp(inputepw_parameters)
 
         # Override Eliashberg settings in parameters if inputs are specified
-        eliashberg_any = any(
-            f in self.inputs
-            for f in (
-                "momentum_dependence",
-                "full_bandwidth",
-                "real_axis",
-                "analytical_continuation",
-            )
-        )
-        if eliashberg_any:
-            inputepw_parameters["eliashberg"] = True
-
-            if "momentum_dependence" in self.inputs:
-                momentum_dependence = self.inputs.momentum_dependence.value
-                inputepw_parameters["laniso"] = momentum_dependence
-                inputepw_parameters["liso"] = not momentum_dependence
+        if "momentum_dependence" in self.inputs:
+            momentum_dependence = self.inputs.momentum_dependence.value
+            inputepw_parameters["laniso"] = momentum_dependence
+            inputepw_parameters["liso"] = not momentum_dependence
 
             if "full_bandwidth" in self.inputs:
                 inputepw_parameters["fbw"] = self.inputs.full_bandwidth.value

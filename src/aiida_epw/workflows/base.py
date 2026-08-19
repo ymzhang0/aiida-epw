@@ -73,7 +73,7 @@ def validate_inputs(  # pylint: disable=unused-argument,inconsistent-return-stat
     if isinstance(parameters, orm.Dict):
         parameters = parameters.get_dict()
     try:
-        EpwCalculation.validate_eliashberg_inputs(
+        EpwCalculation.validate_eliashberg_parameters(
             parameters.get("INPUTEPW", {}), inputs
         )
     except exceptions.InputValidationError as exception:
