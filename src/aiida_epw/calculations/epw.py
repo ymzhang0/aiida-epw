@@ -764,29 +764,29 @@ class EpwCalculation(NamelistsCalculation):
             inputepw_parameters["laniso"] = momentum_dependence
             inputepw_parameters["liso"] = not momentum_dependence
 
-            if "full_bandwidth" in self.inputs:
-                inputepw_parameters["fbw"] = self.inputs.full_bandwidth.value
+        if "full_bandwidth" in self.inputs:
+            inputepw_parameters["fbw"] = self.inputs.full_bandwidth.value
 
-            if "real_axis" in self.inputs:
-                real_axis = self.inputs.real_axis.value
-                inputepw_parameters["lreal"] = real_axis
-                inputepw_parameters["limag"] = not real_axis
+        if "real_axis" in self.inputs:
+            real_axis = self.inputs.real_axis.value
+            inputepw_parameters["lreal"] = real_axis
+            inputepw_parameters["limag"] = not real_axis
 
-            if "analytical_continuation" in self.inputs:
-                ac_method = self.inputs.analytical_continuation.value.lower()
-                if ac_method == "pade":
-                    inputepw_parameters["lpade"] = True
-                    inputepw_parameters["lacon"] = False
-                    inputepw_parameters["limag"] = True
-                    inputepw_parameters["lreal"] = False
-                elif ac_method == "acon":
-                    inputepw_parameters["lpade"] = True
-                    inputepw_parameters["lacon"] = True
-                    inputepw_parameters["limag"] = True
-                    inputepw_parameters["lreal"] = False
-                elif ac_method == "none":
-                    inputepw_parameters["lpade"] = False
-                    inputepw_parameters["lacon"] = False
+        if "analytical_continuation" in self.inputs:
+            ac_method = self.inputs.analytical_continuation.value.lower()
+            if ac_method == "pade":
+                inputepw_parameters["lpade"] = True
+                inputepw_parameters["lacon"] = False
+                inputepw_parameters["limag"] = True
+                inputepw_parameters["lreal"] = False
+            elif ac_method == "acon":
+                inputepw_parameters["lpade"] = True
+                inputepw_parameters["lacon"] = True
+                inputepw_parameters["limag"] = True
+                inputepw_parameters["lreal"] = False
+            elif ac_method == "none":
+                inputepw_parameters["lpade"] = False
+                inputepw_parameters["lacon"] = False
 
         if "restart_type" in self.inputs:
             from aiida_epw.common.types import RestartType
