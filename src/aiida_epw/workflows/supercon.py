@@ -1,7 +1,5 @@
 """Work chain for computing the critical temperature based on an `EpwWorkChain`."""
 
-from scipy.interpolate import interp1d
-
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, while_, if_, append_
@@ -35,15 +33,6 @@ def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
 @calcfunction
 def split_list(list_node: orm.List) -> dict:
     return {f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())}
-
-
-@calcfunction
-def calculate_tc(max_eigenvalue: orm.XyData) -> orm.Float:
-    me_array = max_eigenvalue.get_array("max_eigenvalue")
-    try:
-        return orm.Float(float(interp1d(me_array[:, 1], me_array[:, 0])(1.0)))
-    except ValueError:
-        return orm.Float(40.0)
 
 
 class SuperConWorkChain(ProtocolMixin, WorkChain):
@@ -541,10 +530,7 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
 
     def results(self):
         """TODO"""
-        self.out("Tc_iso", calculate_tc(self.ctx.final_epw_iso.outputs.max_eigenvalue))
         self.out("parameters", self.ctx.final_epw_iso.outputs.output_parameters)
-        self.out("max_eigenvalue", self.ctx.final_epw_iso.outputs.max_eigenvalue)
-        self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""
