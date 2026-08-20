@@ -26,6 +26,11 @@ def parse_space_separated_ints(value: str) -> list[int]:
     return [int(x) for x in value.split()]
 
 
+def parse_fraction(value: str) -> list[int]:
+    """Parse a fraction string like '2092 out of 2109' or '300/ 42875' into a list of ints."""
+    return [int(x) for x in re.findall(r"\d+", value)]
+
+
 _PATTERNS_LEGACY = [
     ("Allen_Dynes_Tc", float, r"\s+Estimated Allen-Dynes Tc =\s+([\d\.]+) K"),
     ("fermi_energy_coarse", float, r"\s+Fermi energy coarse grid =\s+([\d\.-]+)\seV"),
@@ -72,7 +77,32 @@ _PATTERNS_MODERN = [
     (
         "fine_k_mesh",
         parse_space_separated_ints,
-        r"^\s*Using uniform k-mesh:\s+((?:\d+\s*)+)",
+        r"^\s*Using uniform (?:MP )?k-mesh:\s+((?:\d+\s*)+)",
+    ),
+    (
+        "number_selected_total",
+        parse_space_separated_ints,
+        r"^\s*Number selected,\s*total\s+((?:\d+\s*)+)",
+    ),
+    (
+        "nqpoints_computed",
+        int,
+        r"^\s*We only need to compute\s+(\d+)\s+q-points",
+    ),
+    (
+        "nkpoints_uniform",
+        int,
+        r"^\s*Nr\.\s*of (?:irreducible )?k-points on the uniform grid:\s+(\d+)",
+    ),
+    (
+        "nkpoints_fermi_shell",
+        parse_fraction,
+        r"^\s*Nr (?:irreducible )?k-points within the Fermi shell\s*=\s*(\d+\s+out of\s+\d+)",
+    ),
+    (
+        "progression_iq_fine",
+        parse_fraction,
+        r"^\s*Progression iq \(fine\)\s*=\s*(\d+\s*/\s*\d+)",
     ),
     ("fermi_level", parse_fortran_float, r"Fermi level \(eV\)\s*=\s*([\d\.D+-]+)"),
     ("DOS", parse_fortran_float, r"DOS\(states/spin/eV/Unit Cell\)\s*=\s*([\d\.D+-]+)"),
