@@ -444,5 +444,8 @@ output_parameters:
       wscut: 0.5
   lambda: 0.6472034
   muc: 0.13
+  nkpoints_fermi_shell:
+  - 295
+  - 610
   w_log: 61.2885
   wall_time_seconds: 2.98

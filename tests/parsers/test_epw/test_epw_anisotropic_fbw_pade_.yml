@@ -660,6 +660,17 @@ output_parameters:
   muc: 0.13
   nbnd_skip: 4
   nbndsub: 9
+  nkpoints_fermi_shell:
+  - 1391
+  - 3072
+  nkpoints_uniform: 3072
+  nqpoints_computed: 3072
+  number_selected_total:
+  - 3000
+  - 3000
+  progression_iq_fine:
+  - 3000
+  - 3072
   w_log: 61.6043
   wall_time_seconds: 132.84
   ws_vectors_electron_phonon: 206

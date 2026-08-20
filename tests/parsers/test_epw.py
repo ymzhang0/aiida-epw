@@ -387,3 +387,40 @@ def test_parse_aniso_imag_fbw_returns_typed_data():
     assert aniso_imag.get_array("temp_3_00_freq_0_znorm").tolist() == [1.0]
     assert aniso_imag.get_array("temp_3_00_freq_0_delta").tolist() == [0.5]
     assert aniso_imag.get_array("temp_3_00_freq_0_shift").tolist() == [0.2]
+
+
+def test_parse_stdout_epw_v6_progress_and_kmesh():
+    """Test parsing EPW 6.0 MP k-mesh, selecq totals, Fermi shell k-points, and fine iq progress."""
+    from packaging.version import Version
+    from aiida_quantumespresso.utils.mapping import get_logging_container
+
+    stdout = textwrap.dedent(
+        """
+        Program EPW v.6.0 starts on 20Aug2026 at 17:55:40
+        Using uniform q-mesh:    35   35   35
+        Using uniform MP k-mesh:    35   35   35
+        Number selected, total          42700          42700
+        Number selected, total          42800          42800
+        We only need to compute    42875 q-points
+
+        Nr. of irreducible k-points on the uniform grid:      2109
+
+        Finish mapping k+sign*q onto the fine irreducibe k-mesh and writing .ikmap file
+
+        Nr irreducible k-points within the Fermi shell =      2092 out of      2109
+
+        Progression iq (fine) =        300/     42875
+        Progression iq (fine) =        400/     42875
+        Progression iq (fine) =      32300/     42875
+        """
+    )
+    logs = get_logging_container()
+    parsed_data, _ = EpwParser.parse_stdout(stdout, logs, code_version=Version("6.0"))
+
+    assert parsed_data["fine_q_mesh"] == [35, 35, 35]
+    assert parsed_data["fine_k_mesh"] == [35, 35, 35]
+    assert parsed_data["number_selected_total"] == [42800, 42800]
+    assert parsed_data["nqpoints_computed"] == 42875
+    assert parsed_data["nkpoints_uniform"] == 2109
+    assert parsed_data["nkpoints_fermi_shell"] == [2092, 2109]
+    assert parsed_data["progression_iq_fine"] == [32300, 42875]
