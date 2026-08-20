@@ -643,12 +643,9 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
                 True, self.exit_codes.ERROR_KNOWN_UNRECOVERABLE_FAILURE
             )
 
-        try:
-            from aiida_epw.common.types import RestartType
+        from aiida_epw.common.types import RestartType
 
-            self.ctx.inputs.restart_type = RestartType.FROM_EPH
-        except ImportError:
-            parameters.setdefault("INPUTEPW", {})["epwread"] = True
+        self.ctx.inputs.restart_type = RestartType.FROM_EPH
         self.ctx.inputs.parameters = orm.Dict(parameters)
         self.ctx.inputs.parent_folder_epw = calculation.outputs.remote_folder
 
