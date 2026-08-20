@@ -518,9 +518,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
             restart_type_node.get_member() if restart_type_node is not None else None
         )
         next_restart_type = {
-            "NONE": "EPWREAD",
-            "EPHWRITE": "EPHREAD",
-            "EPHWRITE_RESTART": "EPHREAD",
+            "FROM_SCRATCH": "FROM_EPB",
         }.get(getattr(restart_type, "name", None))
         if next_restart_type is not None:
             self.ctx.inputs.restart_type = restart_type.__class__[next_restart_type]
@@ -648,7 +646,7 @@ class EpwBaseWorkChain(ProtocolMixin, BaseRestartWorkChain):
         try:
             from aiida_epw.common.types import RestartType
 
-            self.ctx.inputs.restart_type = RestartType.EPHREAD
+            self.ctx.inputs.restart_type = RestartType.FROM_EPH
         except ImportError:
             parameters.setdefault("INPUTEPW", {})["epwread"] = True
         self.ctx.inputs.parameters = orm.Dict(parameters)

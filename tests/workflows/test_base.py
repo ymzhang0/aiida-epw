@@ -116,7 +116,7 @@ def test_handle_pade_approximants(aiida_localhost):
 
     # Restart settings should be set
     if HAS_RESTART_TYPE:
-        assert workchain.ctx.inputs.restart_type == RestartType.EPHREAD
+        assert workchain.ctx.inputs.restart_type == RestartType.FROM_EPH
     else:
         assert input_epw.get("epwread") is True
     assert workchain.ctx.inputs.parent_folder_epw == calc.outputs.remote_folder
@@ -522,11 +522,7 @@ def test_handle_cannot_bracket_ef_updates_fermi_energy():
 
 @pytest.mark.parametrize(
     ("restart_type", "expected_restart_type"),
-    (
-        ("NONE", "EPWREAD"),
-        ("EPHWRITE", "EPHREAD"),
-        ("EPHWRITE_RESTART", "EPHREAD"),
-    ),
+    (("FROM_SCRATCH", "FROM_EPB"),),
 )
 def test_handle_cannot_bracket_ef_switches_writer_restart_to_reader(
     restart_type, expected_restart_type
@@ -534,11 +530,11 @@ def test_handle_cannot_bracket_ef_switches_writer_restart_to_reader(
     """Test that Fermi-level recovery reuses files from the failed calculation."""
 
     class MockRestartType(enum.Enum):
-        NONE = "none"
+        FROM_SCRATCH = "from_scratch"
+        FROM_EPB = "from_epb"
+        FROM_EPMATWP = "from_epmatwp"
         EPHWRITE = "ephwrite"
-        EPHREAD = "ephread"
-        EPHWRITE_RESTART = "ephwrite_restart"
-        EPWREAD = "epwread"
+        FROM_EPH = "from_eph"
 
     class RestartTypeNode:
         def get_member(self):
