@@ -1,4 +1,4 @@
-"""Pade error-recovery helpers for EPW workflows."""
+"""Pade and walltime error-recovery helpers for EPW workflows."""
 
 from copy import deepcopy
 
@@ -183,4 +183,118 @@ def get_temperature_out_of_range_action():
     return (
         "Temperature reached phase transition (delta converged to zero). "
         "Finishing workchain successfully."
+    )
+
+
+def prepare_walltime_recovery(
+    parameters, output_parameters, restart_type, is_eliashberg
+):
+    """Return ``(parameters, restart_type, action)`` for a recoverable timeout."""
+    from aiida_epw.common.types import RestartType
+
+    if not is_eliashberg:
+        return (
+            None,
+            None,
+            (
+                "Walltime reached but this calculation/restart type is not supported "
+                "for auto-recovery. Aborting."
+            ),
+        )
+
+    if restart_type in (
+        "EPHWRITE",
+        "ephwrite",
+        "EPHWRITE_RESTART",
+        "ephwrite_restart",
+    ):
+        next_type = (
+            "EPHWRITE_RESTART"
+            if hasattr(RestartType, "EPHWRITE_RESTART")
+            else "EPHWRITE"
+        )
+        return (
+            parameters,
+            next_type,
+            (
+                "Walltime reached during Eliashberg ephwrite calculation. "
+                "Restarting from the last checkpoint."
+            ),
+        )
+
+    if restart_type in (
+        "FROM_EPH",
+        "from_eph",
+        "EPHREAD",
+        "ephread",
+        "EPHREAD_RESTART",
+        "ephread_restart",
+    ):
+        outputs = output_parameters or {}
+        eliashberg_data = (
+            outputs.get("isotropic_eliashberg")
+            or outputs.get("anisotropic_eliashberg")
+            or {}
+        )
+        succeeded_temps = _get_succeeded_temperatures(eliashberg_data)
+        input_epw = parameters.get("INPUTEPW", {})
+        all_temps, is_linear_range = _get_input_temperatures(input_epw, eliashberg_data)
+        remaining_temps = [
+            temp
+            for temp in all_temps
+            if not any(abs(temp - succeeded) < 1.0e-4 for succeeded in succeeded_temps)
+        ]
+
+        if succeeded_temps and remaining_temps:
+            parameters = deepcopy(parameters)
+            input_epw_new = parameters.setdefault("INPUTEPW", {})
+            new_temps = (
+                [remaining_temps[0], remaining_temps[-1]]
+                if is_linear_range and len(remaining_temps) >= 2
+                else remaining_temps
+            )
+            input_epw_new["temps"] = (
+                " ".join(str(temp) for temp in new_temps)
+                if isinstance(input_epw.get("temps"), str)
+                else new_temps
+            )
+            input_epw_new["nstemp"] = len(remaining_temps)
+            input_epw_new.pop("tempsmin", None)
+            input_epw_new.pop("tempsmax", None)
+            next_type = "EPHREAD" if hasattr(RestartType, "EPHREAD") else "FROM_EPH"
+            return (
+                parameters,
+                next_type,
+                (
+                    f"Walltime reached during Eliashberg {next_type.lower()} calculation. "
+                    f"Removed successfully calculated temperatures: {succeeded_temps}. "
+                    "Restarting."
+                ),
+            )
+        return (
+            None,
+            None,
+            (
+                "Walltime reached during Eliashberg ephread calculation but no "
+                "temperatures finished. Aborting."
+            ),
+        )
+
+    if restart_type in ("FROM_SCRATCH", "from_scratch", "NONE", "none", None):
+        return (
+            None,
+            None,
+            (
+                "Walltime reached during a fresh Eliashberg run. Automatic recovery "
+                "requires an ephwrite checkpoint. Aborting."
+            ),
+        )
+
+    return (
+        None,
+        None,
+        (
+            "Walltime reached but this calculation/restart type is not supported "
+            "for auto-recovery. Aborting."
+        ),
     )
