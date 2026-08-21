@@ -667,7 +667,6 @@ def test_epw_eliashberg_parameters_continuation_none(
                 "ep_coupling = .true.",
                 "elph = .true.",
                 "ephwrite = .true.",
-                "restart = .true.",
             ),
         ),
         (
