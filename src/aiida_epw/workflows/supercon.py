@@ -1,7 +1,3 @@
-"""Work chain for computing the critical temperature based on an `EpwWorkChain`."""
-
-from scipy.interpolate import interp1d
-
 from aiida import orm
 from aiida.common import AttributeDict
 from aiida.engine import WorkChain, while_, if_, append_
@@ -10,7 +6,7 @@ from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
 
 from aiida_epw.calculations.epw import serialize_restart_type
 from aiida_epw.workflows.base import EpwBaseWorkChain
-from aiida_epw.data import A2fData
+from aiida_epw.data import A2fData, AnisoGap0Data, IsoGapData
 
 from aiida.engine import calcfunction
 
@@ -34,15 +30,6 @@ def stash_to_remote(stash_data: orm.RemoteStashFolderData) -> orm.RemoteData:
 @calcfunction
 def split_list(list_node: orm.List) -> dict:
     return {f"el_{no}": orm.Float(el) for no, el in enumerate(list_node.get_list())}
-
-
-@calcfunction
-def calculate_tc(max_eigenvalue: orm.XyData) -> orm.Float:
-    me_array = max_eigenvalue.get_array("max_eigenvalue")
-    try:
-        return orm.Float(float(interp1d(me_array[:, 1], me_array[:, 0])(1.0)))
-    except ValueError:
-        return orm.Float(40.0)
 
 
 class SuperConWorkChain(ProtocolMixin, WorkChain):
@@ -185,19 +172,39 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
         spec.output(
             "parameters",
             valid_type=orm.Dict,
+            required=False,
             help="The `output_parameters` output node of the final EPW calculation.",
-        )
-        spec.output(
-            "max_eigenvalue",
-            valid_type=orm.XyData,
-            help="The temperature dependence of the max eigenvalue for the final EPW.",
         )
         spec.output(
             "a2f",
             valid_type=A2fData,
+            required=False,
             help="The contents of the `.a2f` file for the final EPW.",
         )
-        spec.output("Tc_iso", valid_type=orm.Float, help="The critical temperature.")
+        spec.output(
+            "iso_gap_data",
+            valid_type=IsoGapData,
+            required=False,
+            help="Typed isotropic imaginary-axis and Pade gap data.",
+        )
+        spec.output(
+            "aniso_gap0_data",
+            valid_type=AnisoGap0Data,
+            required=False,
+            help="Typed anisotropic gap-zero imaginary-axis and Pade data.",
+        )
+        spec.output(
+            "aniso_gap_FS",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The anisotropic gap on the Fermi surface.",
+        )
+        spec.output(
+            "aniso_gap_imag",
+            valid_type=orm.ArrayData,
+            required=False,
+            help="The anisotropic gap on the imaginary axis.",
+        )
 
         spec.exit_code(
             401,
@@ -528,11 +535,32 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
             return self.exit_codes.ERROR_SUB_PROCESS_EPW_ANISO
 
     def results(self):
-        """TODO"""
-        self.out("Tc_iso", calculate_tc(self.ctx.final_epw_iso.outputs.max_eigenvalue))
-        self.out("parameters", self.ctx.final_epw_iso.outputs.output_parameters)
-        self.out("max_eigenvalue", self.ctx.final_epw_iso.outputs.max_eigenvalue)
-        self.out("a2f", self.ctx.final_epw_iso.outputs.a2f)
+        """Attach the outputs of the sub-processes."""
+        final_iso = getattr(self.ctx, "final_epw_iso", None)
+        final_aniso = getattr(self.ctx, "final_epw_aniso", None)
+        epw_interp = getattr(self.ctx, "epw_interp", None)
+
+        if final_iso and getattr(final_iso.outputs, "a2f", None) is not None:
+            self.out("a2f", final_iso.outputs.a2f)
+        elif epw_interp and getattr(epw_interp[-1].outputs, "a2f", None) is not None:
+            self.out("a2f", epw_interp[-1].outputs.a2f)
+
+        if final_iso:
+            if getattr(final_iso.outputs, "output_parameters", None) is not None:
+                self.out("parameters", final_iso.outputs.output_parameters)
+            if getattr(final_iso.outputs, "iso_gap_data", None) is not None:
+                self.out("iso_gap_data", final_iso.outputs.iso_gap_data)
+        elif (
+            final_aniso
+            and getattr(final_aniso.outputs, "output_parameters", None) is not None
+        ):
+            self.out("parameters", final_aniso.outputs.output_parameters)
+
+        if final_aniso:
+            for out_name in ("aniso_gap0_data", "aniso_gap_FS", "aniso_gap_imag"):
+                val = getattr(final_aniso.outputs, out_name, None)
+                if val is not None:
+                    self.out(out_name, val)
 
     def on_terminated(self):
         """Clean the working directories of all child calculations if `clean_workdir=True` in the inputs."""
