@@ -369,3 +369,64 @@ def test_supercon_on_terminated_ignores_runtime_error():
 
     # Should not raise exception
     call_with_super_check(wc.on_terminated)
+
+
+def test_supercon_results():
+    """Test that results method attaches all available outputs correctly."""
+    from aiida_epw.workflows.supercon import SuperConWorkChain
+    from types import SimpleNamespace
+
+    # Mock outputs
+    a2f_node = orm.Dict({"a2f": True})
+    params_node = orm.Dict({"output_parameters": True})
+    iso_gap_node = orm.Dict({"iso_gap": True})
+    aniso_gap0_node = orm.Dict({"aniso_gap0": True})
+    aniso_fs_node = orm.Dict({"aniso_fs": True})
+
+    iso_outputs = SimpleNamespace(
+        a2f=a2f_node,
+        output_parameters=params_node,
+        iso_gap_data=iso_gap_node,
+    )
+    aniso_outputs = SimpleNamespace(
+        aniso_gap0_data=aniso_gap0_node,
+        aniso_gap_FS=aniso_fs_node,
+    )
+
+    wc = MagicMock(spec=SuperConWorkChain)
+    wc.ctx = SimpleNamespace(
+        final_epw_iso=SimpleNamespace(outputs=iso_outputs),
+        final_epw_aniso=SimpleNamespace(outputs=aniso_outputs),
+        epw_interp=[],
+    )
+    registered_outputs = {}
+    wc.out = lambda key, val: registered_outputs.update({key: val})
+
+    SuperConWorkChain.results(wc)
+
+    assert registered_outputs["a2f"] is a2f_node
+    assert registered_outputs["parameters"] is params_node
+    assert registered_outputs["iso_gap_data"] is iso_gap_node
+    assert registered_outputs["aniso_gap0_data"] is aniso_gap0_node
+    assert registered_outputs["aniso_gap_FS"] is aniso_fs_node
+    assert "aniso_gap_imag" not in registered_outputs
+
+
+def test_supercon_results_fallback_to_interp():
+    """Test that results method falls back to epw_interp for a2f when final iso lacks a2f."""
+    from aiida_epw.workflows.supercon import SuperConWorkChain
+    from types import SimpleNamespace
+
+    a2f_interp_node = orm.Dict({"interp_a2f": True})
+    interp_outputs = SimpleNamespace(a2f=a2f_interp_node)
+
+    wc = MagicMock(spec=SuperConWorkChain)
+    wc.ctx = SimpleNamespace(
+        epw_interp=[SimpleNamespace(outputs=interp_outputs)],
+    )
+    registered_outputs = {}
+    wc.out = lambda key, val: registered_outputs.update({key: val})
+
+    SuperConWorkChain.results(wc)
+
+    assert registered_outputs["a2f"] is a2f_interp_node
