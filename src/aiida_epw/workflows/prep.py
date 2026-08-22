@@ -1174,9 +1174,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
 
         inputs.metadata.call_link_label = "epw_base"
 
+        from aiida_epw.calculations.epw import serialize_restart_type
         from aiida_epw.common.types import RestartType
 
-        inputs.restart_type = RestartType.FROM_SCRATCH
+        inputs.restart_type = serialize_restart_type(RestartType.FROM_SCRATCH)
 
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(
@@ -1255,9 +1256,10 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         inputs.parent_folder_epw = self.ctx.workchain_epw.outputs.remote_folder
         inputs.metadata.call_link_label = "epw_bands"
 
+        from aiida_epw.calculations.epw import serialize_restart_type
         from aiida_epw.common.types import RestartType
 
-        inputs.restart_type = RestartType.FROM_EPMATWP
+        inputs.restart_type = serialize_restart_type(RestartType.FROM_EPMATWP)
 
         workchain_node = self.submit(EpwBaseWorkChain, **inputs)
         self.report(
