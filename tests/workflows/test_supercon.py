@@ -334,14 +334,16 @@ def test_supercon_get_builder_from_protocol_default(
     if "restart_type" in builder.epw_final_aniso:
         from aiida_epw.common import RestartType
 
-        assert builder.epw_final_aniso.restart_type == RestartType.FROM_EPH
+        assert builder.epw_final_aniso.restart_type.get_member() == RestartType.FROM_EPH
 
 
 def test_supercon_on_terminated_ignores_runtime_error():
     """Test that on_terminated catches RuntimeError when cleaning remote folders."""
-    from plumpy.base.utils import call_with_super_check
-    from aiida_epw.workflows.supercon import SuperConWorkChain
     from types import SimpleNamespace
+
+    from plumpy.base.utils import call_with_super_check
+
+    from aiida_epw.workflows.supercon import SuperConWorkChain
 
     class FakeCalcJobNode(orm.CalcJobNode):
         def __init__(self):
@@ -373,8 +375,9 @@ def test_supercon_on_terminated_ignores_runtime_error():
 
 def test_supercon_results():
     """Test that results method attaches all available outputs correctly."""
-    from aiida_epw.workflows.supercon import SuperConWorkChain
     from types import SimpleNamespace
+
+    from aiida_epw.workflows.supercon import SuperConWorkChain
 
     # Mock outputs
     a2f_node = orm.Dict({"a2f": True})
@@ -414,8 +417,9 @@ def test_supercon_results():
 
 def test_supercon_results_fallback_to_interp():
     """Test that results method falls back to epw_interp for a2f when final iso lacks a2f."""
-    from aiida_epw.workflows.supercon import SuperConWorkChain
     from types import SimpleNamespace
+
+    from aiida_epw.workflows.supercon import SuperConWorkChain
 
     a2f_interp_node = orm.Dict({"interp_a2f": True})
     interp_outputs = SimpleNamespace(a2f=a2f_interp_node)
@@ -430,3 +434,47 @@ def test_supercon_results_fallback_to_interp():
     SuperConWorkChain.results(wc)
 
     assert registered_outputs["a2f"] is a2f_interp_node
+
+
+def test_supercon_builder_fsr_does_not_inject_filirobj(
+    generate_structure,
+    generate_remote_data,
+    fixture_localhost,
+    fixture_code,
+    monkeypatch,
+):
+    """Test that FSR anisotropic mode (full_bandwidth=False) does not inject filirobj."""
+    from plumpy.ports import Port, PortNamespace
+
+    from aiida_epw.workflows.supercon import SuperConWorkChain
+
+    monkeypatch.setattr(Port, "validate", lambda *a, **k: None)
+    monkeypatch.setattr(PortNamespace, "validate", lambda *a, **k: None)
+
+    epw_code = fixture_code("epw.epw")
+    structure = generate_structure()
+    remote_stash = generate_remote_data(fixture_localhost, "/tmp/remote_stash")
+
+    parent_epw = MagicMock()
+    parent_epw.process_label = "EpwBaseWorkChain"
+    parent_epw.inputs = MagicMock()
+    parent_epw.inputs.structure = structure
+    parent_epw.inputs.code = epw_code
+    parent_epw.inputs.kpoints = orm.KpointsData()
+    parent_epw.inputs.qpoints = orm.KpointsData()
+    parent_epw.outputs = MagicMock()
+    parent_epw.outputs.remote_stash = remote_stash
+
+    overrides = {
+        "epw_final_aniso": {
+            "full_bandwidth": False,
+        }
+    }
+
+    builder = SuperConWorkChain.get_builder_from_protocol(
+        epw_code=epw_code,
+        parent_epw=parent_epw,
+        overrides=overrides,
+    )
+
+    assert "filirobj" not in builder.epw_final_aniso

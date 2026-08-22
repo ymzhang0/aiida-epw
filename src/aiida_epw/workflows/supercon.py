@@ -328,7 +328,11 @@ class SuperConWorkChain(ProtocolMixin, WorkChain):
                 **kwargs,
             )
 
-            if epw_namespace == "epw_final_aniso" and "filirobj" not in epw_builder:
+            if (
+                epw_namespace == "epw_final_aniso"
+                and full_bandwidth
+                and "filirobj" not in epw_builder
+            ):
                 epw_builder.filirobj = orm.Str(cls.DEFAULT_FILIROBJ)
 
             if "restart_type" in base_inputs:
