@@ -520,6 +520,68 @@ def test_epw_stages_ph_stash_folder_by_target_basepath(
     ) in calc_info.remote_copy_list
 
 
+def test_epw_stage_ph_parent_hubbard_u(
+    fixture_sandbox, fixture_localhost, generate_calc_job, generate_inputs_epw
+):
+    """Test that USE_HUBBARD_U in settings stages dnsscf, dnsbare, and occup files."""
+    parent_folder = orm.RemoteStashFolderData(
+        stash_mode=StashMode.COPY,
+        target_basepath="/stash/ph",
+        source_list=["out", "DYN_MAT"],
+    )
+    parent_folder.computer = fixture_localhost
+
+    # 1. When USE_HUBBARD_U is True
+    inputs_dftu = generate_inputs_epw(
+        parent_folder_ph=parent_folder,
+        settings=orm.Dict({"NUMBER_OF_QPOINTS": 2, "USE_HUBBARD_U": True}),
+    )
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs_dftu)
+
+    outdir = PhCalculation._OUTPUT_SUBFOLDER
+
+    # Check q1 and q2 dnsscf / dnsbare
+    assert (
+        parent_folder.computer.uuid,
+        Path("/stash/ph", outdir, "_ph0", "aiida.dnsscf").as_posix(),
+        Path("save", "aiida.dnsscf_q1").as_posix(),
+    ) in calc_info.remote_copy_list
+    assert (
+        parent_folder.computer.uuid,
+        Path("/stash/ph", outdir, "_ph0", "aiida.dnsbare").as_posix(),
+        Path("save", "aiida.dnsbare_q1").as_posix(),
+    ) in calc_info.remote_copy_list
+    assert (
+        parent_folder.computer.uuid,
+        Path("/stash/ph", outdir, "_ph0", "aiida.q_2", "aiida.dnsscf").as_posix(),
+        Path("save", "aiida.dnsscf_q2").as_posix(),
+    ) in calc_info.remote_copy_list
+    assert (
+        parent_folder.computer.uuid,
+        Path("/stash/ph", outdir, "_ph0", "aiida.q_2", "aiida.dnsbare").as_posix(),
+        Path("save", "aiida.dnsbare_q2").as_posix(),
+    ) in calc_info.remote_copy_list
+
+    # Check occup.txt -> aiida.occup
+    assert (
+        parent_folder.computer.uuid,
+        Path("/stash/ph", outdir, "aiida.save", "occup.txt").as_posix(),
+        Path("save", "aiida.occup").as_posix(),
+    ) in calc_info.remote_copy_list
+
+    # 2. When USE_HUBBARD_U is False (default)
+    inputs_default = generate_inputs_epw(
+        parent_folder_ph=parent_folder,
+        settings=orm.Dict({"NUMBER_OF_QPOINTS": 2}),
+    )
+    calc_info_default = generate_calc_job(fixture_sandbox, "epw.epw", inputs_default)
+
+    destinations = [entry[2] for entry in calc_info_default.remote_copy_list]
+    assert not any("dnsbare" in dest for dest in destinations)
+    assert not any("dnsscf" in dest for dest in destinations)
+    assert not any("occup" in dest for dest in destinations)
+
+
 def test_epw_eliashberg_parameters(
     fixture_sandbox, generate_calc_job, generate_inputs_epw
 ):

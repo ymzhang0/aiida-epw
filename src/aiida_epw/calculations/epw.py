@@ -994,6 +994,8 @@ class EpwCalculation(NamelistsCalculation):
         else:
             nqpt = get_parent_ph_qpoint_ibz_count(parent_folder_ph)
 
+        use_hubbard_u = settings.pop("USE_HUBBARD_U", False)
+
         prefix = self._PREFIX
         outdir = PhCalculation._OUTPUT_SUBFOLDER
         fildvscf = PhCalculation._DVSCF_PREFIX
@@ -1009,6 +1011,7 @@ class EpwCalculation(NamelistsCalculation):
         )
 
         for iqpt in range(1, nqpt + 1):
+            q_dir = "" if iqpt == 1 else f"{prefix}.q_{iqpt}"
             remote_list.append(
                 (
                     parent_folder_ph.computer.uuid,
@@ -1016,7 +1019,7 @@ class EpwCalculation(NamelistsCalculation):
                         ph_path,
                         outdir,
                         "_ph0",
-                        "" if iqpt == 1 else f"{prefix}.q_{iqpt}",
+                        q_dir,
                         f"{prefix}.{fildvscf}1",
                     ).as_posix(),
                     Path(self._FOLDER_SAVE, f"{prefix}.dvscf_q{iqpt}").as_posix(),
@@ -1027,6 +1030,47 @@ class EpwCalculation(NamelistsCalculation):
                     parent_folder_ph.computer.uuid,
                     Path(ph_path, f"{fildyn}{iqpt}").as_posix(),
                     Path(self._FOLDER_SAVE, f"{prefix}.dyn_q{iqpt}").as_posix(),
+                )
+            )
+            if use_hubbard_u:
+                remote_list.append(
+                    (
+                        parent_folder_ph.computer.uuid,
+                        Path(
+                            ph_path,
+                            outdir,
+                            "_ph0",
+                            q_dir,
+                            f"{prefix}.dnsscf",
+                        ).as_posix(),
+                        Path(self._FOLDER_SAVE, f"{prefix}.dnsscf_q{iqpt}").as_posix(),
+                    )
+                )
+                remote_list.append(
+                    (
+                        parent_folder_ph.computer.uuid,
+                        Path(
+                            ph_path,
+                            outdir,
+                            "_ph0",
+                            q_dir,
+                            f"{prefix}.dnsbare",
+                        ).as_posix(),
+                        Path(self._FOLDER_SAVE, f"{prefix}.dnsbare_q{iqpt}").as_posix(),
+                    )
+                )
+
+        if use_hubbard_u:
+            remote_list.append(
+                (
+                    parent_folder_ph.computer.uuid,
+                    Path(
+                        ph_path,
+                        outdir,
+                        f"{prefix}.save",
+                        "occup.txt",
+                    ).as_posix(),
+                    Path(self._FOLDER_SAVE, f"{prefix}.occup").as_posix(),
                 )
             )
 
