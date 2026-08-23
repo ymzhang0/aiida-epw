@@ -992,6 +992,8 @@ class EpwCalculation(NamelistsCalculation):
         else:
             nqpt = get_parent_ph_qpoint_ibz_count(parent_folder_ph)
 
+        use_hubbard_u = settings.pop("USE_HUBBARD_U", False)
+
         ph_path = self.get_parent_folder_path(parent_folder_ph)
 
         remote_list.append(
@@ -1030,6 +1032,51 @@ class EpwCalculation(NamelistsCalculation):
                         f"{PhCalculation._OUTPUT_DYNAMICAL_MATRIX_PREFIX}{iqpt}",
                     ).as_posix(),
                     Path(self._FOLDER_SAVE, f"{self._PREFIX}.dyn_q{iqpt}").as_posix(),
+                )
+            )
+            if use_hubbard_u:
+                remote_list.append(
+                    (
+                        parent_folder_ph.computer.uuid,
+                        Path(
+                            ph_path,
+                            PhCalculation._OUTPUT_SUBFOLDER,
+                            "_ph0",
+                            q_dir,
+                            f"{self._PREFIX}.dnsscf",
+                        ).as_posix(),
+                        Path(
+                            self._FOLDER_SAVE, f"{self._PREFIX}.dnsscf_q{iqpt}"
+                        ).as_posix(),
+                    )
+                )
+                remote_list.append(
+                    (
+                        parent_folder_ph.computer.uuid,
+                        Path(
+                            ph_path,
+                            PhCalculation._OUTPUT_SUBFOLDER,
+                            "_ph0",
+                            q_dir,
+                            f"{self._PREFIX}.dnsbare",
+                        ).as_posix(),
+                        Path(
+                            self._FOLDER_SAVE, f"{self._PREFIX}.dnsbare_q{iqpt}"
+                        ).as_posix(),
+                    )
+                )
+
+        if use_hubbard_u:
+            remote_list.append(
+                (
+                    parent_folder_ph.computer.uuid,
+                    Path(
+                        ph_path,
+                        PhCalculation._OUTPUT_SUBFOLDER,
+                        f"{self._PREFIX}.save",
+                        "occup.txt",
+                    ).as_posix(),
+                    Path(self._FOLDER_SAVE, f"{self._PREFIX}.occup").as_posix(),
                 )
             )
 
