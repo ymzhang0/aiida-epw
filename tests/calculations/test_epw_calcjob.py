@@ -390,21 +390,58 @@ def test_epw_stages_nscf_parent_output_folder(
     generate_inputs_epw,
     generate_remote_data,
 ):
-    """Test that the NSCF parent contributes the QE output directory by copy."""
+    """Test that the NSCF parent stages save, xml, wfc*, and hubnoS* into out/."""
     parent_folder = generate_remote_data(
         fixture_localhost, "/remote/nscf", "quantumespresso.pw"
     )
-    inputs = generate_inputs_epw(parent_folder_nscf=parent_folder)
+    nscf_out = Path(
+        parent_folder.get_remote_path(), PwCalculation._OUTPUT_SUBFOLDER
+    ).as_posix()
 
+    # 1. Default (copy mode when PARENT_FOLDER_SYMLINK is not set)
+    inputs = generate_inputs_epw(parent_folder_nscf=parent_folder)
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
 
+    expected_copied = {
+        (
+            parent_folder.computer.uuid,
+            Path(nscf_out, "aiida.save").as_posix(),
+            Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.save").as_posix(),
+        ),
+        (
+            parent_folder.computer.uuid,
+            Path(nscf_out, "aiida.xml").as_posix(),
+            Path(EpwCalculation._OUTPUT_SUBFOLDER, "aiida.xml").as_posix(),
+        ),
+        (
+            parent_folder.computer.uuid,
+            Path(nscf_out, "aiida.wfc*").as_posix(),
+            EpwCalculation._OUTPUT_SUBFOLDER,
+        ),
+    }
+    assert expected_copied.issubset(set(calc_info.remote_copy_list))
     assert (
         parent_folder.computer.uuid,
-        Path(
-            parent_folder.get_remote_path(), PwCalculation._OUTPUT_SUBFOLDER
-        ).as_posix(),
+        nscf_out,
         EpwCalculation._OUTPUT_SUBFOLDER,
-    ) in calc_info.remote_copy_list
+    ) not in calc_info.remote_copy_list
+
+    # 2. Symlink mode with USE_HUBBARD_U
+    inputs_symlink = generate_inputs_epw(
+        parent_folder_nscf=parent_folder,
+        settings=orm.Dict({"PARENT_FOLDER_SYMLINK": True, "USE_HUBBARD_U": True}),
+    )
+    calc_info_symlink = generate_calc_job(fixture_sandbox, "epw.epw", inputs_symlink)
+
+    expected_symlink = expected_copied | {
+        (
+            parent_folder.computer.uuid,
+            Path(nscf_out, "aiida.hubnoS*").as_posix(),
+            EpwCalculation._OUTPUT_SUBFOLDER,
+        )
+    }
+    assert expected_symlink.issubset(set(calc_info_symlink.remote_symlink_list))
+    assert not expected_symlink.intersection(set(calc_info_symlink.remote_copy_list))
 
 
 def test_epw_stages_chk_parent_into_requested_transport_list(
