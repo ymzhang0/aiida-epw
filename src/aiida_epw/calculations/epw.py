@@ -115,8 +115,8 @@ class EpwCalculation(NamelistsCalculation):
 
     _MAX_NSTEMP = 1000
 
-    # Not using symlink in pw to allow multiple nscf to run on top of the same scf
-    _default_symlink_usage = False
+    # Use symlink by default for parent calculations (NSCF, PH, CHK, EPW)
+    _default_symlink_usage = True
     _PARALLELIZATION_FLAGS = BasePwCpInputGenerator._PARALLELIZATION_FLAGS
     _ENABLED_PARALLELIZATION_FLAGS = (
         "nimage",
