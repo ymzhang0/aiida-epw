@@ -408,11 +408,7 @@ def test_epw_stages_nscf_parent_output_folder(
         parent_folder.get_remote_path(), PwCalculation._OUTPUT_SUBFOLDER
     ).as_posix()
 
-    # 1. Default (copy mode when PARENT_FOLDER_SYMLINK is not set)
-    inputs = generate_inputs_epw(parent_folder_nscf=parent_folder)
-    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-
-    expected_copied = {
+    expected_entries = {
         (
             parent_folder.computer.uuid,
             Path(nscf_out, "aiida.save").as_posix(),
@@ -429,29 +425,42 @@ def test_epw_stages_nscf_parent_output_folder(
             EpwCalculation._OUTPUT_SUBFOLDER,
         ),
     }
-    assert expected_copied.issubset(set(calc_info.remote_copy_list))
+
+    # 1. Default (symlink mode when PARENT_FOLDER_SYMLINK is not specified)
+    inputs_default = generate_inputs_epw(parent_folder_nscf=parent_folder)
+    calc_info_default = generate_calc_job(fixture_sandbox, "epw.epw", inputs_default)
+
+    assert expected_entries.issubset(set(calc_info_default.remote_symlink_list))
     assert (
         parent_folder.computer.uuid,
         nscf_out,
         EpwCalculation._OUTPUT_SUBFOLDER,
-    ) not in calc_info.remote_copy_list
+    ) not in calc_info_default.remote_symlink_list
 
-    # 2. Symlink mode with USE_HUBBARD_U
-    inputs_symlink = generate_inputs_epw(
+    # 2. Explicit copy mode
+    inputs_copy = generate_inputs_epw(
         parent_folder_nscf=parent_folder,
-        settings=orm.Dict({"PARENT_FOLDER_SYMLINK": True, "USE_HUBBARD_U": True}),
+        settings=orm.Dict({"PARENT_FOLDER_SYMLINK": False}),
     )
-    calc_info_symlink = generate_calc_job(fixture_sandbox, "epw.epw", inputs_symlink)
+    calc_info_copy = generate_calc_job(fixture_sandbox, "epw.epw", inputs_copy)
+    assert expected_entries.issubset(set(calc_info_copy.remote_copy_list))
 
-    expected_symlink = expected_copied | {
+    # 3. Symlink mode with USE_HUBBARD_U
+    inputs_hubbard = generate_inputs_epw(
+        parent_folder_nscf=parent_folder,
+        settings=orm.Dict({"USE_HUBBARD_U": True}),
+    )
+    calc_info_hubbard = generate_calc_job(fixture_sandbox, "epw.epw", inputs_hubbard)
+
+    expected_hubbard = expected_entries | {
         (
             parent_folder.computer.uuid,
             Path(nscf_out, "aiida.hubnoS*").as_posix(),
             EpwCalculation._OUTPUT_SUBFOLDER,
         )
     }
-    assert expected_symlink.issubset(set(calc_info_symlink.remote_symlink_list))
-    assert not expected_symlink.intersection(set(calc_info_symlink.remote_copy_list))
+    assert expected_hubbard.issubset(set(calc_info_hubbard.remote_symlink_list))
+    assert not expected_hubbard.intersection(set(calc_info_hubbard.remote_copy_list))
 
 
 def test_epw_stages_chk_parent_into_requested_transport_list(
@@ -465,7 +474,7 @@ def test_epw_stages_chk_parent_into_requested_transport_list(
     parent_folder = generate_remote_data(fixture_localhost, "/remote/chk")
     inputs = generate_inputs_epw(
         parent_folder_chk=parent_folder,
-        settings=orm.Dict({"PARENT_FOLDER_SYMLINK": True}),
+        settings=orm.Dict({"PARENT_FOLDER_SYMLINK": False}),
     )
 
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
@@ -488,8 +497,8 @@ def test_epw_stages_chk_parent_into_requested_transport_list(
         ),
     }
 
-    assert expected.issubset(set(calc_info.remote_symlink_list))
-    assert not expected.intersection(set(calc_info.remote_copy_list))
+    assert expected.issubset(set(calc_info.remote_copy_list))
+    assert not expected.intersection(set(calc_info.remote_symlink_list))
 
 
 def test_epw_stages_from_epb(
@@ -507,20 +516,20 @@ def test_epw_stages_from_epb(
     )
 
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-    copied = [(entry[1], entry[2]) for entry in calc_info.remote_copy_list]
+    symlinked = [(entry[1], entry[2]) for entry in calc_info.remote_symlink_list]
 
     assert (
         Path(parent_folder.get_remote_path(), "aiida.epb*").as_posix(),
         ".",
-    ) in copied
+    ) in symlinked
     assert (
         Path(parent_folder.get_remote_path(), "save").as_posix(),
         "save",
-    ) in copied
+    ) in symlinked
     assert (
         Path(parent_folder.get_remote_path(), "aiida.ukk").as_posix(),
         "aiida.ukk",
-    ) in copied
+    ) in symlinked
 
 
 def test_epw_stages_from_epmatwp(
@@ -539,9 +548,9 @@ def test_epw_stages_from_epmatwp(
     )
 
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-    copied_targets = {entry[2] for entry in calc_info.remote_copy_list}
+    symlink_targets = {entry[2] for entry in calc_info.remote_symlink_list}
 
-    expected_copied = {
+    expected_symlinked = {
         "aiida.bvec",
         "aiida.kgmap",
         "aiida.kmap",
@@ -555,8 +564,8 @@ def test_epw_stages_from_epmatwp(
         "selecq.fmt",
         "vmedata.fmt",
     }
-    assert expected_copied.issubset(copied_targets)
-    assert "out" not in copied_targets
+    assert expected_symlinked.issubset(symlink_targets)
+    assert "out" not in symlink_targets
 
 
 def test_epw_stages_from_eph(
@@ -574,29 +583,29 @@ def test_epw_stages_from_eph(
     )
 
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
-    copied = [(entry[1], entry[2]) for entry in calc_info.remote_copy_list]
+    symlinked = [(entry[1], entry[2]) for entry in calc_info.remote_symlink_list]
 
     assert (
         Path(parent_folder.get_remote_path(), "crystal.fmt").as_posix(),
         "crystal.fmt",
-    ) in copied
+    ) in symlinked
     assert (
         Path(parent_folder.get_remote_path(), "out/aiida.ephmat").as_posix(),
         "out/aiida.ephmat",
-    ) in copied
+    ) in symlinked
     assert (
         Path(parent_folder.get_remote_path(), "out/aiida.dos").as_posix(),
         "out/aiida.dos",
-    ) in copied
+    ) in symlinked
     assert (
         Path(parent_folder.get_remote_path(), "aiida.a2f").as_posix(),
         "aiida.a2f",
-    ) in copied
+    ) in symlinked
     assert (
         Path(parent_folder.get_remote_path(), "selecq.fmt").as_posix(),
         "selecq.fmt",
-    ) in copied
-    assert len(calc_info.remote_copy_list) == 5
+    ) in symlinked
+    assert len(calc_info.remote_symlink_list) == 5
 
 
 def test_epw_stages_ph_stash_folder_by_target_basepath(
@@ -626,7 +635,7 @@ def test_epw_stages_ph_stash_folder_by_target_basepath(
             "/stash/ph", PhCalculation._OUTPUT_SUBFOLDER, "_ph0", "aiida.phsave"
         ).as_posix(),
         "save",
-    ) in calc_info.remote_copy_list
+    ) in calc_info.remote_symlink_list
 
 
 def test_epw_stage_ph_parent_hubbard_u(
