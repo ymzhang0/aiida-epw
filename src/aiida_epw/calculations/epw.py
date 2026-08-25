@@ -935,22 +935,52 @@ class EpwCalculation(NamelistsCalculation):
 
         return Path(parent_folder.get_remote_path())
 
-    def stage_nscf_parent(self, remote_copy_list):
-        """Stage the NSCF output directory into the EPW working directory."""
+    def stage_nscf_parent(self, folder, settings, remote_list):
+        """Stage the NSCF output directory files into the EPW local `out` directory."""
         if "parent_folder_nscf" not in self.inputs:
             return
 
+        folder.get_subfolder(self._OUTPUT_SUBFOLDER, create=True)
+
         parent_folder_nscf = self.inputs.parent_folder_nscf
-        remote_copy_list.append(
+        nscf_path = self.get_parent_folder_path(parent_folder_nscf)
+        nscf_out = Path(nscf_path, PwCalculation._OUTPUT_SUBFOLDER).as_posix()
+        comp_uuid = parent_folder_nscf.computer.uuid
+
+        # Stage save folder and xml file
+        remote_list.append(
             (
-                parent_folder_nscf.computer.uuid,
-                Path(
-                    parent_folder_nscf.get_remote_path(),
-                    PwCalculation._OUTPUT_SUBFOLDER,
-                ).as_posix(),
+                comp_uuid,
+                Path(nscf_out, f"{self._PREFIX}.save").as_posix(),
+                Path(self._OUTPUT_SUBFOLDER, f"{self._PREFIX}.save").as_posix(),
+            )
+        )
+        remote_list.append(
+            (
+                comp_uuid,
+                Path(nscf_out, f"{self._PREFIX}.xml").as_posix(),
+                Path(self._OUTPUT_SUBFOLDER, f"{self._PREFIX}.xml").as_posix(),
+            )
+        )
+
+        # Stage wavefunction files
+        remote_list.append(
+            (
+                comp_uuid,
+                Path(nscf_out, f"{self._PREFIX}.wfc*").as_posix(),
                 self._OUTPUT_SUBFOLDER,
             )
         )
+
+        # Stage DFT+U / Hubbard non-orthogonal orbitals if USE_HUBBARD_U is set
+        if settings.get("USE_HUBBARD_U", False):
+            remote_list.append(
+                (
+                    comp_uuid,
+                    Path(nscf_out, f"{self._PREFIX}.hubnoS*").as_posix(),
+                    self._OUTPUT_SUBFOLDER,
+                )
+            )
 
     def stage_chk_parent(self, remote_list):
         """Stage Wannier checkpoint files required by EPW."""
@@ -1152,10 +1182,11 @@ class EpwCalculation(NamelistsCalculation):
             else remote_copy_list
         )
 
-        self.stage_nscf_parent(remote_copy_list)
+        self.stage_nscf_parent(folder, settings, remote_list)
         self.stage_chk_parent(remote_list)
         self.stage_ph_parent(folder, settings, remote_list)
         self.stage_epw_parent(folder, parameters, remote_list, remote_symlink_list)
+        settings.pop("USE_HUBBARD_U", None)
 
     def _add_parallelization_flags_to_cmdline_params(self, cmdline_params):
         """Return cmdline parameters with validated parallelization flags appended."""
