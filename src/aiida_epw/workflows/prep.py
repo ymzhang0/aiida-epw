@@ -8,7 +8,7 @@ from aiida.common import AttributeDict
 from aiida.engine import WorkChain, ToContext, if_
 from aiida_quantumespresso.workflows.ph.base import PhBaseWorkChain
 from aiida_quantumespresso.workflows.protocols.utils import ProtocolMixin
-from aiida_quantumespresso.common.types import ElectronicType
+from aiida_quantumespresso.common.types import ElectronicType, SpinType
 
 from aiida_quantumespresso.calculations.functions.create_kpoints_from_distance import (
     create_kpoints_from_distance,
@@ -472,6 +472,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         bands_kpoints=None,
         workflow_type="mob",
         electronic_type=ElectronicType.METAL,
+        spin_type=SpinType.NONE,
         bandplot=False,
         w90_chk_to_ukk_script=None,
         **kwargs,
@@ -488,6 +489,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
         :param electronic_type: indicate the electronic character of the system through ``ElectronicType`` instance.
             Use ``ElectronicType.INSULATOR`` for valence bands only (e.g., for insulators/semiconductors),
             or ``ElectronicType.METAL`` (default) to include conduction bands.
+        :param spin_type: spin treatment passed to the Wannier90 builder. Defaults to ``SpinType.NONE``.
         :param kwargs: additional keyword arguments that will be passed to the ``get_builder_from_protocol`` of all the
             sub processes that are called by this workchain.
         :return: a process builder instance with all inputs defined ready for launch.
@@ -543,6 +545,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 reference_bands=reference_bands,
                 bands_kpoints=bands_kpoints,
                 electronic_type=electronic_type,
+                spin_type=spin_type,
                 **kwargs,
             )
             w90_bands.separate_plotting = False
@@ -603,6 +606,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 electronic_type=electronic_type,
                 projection_type=wannier_projection_type,
                 bands_kpoints=bands_kpoints,
+                spin_type=spin_type,
                 **kwargs,
             )
         elif wannier_projection_type == WannierProjectionType.ANALYTIC:
@@ -619,6 +623,7 @@ class EpwPrepWorkChain(ProtocolMixin, WorkChain):
                 electronic_type=electronic_type,
                 projection_type=wannier_projection_type,
                 bands_kpoints=bands_kpoints,
+                spin_type=spin_type,
                 **kwargs,
             )
         else:
