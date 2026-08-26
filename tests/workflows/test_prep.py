@@ -357,6 +357,7 @@ def test_get_builder_from_protocol_w90_script(
         Wannier90BandsWorkChain,
     )
     from aiida_quantumespresso.workflows.ph.base import PhBaseWorkChain
+    from aiida_quantumespresso.common.types import SpinType
     from aiida_epw.workflows.base import EpwBaseWorkChain
 
     from plumpy.ports import Port, PortNamespace
@@ -383,6 +384,12 @@ def test_get_builder_from_protocol_w90_script(
             return super().pop(key, default)
 
     # We need to return an instance that can behave like a dict/builder
+    w90_builder_kwargs = []
+
+    def mock_w90_get_builder(*args, **kwargs):
+        w90_builder_kwargs.append(kwargs)
+        return mock_get_builder(*args, **kwargs)
+
     def mock_get_builder(*args, **kwargs):
         builder = MockBuilder()
         if "w90_chk_to_ukk_script" in kwargs:
@@ -390,10 +397,10 @@ def test_get_builder_from_protocol_w90_script(
         return builder
 
     monkeypatch.setattr(
-        Wannier90OptimizeWorkChain, "get_builder_from_protocol", mock_get_builder
+        Wannier90OptimizeWorkChain, "get_builder_from_protocol", mock_w90_get_builder
     )
     monkeypatch.setattr(
-        Wannier90BandsWorkChain, "get_builder_from_protocol", mock_get_builder
+        Wannier90BandsWorkChain, "get_builder_from_protocol", mock_w90_get_builder
     )
     monkeypatch.setattr(PhBaseWorkChain, "get_builder_from_protocol", mock_get_builder)
     monkeypatch.setattr(EpwBaseWorkChain, "get_builder_from_protocol", mock_get_builder)
@@ -436,7 +443,10 @@ def test_get_builder_from_protocol_w90_script(
         w90_chk_to_ukk_script=w90_script,
         wannier_projection_type=WannierProjectionType.ATOMIC_PROJECTORS_QE,
         reference_bands=reference_bands,
+        spin_type=SpinType.SPIN_ORBIT,
     )
+
+    assert w90_builder_kwargs[0]["spin_type"] is SpinType.SPIN_ORBIT
 
     # Check that it is also propagated to epw_base builder
     assert builder.epw_base.w90_chk_to_ukk_script == w90_script
