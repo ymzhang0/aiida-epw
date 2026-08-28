@@ -1070,7 +1070,7 @@ class EpwCalculation(NamelistsCalculation):
                 )
             )
             if use_hubbard_u:
-                remote_list.append(
+                remote_copy_list.append(
                     (
                         parent_folder_ph.computer.uuid,
                         Path(
@@ -1085,7 +1085,7 @@ class EpwCalculation(NamelistsCalculation):
                         ).as_posix(),
                     )
                 )
-                remote_list.append(
+                remote_copy_list.append(
                     (
                         parent_folder_ph.computer.uuid,
                         Path(
@@ -1102,7 +1102,7 @@ class EpwCalculation(NamelistsCalculation):
                 )
 
         if use_hubbard_u:
-            remote_list.append(
+            remote_copy_list.append(
                 (
                     parent_folder_ph.computer.uuid,
                     Path(

@@ -664,29 +664,29 @@ def test_epw_stage_ph_parent_hubbard_u(
         parent_folder.computer.uuid,
         Path("/stash/ph", outdir, "_ph0", "aiida.dnsscf").as_posix(),
         Path("save", "aiida.dnsscf_q1").as_posix(),
-    ) in calc_info.remote_symlink_list
+    ) in calc_info.remote_copy_list
     assert (
         parent_folder.computer.uuid,
         Path("/stash/ph", outdir, "_ph0", "aiida.dnsbare").as_posix(),
         Path("save", "aiida.dnsbare_q1").as_posix(),
-    ) in calc_info.remote_symlink_list
+    ) in calc_info.remote_copy_list
     assert (
         parent_folder.computer.uuid,
         Path("/stash/ph", outdir, "_ph0", "aiida.q_2", "aiida.dnsscf").as_posix(),
         Path("save", "aiida.dnsscf_q2").as_posix(),
-    ) in calc_info.remote_symlink_list
+    ) in calc_info.remote_copy_list
     assert (
         parent_folder.computer.uuid,
         Path("/stash/ph", outdir, "_ph0", "aiida.q_2", "aiida.dnsbare").as_posix(),
         Path("save", "aiida.dnsbare_q2").as_posix(),
-    ) in calc_info.remote_symlink_list
+    ) in calc_info.remote_copy_list
 
     # Check occup.txt -> aiida.occup
     assert (
         parent_folder.computer.uuid,
         Path("/stash/ph", outdir, "aiida.save", "occup.txt").as_posix(),
         Path("save", "aiida.occup").as_posix(),
-    ) in calc_info.remote_symlink_list
+    ) in calc_info.remote_copy_list
 
     # 2. When USE_HUBBARD_U is False (default)
     inputs_default = generate_inputs_epw(
@@ -695,7 +695,7 @@ def test_epw_stage_ph_parent_hubbard_u(
     )
     calc_info_default = generate_calc_job(fixture_sandbox, "epw.epw", inputs_default)
 
-    destinations = [entry[2] for entry in calc_info_default.remote_symlink_list]
+    destinations = [entry[2] for entry in calc_info_default.remote_copy_list]
     assert not any("dnsbare" in dest for dest in destinations)
     assert not any("dnsscf" in dest for dest in destinations)
     assert not any("occup" in dest for dest in destinations)
