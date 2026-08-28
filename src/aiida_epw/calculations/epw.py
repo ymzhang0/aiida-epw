@@ -1009,8 +1009,13 @@ class EpwCalculation(NamelistsCalculation):
             )
         )
 
-    def stage_ph_parent(self, folder, settings, remote_list):
-        """Stage `ph.x` data needed by EPW into the local `save` directory."""
+    def stage_ph_parent(self, folder, settings, remote_copy_list):
+        """Copy `ph.x` data needed by EPW into the local `save` directory.
+
+        The phonon data is copied even when parent-folder symlinking is enabled.
+        This keeps ``save`` self-contained for stashing and restart, rather than
+        persisting links into a potentially cleaned parent work directory.
+        """
         if "parent_folder_ph" not in self.inputs:
             return
 
@@ -1026,7 +1031,7 @@ class EpwCalculation(NamelistsCalculation):
 
         ph_path = self.get_parent_folder_path(parent_folder_ph)
 
-        remote_list.append(
+        remote_copy_list.append(
             (
                 parent_folder_ph.computer.uuid,
                 Path(
@@ -1035,13 +1040,13 @@ class EpwCalculation(NamelistsCalculation):
                     "_ph0",
                     f"{self._PREFIX}.phsave",
                 ).as_posix(),
-                self._FOLDER_SAVE,
+                Path(self._FOLDER_SAVE, f"{self._PREFIX}.phsave").as_posix(),
             )
         )
 
         for iqpt in range(1, nqpt + 1):
             q_dir = "" if iqpt == 1 else f"{self._PREFIX}.q_{iqpt}"
-            remote_list.append(
+            remote_copy_list.append(
                 (
                     parent_folder_ph.computer.uuid,
                     Path(
@@ -1054,7 +1059,7 @@ class EpwCalculation(NamelistsCalculation):
                     Path(self._FOLDER_SAVE, f"{self._PREFIX}.dvscf_q{iqpt}").as_posix(),
                 )
             )
-            remote_list.append(
+            remote_copy_list.append(
                 (
                     parent_folder_ph.computer.uuid,
                     Path(
@@ -1232,7 +1237,7 @@ class EpwCalculation(NamelistsCalculation):
 
         self.stage_nscf_parent(folder, settings, remote_list)
         self.stage_chk_parent(remote_list)
-        self.stage_ph_parent(folder, settings, remote_list)
+        self.stage_ph_parent(folder, settings, remote_copy_list)
         self.stage_epw_parent(folder, parameters, remote_list, remote_symlink_list)
         settings.pop("USE_HUBBARD_U", None)
 

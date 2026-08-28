@@ -624,7 +624,7 @@ def test_epw_stages_ph_stash_folder_by_target_basepath(
 
     inputs = generate_inputs_epw(
         parent_folder_ph=parent_folder,
-        settings=orm.Dict({"NUMBER_OF_QPOINTS": 1}),
+        settings=orm.Dict({"NUMBER_OF_QPOINTS": 1, "PARENT_FOLDER_SYMLINK": True}),
     )
 
     calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
@@ -634,8 +634,9 @@ def test_epw_stages_ph_stash_folder_by_target_basepath(
         Path(
             "/stash/ph", PhCalculation._OUTPUT_SUBFOLDER, "_ph0", "aiida.phsave"
         ).as_posix(),
-        "save",
-    ) in calc_info.remote_symlink_list
+        Path("save", "aiida.phsave").as_posix(),
+    ) in calc_info.remote_copy_list
+    assert not calc_info.remote_symlink_list
 
 
 def test_epw_stage_ph_parent_hubbard_u(
