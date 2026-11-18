@@ -238,6 +238,23 @@ class EpwParser(BaseParser):
                 self.parse_aniso_imag(self.retrieved, restriction=restriction),
             )
 
+        chi0_summary = {}
+        for port, filename in (
+            ("chi0_head", EpwCalculation._OUTPUT_CHI0_HEAD_FILE),
+            ("chi0_orb", EpwCalculation._OUTPUT_CHI0_ORB_FILE),
+            ("chi0_ff", EpwCalculation._OUTPUT_CHI0_FF_FILE),
+        ):
+            try:
+                with self.retrieved.base.repository.open(filename, "rb") as handle:
+                    self.out(port, orm.SinglefileData(handle, filename=filename))
+            except FileNotFoundError:
+                continue
+            qpoints = self.parse_chi0_qpoint_headers(self.get_retrieved_content(filename))
+            if qpoints:
+                chi0_summary[port] = qpoints
+        if chi0_summary:
+            parsed_data["chi0"] = chi0_summary
+
         if "max_eigenvalue" in parsed_data:
             self.out("max_eigenvalue", parsed_data.pop("max_eigenvalue"))
 
@@ -270,6 +287,32 @@ class EpwParser(BaseParser):
             )
 
         return self.exit(logs=logs)
+
+    @staticmethod
+    def parse_chi0_qpoint_headers(content):
+        """Parse the per-q header lines of the ``chi0_orb.dat`` / ``chi0_ff.dat`` files.
+
+        Lines look like ``# iq 1 q_crys qx qy qz nG 103 stoner_eig 0.65 N0[/eV/spin] 0.94 nesting 1.8E+02``.
+        """
+        qpoints = []
+        for line in (content or "").splitlines():
+            if not line.startswith("# iq"):
+                continue
+            tokens = line[1:].split()
+            try:
+                entry = {
+                    "iq": int(tokens[1]),
+                    "q_crystal": [float(x) for x in tokens[3:6]],
+                }
+                rest = tokens[6:]
+                for key, value in zip(rest[0::2], rest[1::2]):
+                    name = {"nG": "number_of_g_vectors", "stoner_eig": "stoner_eigenvalue",
+                            "N0[/eV/spin]": "dos_ef_per_spin", "nesting": "nesting"}.get(key, key)
+                    entry[name] = int(value) if key == "nG" else float(value)
+            except (IndexError, ValueError):
+                continue
+            qpoints.append(entry)
+        return qpoints
 
     @staticmethod
     def clean_nans(value):

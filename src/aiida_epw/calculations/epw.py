@@ -114,6 +114,16 @@ class EpwCalculation(NamelistsCalculation):
     _OUTPUT_ELBANDS_FILE = "band.eig"
     _OUTPUT_PHBANDS_FILE = "phband.freq"
 
+    # Wannier-basis susceptibility / spin-fluctuation files (EPW branch ``epw-wchi``)
+    _OUTPUT_CHI0_HEAD_FILE = "chi0_head.dat"
+    _OUTPUT_CHI0_ORB_FILE = "chi0_orb.dat"
+    _OUTPUT_CHI0_FF_FILE = "chi0_ff.dat"
+    _INPUT_A2F_FILE = "input.a2f"
+    _INPUT_A2F_SF_FILE = "input.a2f_sf"
+    _INPUT_CHI0_FXC_FILE = "chi0_fxc.bin"
+    _FOLDER_CHI0_FFAC = "ffac"
+    _PREFIX_CHI0_FFAC = "ffac"
+
     _MAX_NSTEMP = 1000
 
     # Use symlink by default for parent calculations (NSCF, PH, CHK, EPW)
@@ -268,6 +278,41 @@ class EpwCalculation(NamelistsCalculation):
             ),
         )
 
+        spec.input(
+            "fila2f",
+            valid_type=orm.SinglefileData,
+            required=False,
+            help=(
+                "Eliashberg spectral function a2F(w) read by EPW (`fila2f`) to solve the "
+                "isotropic Eliashberg equations without recomputing the el-ph coupling."
+            ),
+        )
+        spec.input(
+            "fila2f_sf",
+            valid_type=orm.SinglefileData,
+            required=False,
+            help=(
+                "Spin-fluctuation kernel read by EPW (`fila2f_sf`, branch epw-wchi): either "
+                "P_sf(w) [w in meV] or, with a header containing 'imag', a table "
+                "nu[meV] lambda_sf(i nu)."
+            ),
+        )
+        spec.input(
+            "chi0_fxc",
+            valid_type=orm.SinglefileData,
+            required=False,
+            help="Spin kernel I(G) used with the Wannier form factors (`chi0_fxc`).",
+        )
+        spec.input(
+            "chi0_ffac",
+            valid_type=(orm.RemoteData, orm.FolderData),
+            required=False,
+            help=(
+                "Folder with the Wannier density form-factor files `ffac_<iq>.bin` "
+                "(`chi0_ffac`); `iq` follows the order of the explicit `qfpoints` list."
+            ),
+        )
+
         spec.inputs.validator = cls.validate_inputs
 
         spec.output(
@@ -322,6 +367,24 @@ class EpwCalculation(NamelistsCalculation):
             valid_type=DosData,
             required=False,
             help="The density of the electron-phonon coupling on the k-points.",
+        )
+        spec.output(
+            "chi0_head",
+            valid_type=orm.SinglefileData,
+            required=False,
+            help="Head (G=G'=0) of the Wannier-interpolated charge polarizability (`lchi0`).",
+        )
+        spec.output(
+            "chi0_orb",
+            valid_type=orm.SinglefileData,
+            required=False,
+            help="Orbital-pair / point-vertex susceptibility summary (`chi0_tensor`).",
+        )
+        spec.output(
+            "chi0_ff",
+            valid_type=orm.SinglefileData,
+            required=False,
+            help="Form-factor susceptibility, RPA spin response and mu_sf (`chi0_ffac`).",
         )
         spec.output(
             "el_band_structure",
@@ -916,6 +979,10 @@ class EpwCalculation(NamelistsCalculation):
             if parameters["INPUTEPW"].get("lpade", False):
                 retrieve_list.append("aiida.pade_iso_*")
 
+        if parameters["INPUTEPW"].get("lchi0", False):
+            # which of the three exists depends on chi0_tensor / chi0_ffac: use a glob
+            retrieve_list.append("chi0_*.dat")
+
         if parameters["INPUTEPW"].get("laniso", False):
             retrieve_list.append(self._OUTPUT_LAMBDA_FS_FILE)
             retrieve_list.append(self._OUTPUT_LAMBDA_K_PAIRS_FILE)
@@ -1343,6 +1410,59 @@ class EpwCalculation(NamelistsCalculation):
                 f"`settings` contained unexpected keys: {unknown_keys}"
             )
 
+    def stage_susceptibility_inputs(
+        self, parameters, local_copy_list, remote_copy_list, remote_symlink_list
+    ):
+        """Stage the a2F / spin-fluctuation / chi0 input files and set the matching keywords."""
+        inputepw = parameters.setdefault("INPUTEPW", {})
+
+        for port, keyword, filename in (
+            ("fila2f", "fila2f", self._INPUT_A2F_FILE),
+            ("fila2f_sf", "fila2f_sf", self._INPUT_A2F_SF_FILE),
+            ("chi0_fxc", "chi0_fxc", self._INPUT_CHI0_FXC_FILE),
+        ):
+            if port not in self.inputs:
+                continue
+            node = self.inputs[port]
+            if keyword in inputepw:
+                raise exceptions.InputValidationError(
+                    f"`{keyword}` is set by the `{port}` input and cannot also be given in `parameters`."
+                )
+            local_copy_list.append((node.uuid, node.filename, filename))
+            inputepw[keyword] = filename
+
+        if "chi0_ffac" in self.inputs:
+            node = self.inputs.chi0_ffac
+            if "chi0_ffac" in inputepw:
+                raise exceptions.InputValidationError(
+                    "`chi0_ffac` is set by the `chi0_ffac` input and cannot also be given in `parameters`."
+                )
+            if isinstance(node, orm.RemoteData):
+                if node.computer.uuid != self.inputs.code.computer.uuid:
+                    raise exceptions.InputValidationError(
+                        "`chi0_ffac` RemoteData and the code must be on the same computer."
+                    )
+                remote_symlink_list.append(
+                    (node.computer.uuid, node.get_remote_path(), self._FOLDER_CHI0_FFAC)
+                )
+            else:
+                names = [
+                    name
+                    for name in node.base.repository.list_object_names()
+                    if name.startswith(f"{self._PREFIX_CHI0_FFAC}_")
+                ]
+                if not names:
+                    raise exceptions.InputValidationError(
+                        f"`chi0_ffac` FolderData contains no `{self._PREFIX_CHI0_FFAC}_<iq>.bin` files."
+                    )
+                for name in names:
+                    local_copy_list.append(
+                        (node.uuid, name, f"{self._FOLDER_CHI0_FFAC}/{name}")
+                    )
+            inputepw["chi0_ffac"] = (
+                f"{self._FOLDER_CHI0_FFAC}/{self._PREFIX_CHI0_FFAC}"
+            )
+
     def prepare_for_submission(self, folder):
         """Prepare the calculation job for submission by transforming input nodes into input files.
 
@@ -1394,6 +1514,10 @@ class EpwCalculation(NamelistsCalculation):
             inputepw["filirobj"] = filename
             if "gridsamp" not in inputepw:
                 inputepw["gridsamp"] = 2
+
+        self.stage_susceptibility_inputs(
+            parameters, local_copy_list, remote_copy_list, remote_symlink_list
+        )
 
         self.stage_parent_folders(
             folder, parameters, settings, remote_copy_list, remote_symlink_list

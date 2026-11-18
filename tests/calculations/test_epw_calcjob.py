@@ -927,3 +927,62 @@ def test_epw_filirobj_validation(generate_inputs_epw):
         full_bandwidth=orm.Bool(True),
     )
     assert EpwCalculation.validate_inputs(inputs_valid, None) is None
+
+
+def test_epw_spin_fluctuation_and_chi0_inputs(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw, tmp_path
+):
+    """The a2F / spin-fluctuation / chi0 files are staged and their keywords written."""
+    import io
+
+    ffac = orm.FolderData()
+    ffac.base.repository.put_object_from_filelike(io.BytesIO(b"1"), "ffac_1.bin")
+    ffac.base.repository.put_object_from_filelike(io.BytesIO(b"2"), "ffac_2.bin")
+    inputs = generate_inputs_epw(
+        parameters={
+            "INPUTEPW": {
+                "lchi0": True,
+                "chi0_ecut": 16.0,
+                "chi0_iw": [0.0333, 0.0989],
+                "eliashberg": True,
+            }
+        },
+        qfpoints=generate_kpoints_list([[0.125, 0.125, 0.125], [0.125, 0.125, 0.375]]),
+        fila2f=orm.SinglefileData(io.BytesIO(b"a2f"), filename="v.a2f"),
+        fila2f_sf=orm.SinglefileData(io.BytesIO(b"# imag\n0 0.5\n"), filename="lam.dat"),
+        chi0_fxc=orm.SinglefileData(io.BytesIO(b"ixc"), filename="ixc_g.bin"),
+        chi0_ffac=ffac,
+    )
+    calc_info = generate_calc_job(fixture_sandbox, "epw.epw", inputs)
+
+    with fixture_sandbox.open("aiida.in") as handle:
+        content = handle.read()
+    assert "fila2f = 'input.a2f'" in content
+    assert "fila2f_sf = 'input.a2f_sf'" in content
+    assert "chi0_fxc = 'chi0_fxc.bin'" in content
+    assert "chi0_ffac = 'ffac/ffac'" in content
+    assert "chi0_iw(1) =" in content and "chi0_iw(2) =" in content
+
+    targets = sorted(entry[2] for entry in calc_info.local_copy_list)
+    assert targets == [
+        "chi0_fxc.bin",
+        "ffac/ffac_1.bin",
+        "ffac/ffac_2.bin",
+        "input.a2f",
+        "input.a2f_sf",
+    ]
+    assert "chi0_*.dat" in calc_info.retrieve_list
+
+
+def test_epw_spin_fluctuation_keyword_conflict(
+    fixture_sandbox, generate_calc_job, generate_inputs_epw
+):
+    """A keyword owned by an input node cannot also be set in `parameters`."""
+    import io
+
+    inputs = generate_inputs_epw(
+        parameters={"INPUTEPW": {"fila2f_sf": "something.dat"}},
+        fila2f_sf=orm.SinglefileData(io.BytesIO(b"x"), filename="lam.dat"),
+    )
+    with pytest.raises(exceptions.InputValidationError, match="fila2f_sf"):
+        generate_calc_job(fixture_sandbox, "epw.epw", inputs)
